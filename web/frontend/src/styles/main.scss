@@ -1,0 +1,61 @@
+// 主入口：先加载主题，再加载组件特殊样式
+@use './theme.scss';
+
+// ============ 文件浏览器组件 ============
+.file-browser {
+  .path-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #475569;
+  }
+
+  .file-list {
+    .file-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      border-bottom: 1px solid #f1f5f9;
+      cursor: pointer;
+      transition: background-color 0.15s;
+      border-radius: 4px;
+
+      &:hover {
+        background-color: rgba(99, 102, 241, 0.06);
+      }
+
+      .file-icon {
+        margin-right: 12px;
+        font-size: 20px;
+        color: #64748b;
+      }
+
+      .file-name {
+        flex: 1;
+        color: #0f172a;
+      }
+
+      .file-size {
+        color: #94a3b8;
+        font-size: 13px;
+      }
+    }
+  }
+}
+
+// ============ 进度卡片 ============
+.progress-card {
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    color: #475569;
+    font-size: 14px;
+  }
+}

@@ -1,0 +1,95 @@
+# Jellyfin Tools 配置文件示例
+# 复制为 config.yaml 后填入你自己的值。
+# 切勿把填好的 config.yaml 提交到公开仓库（已在 .gitignore 中排除）。
+
+# 服务端口（前后端都从这里读）
+# 也可被环境变量 BACKEND_PORT / FRONTEND_PORT 临时覆盖
+server:
+  backend_port: 8000      # 后端 (FastAPI / uvicorn) 监听端口
+  frontend_port: 5173     # 前端 (vite dev server) 端口
+
+# 数据库配置 (PostgreSQL)
+database:
+  host: "127.0.0.1"
+  port: 5432
+  name: "jellyfin_tools"
+  user: "jellyfin_tools"
+  password: "CHANGE_ME"
+
+# Jellyfin 配置
+jellyfin:
+  host: "http://127.0.0.1:8096"
+  api_key: "your_jellyfin_api_key"
+
+# TMDB 配置（在 https://www.themoviedb.org/settings/api 申请）
+tmdb:
+  api_key: "your_tmdb_api_key"
+
+# Wikidata 配置（演员图兜底来源）
+# 公共知识库，无需 API Key；但 Wikimedia 基金会要求每次请求带可识别的 User-Agent，
+# 否则可能被 403。建议带上你的联系方式或仓库 URL。
+wikidata:
+  enabled: true
+  user_agent: "JellyfinTools/1.0 (your_email@example.com)"
+  # 搜索语言顺序：按列表依次尝试，命中第一个就停。中文名优先 zh，欧美名优先 en
+  language_order: ["zh", "en"]
+  # 两次请求之间的最小间隔（秒）。Wikidata 没死硬限速，1s 比较稳
+  request_delay: 1.0
+
+# MDB List 配置（评分聚合：IMDB / RT / Metacritic / Trakt / Letterboxd 一次拿）
+# 在 https://mdblist.com/api 登录后生成 API Key（免费 1000 req/天）
+mdblist:
+  enabled: true
+  api_key: "your_mdblist_api_key"
+  request_delay: 1.0
+  # 缓存有效期（天），过期后下次访问会自动重取
+  cache_ttl_days: 30
+
+# 豆瓣评分（无官方 API，HTML 爬虫，懒拉取后台慢慢爬）
+# 国内访问无需代理；如部署在墙外通常需要走代理（这里不配，由系统级 proxy 处理）
+douban:
+  enabled: true
+  # 两次请求之间最小间隔（秒）。豆瓣反爬较严，建议 5-10s
+  request_delay: 5.0
+  # 缓存有效期（天）
+  cache_ttl_days: 30
+  # User-Agent，模拟真实浏览器；过期换一下即可
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# 媒体目录配置（可选，目前主要由各功能各自配置）
+media:
+  movies_dir: ""
+  tv_dir: ""
+
+# 字幕设置
+subtitle:
+  preferred_langs: ["chs", "chs.eng", "eng"]
+  # OpenSubtitles.com（不是 .org，新版 REST API）
+  # 在 https://www.opensubtitles.com/consumers 申请 API Consumer
+  opensubtitles_api_key: ""
+  opensubtitles_username: ""
+  opensubtitles_password: ""
+
+# Jackett 配置（种子搜索聚合）
+jackett:
+  host: "http://127.0.0.1:9117"
+  api_key: "your_jackett_api_key"
+
+# qBittorrent 配置（下载管理）
+qbittorrent:
+  host: "http://127.0.0.1:8080"
+  username: "admin"
+  password: "CHANGE_ME"
+  download_path: "/downloads"
+
+# 成人内容配置（默认关闭）
+# enabled=false 时菜单不显示，相关 API 路由也不挂载
+adult:
+  enabled: false
+  media_path: ""
+  scraper_delay: 1.0
+
+# 通用选项
+options:
+  retry_count: 3
+  delay_between: 0.3

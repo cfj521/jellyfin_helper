@@ -1,0 +1,46 @@
+# 配置文件（含敏感信息）
+config.yaml
+config.yml
+
+# 数据目录
+data/
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node.js / 前端
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 日志和临时文件
+*.log
+logs/
+tmp/
+temp/
+
+# 扫描报告输出
+subtitle_report_*.html
+subtitle_report_*.json
