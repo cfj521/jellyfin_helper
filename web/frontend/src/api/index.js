@@ -62,6 +62,15 @@ export const subtitleApi = {
     api.put('/api/subtitle/annotations', items),
   deleteAnnotation: (file_path) =>
     api.delete('/api/subtitle/annotations', { data: { file_path } }),
+
+  // 单视频字幕下载（assrt 字幕站）
+  assrtSearch: (payload) => api.post('/api/subtitle/assrt/search', payload),
+  assrtDownload: (payload) => api.post('/api/subtitle/assrt/download', payload),
+  assrtQuota: () => api.get('/api/subtitle/assrt/quota'),
+
+  // 多源聚合搜索 / 下载（assrt + opensubtitles 等）
+  multiSearch: (payload) => api.post('/api/subtitle/multi-search', payload),
+  multiDownload: (payload) => api.post('/api/subtitle/multi-download', payload),
 }
 
 // 媒体库维护 API（批量清理 / 规范化）
@@ -157,6 +166,10 @@ export const mediaApi = {
   findDuplicates: (path) =>
     api.get('/api/media/duplicates', { params: { path } }),
 
+  // 基于 Jellyfin 元数据（TMDB / IMDB / 标题+年份 / 同剧同集）的语义重复检测
+  findDuplicatesByMetadata: (libraryId) =>
+    api.get('/api/media/duplicates-by-metadata', { params: { library_id: libraryId } }),
+
   analyzeStorage: (path) =>
     api.get('/api/media/storage', { params: { path } })
 }
@@ -180,24 +193,41 @@ export const taskApi = {
 export const jellyfinApi = {
   libraries: (checkPaths = true) =>
     api.get('/api/jellyfin/libraries', { params: { check_paths: checkPaths } }),
-  // params 支持 start_index / limit / item_type / search
+  // params 支持 start_index / limit / item_type / search / years / genres
   libraryItems: (id, params = {}) =>
     api.get(`/api/jellyfin/libraries/${id}/items`, { params }),
+
+  // 拉某库下所有 Genre 名（给"风格"过滤下拉做 options）
+  libraryGenres: (id) =>
+    api.get(`/api/jellyfin/libraries/${id}/genres`),
+
+  // 批量拉 item 的字幕语言（jellyfin 列表 endpoint 不返 MediaStreams，要单独再拉）
+  itemsSubtitleLangs: (ids) =>
+    api.post('/api/jellyfin/items/subtitle-langs', { ids }),
   // 库统计：内存级 2h 缓存。force=true 跳过缓存重算
-  libraryStats: (id, force = false) =>
+  // fields: 可选，逗号分隔字符串（例如 'health,poster,tmdb'）；不传 = 全部计算；空串 = 都不算
+  //         后端按 fields 跳过隐藏指标的计算，不同 fields 各自缓存
+  libraryStats: (id, force = false, fields = null) =>
     api.get(`/api/jellyfin/libraries/${id}/stats`, {
-      params: { force_refresh: force },
+      params: {
+        force_refresh: force,
+        ...(fields !== null ? { fields } : {}),
+      },
     }),
-  // 懒加载缺字幕统计：复用 max_age_minutes 内的 subtitle_scan 任务，没有就启新的
-  // force=true 时跳过最近任务复用，直接启新扫描
-  librarySubtitleStats: (id, max_age_minutes = 60, force = false) =>
+  // 懒加载缺字幕统计：复用 settings.cache_subtitle_scan_minutes 窗口内的 subtitle_scan 任务，
+  // 没有就启新的；force=true 时跳过最近任务复用，直接启新扫描
+  // 后端 max_age_minutes 走 config.yaml.cache.subtitle_scan_minutes，前端不再硬编码
+  librarySubtitleStats: (id, force = false) =>
     api.get(`/api/jellyfin/libraries/${id}/subtitle-stats`, {
-      params: { max_age_minutes, force_refresh: force },
+      params: { force_refresh: force },
     }),
   refreshLibrary: (id, mode = 'scan_changes') =>
     api.post(`/api/jellyfin/libraries/${id}/refresh`, null, { params: { mode } }),
   refreshAll: () =>
     api.post('/api/jellyfin/refresh-all'),
+
+  // 检查当前配置的 API key 是否有管理员权限（/Library/Media/Updated 需要）
+  checkApiKey: () => api.post('/api/jellyfin/check-api-key'),
 
   // 剧集 → 季 → 集 钻取（懒加载，30 分钟缓存；force=true 旁路缓存）
   seasonsOfSeries: (seriesId, force = false) =>
@@ -230,6 +260,10 @@ export const jellyfinApi = {
   deleteItem: (itemId) =>
     api.delete(`/api/jellyfin/items/${itemId}`),
 
+  // 通过本地文件路径反查 Jellyfin Item（用于重复检测 hash 模式删除时找 jellyfin_id）
+  lookupByPath: (path) =>
+    api.get('/api/jellyfin/items/by-path', { params: { path } }),
+
   systemInfo: () =>
     api.get('/api/jellyfin/system'),
 }
@@ -246,11 +280,67 @@ export const adultApi = {
         delete_in_jellyfin: opts.deleteInJellyfin || false,
       },
     }),
-  scan: (path, libraryId) => api.post('/api/adult/scan', { path, library_id: libraryId }),
   scrapeOne: (code) => api.post(`/api/adult/scrape/${code}`),
   scrapeBatch: (payload) => api.post('/api/adult/scrape/batch', payload),
   regenerateNfo: (id) => api.post(`/api/adult/items/${id}/nfo`),
+  // 上传本地图片作为封面（multipart/form-data）
+  uploadCover: (id, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post(`/api/adult/items/${id}/cover-upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
   syncFromJellyfin: (id) => api.post(`/api/adult/items/${id}/sync-from-jellyfin`),
+  identify: (id, code, autoScrape = true) =>
+    api.post(`/api/adult/items/${id}/identify`, { code, auto_scrape: autoScrape }),
+  // 女优库 lazy 构建
+  actressBuildStatus: () => api.get('/api/adult/actresses/build/status'),
+  actressBuildStart: (requestDelay = 5.0) =>
+    api.post('/api/adult/actresses/build/start', { request_delay: requestDelay }),
+  actressBuildStop: () => api.post('/api/adult/actresses/build/stop'),
+  listActresses: (params = {}) => api.get('/api/adult/actresses', { params }),
+  // 当前库 AdultItem.actors 字段的所有演员名 + 作品数；用于女优筛选下拉
+  listLibraryActors: (libraryId) =>
+    api.get('/api/adult/library-actors', { params: libraryId ? { library_id: libraryId } : {} }),
+
+  // 清空 + 重扫 + 刮削（同一 task 内顺序执行）
+  resetAndRescan: (libraryId) =>
+    api.post('/api/adult/reset-and-rescan', null, { params: { library_id: libraryId } }),
+
+  // 库统计（成人库详情页的 stats 卡用）
+  stats: (libraryId) =>
+    api.get('/api/adult/stats', { params: libraryId ? { library_id: libraryId } : {} }),
+  // 单条「重新识别」（同步 fastpath，无对话框直接用当前 code 重抓）
+  rescrapeItem: (id) => api.post(`/api/adult/items/${id}/rescrape`),
+  // 手动设置/清除有码无码标志（value: true=无码 / false=有码 / null=恢复自动判定）
+  setUncensored: (id, value) =>
+    api.post(`/api/adult/items/${id}/uncensored`, { value }),
+
+  // 排除 / 取消排除 —— 排除后自动流程跳过此条，防止反复刮削被 ban
+  setExcluded: (id, excluded = true) =>
+    api.post(`/api/adult/items/${id}/exclude`, { excluded }),
+  // 清除元数据 + 标记排除（删本地 poster/nfo + 清 DB 字段，保留 file_path / code）
+  clearAndExclude: (id) =>
+    api.post(`/api/adult/items/${id}/clear-and-exclude`),
+  // 重新识别对话框：搜索 / 应用所选候选
+  identifySearch: (id, code) =>
+    api.post(`/api/adult/items/${id}/identify-search`, { code }),
+  identifyApply: (id, payload) =>
+    api.post(`/api/adult/items/${id}/identify-apply`, payload),
+  // 批量修复
+  repairCovers: (libraryId) =>
+    api.post('/api/adult/repair/covers', null, { params: libraryId ? { library_id: libraryId } : {} }),
+  repairMetadata: (libraryId) =>
+    api.post('/api/adult/repair/metadata', null, { params: libraryId ? { library_id: libraryId } : {} }),
+  // watcher 触发本地扫描
+  watcherRunNow: (libraryId) =>
+    api.post('/api/adult/watcher/run-now', null, { params: libraryId ? { library_id: libraryId } : {} }),
+
+  // 女优 toolbox 用
+  actressResolveBatch: (names) =>
+    api.post('/api/adult/actresses/resolve-batch', { names }),
+  actressWorks: (id) => api.get(`/api/adult/actresses/${id}/works`),
 }
 
 // 内容推荐与下载 API
@@ -269,7 +359,16 @@ export const discoverApi = {
   resume: (hash) => api.post(`/api/discover/downloads/${hash}/resume`),
   remove: (hash, deleteFiles = false) =>
     api.delete(`/api/discover/downloads/${hash}`, { params: { delete_files: deleteFiles } }),
-  syncCompleted: () => api.post('/api/discover/sync-completed'),
+  // 批量操作（Phase H）
+  bulkAction: (payload) => api.post('/api/discover/downloads/bulk', payload),
+  recheck: (hash) => api.post(`/api/discover/downloads/${hash}/recheck`),
+  reannounce: (hash) => api.post(`/api/discover/downloads/${hash}/reannounce`),
+  forceStart: (hash, force = true) =>
+    api.post(`/api/discover/downloads/${hash}/force-start`, { force }),
+  // 全局传输状态 + 限速控制
+  transferInfo: () => api.get('/api/discover/transfer-info'),
+  setSpeedLimit: (payload) => api.post('/api/discover/transfer-info/speed-limit', payload),
+  toggleAltSpeed: () => api.post('/api/discover/transfer-info/toggle-alt-speed'),
 }
 
 // 评分聚合 API（IMDB / RT / Metacritic / Trakt / Letterboxd / 豆瓣）
@@ -289,6 +388,15 @@ export const ratingsApi = {
     api.post(`/api/ratings/${tmdb_id}/refresh`, null, {
       params: { media_type, imdb_id: imdb_id || undefined },
     }),
+}
+
+// 日志查看与级别控制
+export const logsApi = {
+  tail: (lines = 500, level = '') =>
+    api.get('/api/logs/tail', { params: { lines, level: level || undefined } }),
+  getLevel: () => api.get('/api/logs/level'),
+  setLevel: (level) => api.post('/api/logs/level', { level }),
+  files: () => api.get('/api/logs/files'),
 }
 
 // 配置相关 API
@@ -312,6 +420,46 @@ export const statsApi = {
 
   getPosterStats: () =>
     api.get('/api/stats/posters/stats')
+}
+
+// 下载入库流水线 API
+export const dispatchApi = {
+  // 配额状态
+  getQuota: () => api.get('/api/dispatch/quota'),
+  cleanupNow: () => api.post('/api/dispatch/quota/cleanup-now'),
+  softCleanupNow: () => api.post('/api/dispatch/quota/soft-cleanup'),
+  // dispatch_map 行
+  listItems: (params = {}) => api.get('/api/dispatch/items', { params }),
+  // 加种预览 + 确认
+  preview: (payload) => api.post('/api/dispatch/preview', payload, { timeout: 90000 }),
+  confirm: (payload) => api.post('/api/dispatch/confirm', payload),
+  cancelPreview: (hash) => api.delete(`/api/dispatch/preview/${hash}`),
+  recomputeTarget: (payload) => api.post('/api/dispatch/preview/recompute-target', payload),
+  // RSS 透传
+  rssFeeds: () => api.get('/api/dispatch/rss/feeds'),
+  rssRules: () => api.get('/api/dispatch/rss/rules'),
+  rssMatching: (ruleName) => api.get(`/api/dispatch/rss/matching/${encodeURIComponent(ruleName)}`),
+  rssRefresh: (itemPath) => api.post('/api/dispatch/rss/refresh', { item_path: itemPath }),
+  rssRefreshAll: () => api.post('/api/dispatch/rss/refresh-all'),
+  rssAddFeed: (url, path) => api.post('/api/dispatch/rss/add', { url, path }),
+  rssRemove: (itemPath) => api.post('/api/dispatch/rss/remove', { item_path: itemPath }),
+  rssMarkRead: (itemPath, articleId) =>
+    api.post('/api/dispatch/rss/mark-read', { item_path: itemPath, article_id: articleId }),
+  rssSettingsGet: () => api.get('/api/dispatch/rss/settings'),
+  rssSettingsSet: (payload) => api.post('/api/dispatch/rss/settings', payload),
+  rssRuleSet: (name, def) => api.post(`/api/dispatch/rss/rules/${encodeURIComponent(name)}`, def),
+  rssRuleRename: (name, newName) =>
+    api.post(`/api/dispatch/rss/rules/${encodeURIComponent(name)}/rename`, { new_name: newName }),
+  rssRuleDelete: (name) => api.delete(`/api/dispatch/rss/rules/${encodeURIComponent(name)}`),
+  // 待审核（adopt 孤儿种子认领）
+  listNeedsReview: () => api.get('/api/dispatch/needs-review'),
+  confirmNeedsReview: (hash, payload) => api.post(`/api/dispatch/needs-review/${hash}/confirm`, payload),
+  dismissNeedsReview: (hash, deleteTorrent = false, deleteFiles = false) =>
+    api.post(`/api/dispatch/needs-review/${hash}/dismiss`, null, {
+      params: { delete_torrent: deleteTorrent, delete_files: deleteFiles },
+    }),
+  restoreDismissed: (hash) => api.post(`/api/dispatch/needs-review/${hash}/restore`),
+  adoptScanNow: () => api.post('/api/dispatch/adopt/scan-now'),
 }
 
 export default api

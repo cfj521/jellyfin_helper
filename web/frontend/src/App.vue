@@ -18,25 +18,25 @@
             <span>任务管理</span>
           </el-menu-item>
 
-          <el-menu-item index="/jellyfin/libraries">
+          <el-menu-item index="/medialibraries">
             <el-icon><Collection /></el-icon>
             <span>媒体库</span>
           </el-menu-item>
 
-          <el-menu-item v-if="adultEnabled" index="/adult/library">
-            <el-icon><Lock /></el-icon>
-            <span>番号库</span>
+          <el-menu-item index="/discover">
+            <el-icon><TrendCharts /></el-icon>
+            <span>热门推荐</span>
           </el-menu-item>
 
-          <el-sub-menu index="discover">
-            <template #title>
-              <el-icon><Compass /></el-icon>
-              <span>发现与下载</span>
-            </template>
-            <el-menu-item index="/discover/trending">热门推荐</el-menu-item>
-            <el-menu-item index="/discover/search">种子搜索</el-menu-item>
-            <el-menu-item index="/discover/downloads">下载管理</el-menu-item>
-          </el-sub-menu>
+          <el-menu-item index="/resourcesearch">
+            <el-icon><Search /></el-icon>
+            <span>资源搜索</span>
+          </el-menu-item>
+
+          <el-menu-item index="/downloadpipeline">
+            <el-icon><Download /></el-icon>
+            <span>下载流水线</span>
+          </el-menu-item>
 
           <!-- 配置入口：放在菜单末尾，视觉上与导航项分开 -->
           <el-menu-item index="/settings" class="settings-menu-item">
@@ -47,10 +47,15 @@
       </el-aside>
 
       <!-- 主内容区（无 header，主内容直接占满）-->
+      <!-- keep-alive include：列出来的组件 name 在切换其他页面时不卸载，状态保留。
+           Downloads 不能进，因为它的轮询 timer 用 onMounted/onUnmounted 管理。
+           Search 是首选 —— 用户来回切不应该丢搜索结果和分页位置。 -->
       <el-main class="app-main">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
-            <component :is="Component" />
+            <keep-alive :include="['TorrentSearch']">
+              <component :is="Component" />
+            </keep-alive>
           </transition>
         </router-view>
       </el-main>
@@ -59,21 +64,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { api } from '@/api'
-
-const adultEnabled = ref(false)
-
-onMounted(async () => {
-  // 判断是否显示番号库菜单
-  try {
-    const res = await api.get('/api/config/full')
-    adultEnabled.value = !!res.data?.config?.adult?.enabled
-  } catch (e) {
-    // 静默失败：保持默认 false
-  }
-})
 </script>
 
 <style lang="scss">

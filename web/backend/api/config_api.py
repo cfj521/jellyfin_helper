@@ -113,14 +113,14 @@ def _reload_settings():
 
 
 @router.get("/config/full")
-async def get_full_config():
+def get_full_config():
     """获取完整配置（不脱敏，原值返回）"""
     data = _load_yaml()
     return {"config": data}
 
 
 @router.put("/config/full")
-async def update_full_config(payload: ConfigPayload):
+def update_full_config(payload: ConfigPayload):
     """写入完整配置（深度合并：dict 递归合并，其他类型覆盖）"""
     try:
         old = _load_yaml()
@@ -138,7 +138,7 @@ async def update_full_config(payload: ConfigPayload):
 
 
 @router.get("/config/backups")
-async def list_backups():
+def list_backups():
     """列出配置备份文件"""
     backups: List[Dict] = []
     for p in sorted(BACKUP_DIR.glob("config_*.yaml"), reverse=True):

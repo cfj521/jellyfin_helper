@@ -25,6 +25,19 @@ jellyfin:
 tmdb:
   api_key: "your_tmdb_api_key"
 
+# 缓存 TTL（分钟）
+# 除了路径索引（30 秒，固定）外，所有可配缓存都在这里。
+# 改动需重启后端才生效。
+cache:
+  # TMDB 热门/详情等 API 响应
+  tmdb_minutes: 120
+  # 媒体库统计（视频数 / 总占用 / 总时长 / 缺海报 ...）
+  library_stats_minutes: 120
+  # 剧集树形子节点 + Series 聚合摘要（季数/集数/总时长/字幕覆盖）
+  tree_children_minutes: 120
+  # 字幕扫描结果（"缺字幕统计"懒加载窗口）
+  subtitle_scan_minutes: 1440
+
 # Wikidata 配置（演员图兜底来源）
 # 公共知识库，无需 API Key；但 Wikimedia 基金会要求每次请求带可识别的 User-Agent，
 # 否则可能被 403。建议带上你的联系方式或仓库 URL。
@@ -56,11 +69,6 @@ douban:
   # User-Agent，模拟真实浏览器；过期换一下即可
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# 媒体目录配置（可选，目前主要由各功能各自配置）
-media:
-  movies_dir: ""
-  tv_dir: ""
-
 # 字幕设置
 subtitle:
   preferred_langs: ["chs", "chs.eng", "eng"]
@@ -69,6 +77,25 @@ subtitle:
   opensubtitles_api_key: ""
   opensubtitles_username: ""
   opensubtitles_password: ""
+  # OpenSubtitles 两次请求之间最小间隔（秒）
+  # 免费层 5 次/10s + 200 次/天，request_delay 建议 ≥2s 留余量
+  opensubtitles_request_delay: 2.0
+  # 射手字幕 assrt.net（中文字幕主力源）
+  # 注册账号后在 https://secure.assrt.net/usercp.php 拿到 API Token
+  # 限频 20 次/分钟（按 token + IP 共享计数），request_delay 建议 ≥3s
+  assrt_api_token: ""
+  assrt_request_delay: 3.0
+  # Shooter（射手网 subapi.php）—— 中文电影 hash 命中率高，无需 API Key
+  shooter_request_delay: 2.0
+  # 字幕下载源优先级（按顺序尝试，第一个命中即返回）
+  # 支持的源：
+  #   shooter      - 射手网 hash 接口（中文电影命中高）
+  #   assrt        - 射手网 API（中文 / 多语言）
+  #   opensubtitles- OpenSubtitles 多语言
+  sources:
+    - { name: shooter,       enabled: true }
+    - { name: assrt,         enabled: true }
+    - { name: opensubtitles, enabled: true }
 
 # Jackett 配置（种子搜索聚合）
 jackett:
@@ -82,14 +109,74 @@ qbittorrent:
   password: "CHANGE_ME"
   download_path: "/downloads"
 
+  # 配额管理：limit 动态读 download_path 真实容量（shutil.disk_usage）
+  # 后端 stat 不到下载盘 → 整个配额功能禁用（不监视、不强清，UI 灰态）
+  quota:
+    enabled: true
+    warn_threshold: 0.85        # 85% UI 提醒
+    cleanup_threshold: 0.95     # 95% 触发硬清
+    target_after_cleanup: 0.70  # 清回 70% 留余量
+    check_interval_seconds: 300
+
+  # 做种策略：常规软清的判定条件
+  seeding:
+    target_ratio: 1.0           # 默认分享率（私有种用户可调高）
+    min_seed_days: 7
+    min_seed_hours_per_torrent: 24
+    cleanup_interval_seconds: 3600
+
+# 入库流水线：完成后自动转移到 Jellyfin 库 + 字幕/音轨后处理
+dispatch:
+  enabled: true
+  poll_interval_seconds: 30
+  worker_concurrency: 1         # 单 worker 串行
+  trash_dir: "/downloads/.trash"
+  default_move_mode: copy
+  # 各分类的目标库 + 路径模板（library_id 在前端选）
+  # 转移模式由 default_move_mode 全局统一，rule 内不再单独配
+  rules:
+    movie:
+      library_id: ""
+      location_template: "{library_root}/{title} ({year})"
+      file_template: "{title} ({year})"
+    tv:
+      library_id: ""
+      location_template: "{library_root}/{series_name}/Season {season:02d}"
+      file_template: "({series_name})S{season:02d}E{episode:02d}"
+    anime:
+      library_id: ""
+      location_template: "{library_root}/{anime_name}"
+      file_template: "({anime_name}){episode:03d}"
+    adult:
+      library_id: ""
+      location_template: "{library_root}/{code}"
+      file_template: "{code}({title})"
+
+# LLM 兜底识别（实测 qwen-plus 30/30 准确率 100%，¥0.74/1000 调用）
+llm:
+  enabled: false                # 默认关闭（需配 api_key 后启用）
+  provider: qwen                # qwen / deepseek / openai / lmstudio
+  api_key: ""                   # 阿里云 dashscope key
+  model: qwen-plus
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  timeout_seconds: 15
+  max_retries: 1
+  cache_ttl_days: 30
+  confidence_threshold: 0.85
+  daily_call_limit: 500
+
 # 成人内容配置（默认关闭）
 # enabled=false 时菜单不显示，相关 API 路由也不挂载
 adult:
   enabled: false
   media_path: ""
-  scraper_delay: 1.0
-
-# 通用选项
-options:
-  retry_count: 3
-  delay_between: 0.3
+  scraper_delay: 3.0
+  # 刮削源（按顺序回退，第一个命中即返回）。可关闭某些源。
+  #   avbase  - 商业番号兜底（DMM 图床高清封面）
+  #   missav  - 最终兜底：覆盖广（含 FC2）+ 中文化标题，但需 curl_cffi 绕 Cloudflare 较慢
+  sources:
+    - { name: javbus,     enabled: true }
+    - { name: javdb,      enabled: true }
+    - { name: javlibrary, enabled: false }
+    - { name: avbase,     enabled: true }
+    - { name: missav,     enabled: true }

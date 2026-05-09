@@ -106,6 +106,7 @@
       <el-table
         :data="tasks"
         v-loading="loading"
+        row-key="id"
         stripe
         class="clickable-table"
         @row-click="openDetail"
@@ -243,8 +244,13 @@ const hasActiveFilter = computed(() =>
 
 let pollTimer = null
 
-const loadTasks = async () => {
-  loading.value = true
+/**
+ * 加载任务列表。
+ * silent=true（轮询用）：不显示 loading 蒙层；增量合并已有 row（保持对象引用），
+ *   避免 el-table 整表重渲染导致用户的点击 / hover 被打断。
+ */
+const loadTasks = async (silent = false) => {
+  if (!silent) loading.value = true
   try {
     const params = {
       task_type: filter.value.type || undefined,
@@ -264,12 +270,27 @@ const loadTasks = async () => {
       const weekAgo = dayjs().subtract(7, 'day').startOf('day')
       list = list.filter(t => localDayjs(t.created_at)?.isAfter(weekAgo))
     }
-    tasks.value = list
+
+    if (silent && tasks.value.length) {
+      // 增量更新：按 id 复用现有对象，仅 Object.assign 改变化字段。
+      // 配合 el-table row-key="id"，已存在的行 DOM 不会被重建。
+      const byId = new Map(tasks.value.map(t => [t.id, t]))
+      tasks.value = list.map(incoming => {
+        const existing = byId.get(incoming.id)
+        if (existing) {
+          Object.assign(existing, incoming)
+          return existing
+        }
+        return incoming
+      })
+    } else {
+      tasks.value = list
+    }
     pagination.value.total = res.data.total
   } catch (e) {
-    console.error('加载任务失败', e)
+    if (!silent) console.error('加载任务失败', e)
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
@@ -335,13 +356,13 @@ const rowDescription = (row) => {
   return row?.result?.initial_message || row?.message || '—'
 }
 
-// 列表轮询：有 running / pending 任务时每 2s 静默刷新
+// 列表轮询：有 running / pending 任务时每 5s 静默刷新（silent 模式不闪蒙层、不重建 DOM）
 const startPolling = () => {
   pollTimer = setInterval(() => {
     if (autoPolling.value && !loading.value) {
-      loadTasks()
+      loadTasks(true)
     }
-  }, 2000)
+  }, 5000)
 }
 
 const stopPolling = () => {

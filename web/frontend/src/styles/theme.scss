@@ -126,6 +126,14 @@ $info:            #6b7280;
   border-radius: 6px;
 }
 
+// placeholder 强制不加粗：某些字体渲染下默认占位符看着发粗，统一压成 normal
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder,
+.el-select__placeholder,
+.el-select__placeholder span {
+  font-weight: 400 !important;
+}
+
 // ============ 表格 ============
 .el-table {
   border-radius: 6px;
@@ -330,6 +338,12 @@ $info:            #6b7280;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+// 高度链：让子组件能用 height: 100% 占满视口（SPA 标准）
+html, body, #app {
+  height: 100%;
+  margin: 0;
 }
 
 body {

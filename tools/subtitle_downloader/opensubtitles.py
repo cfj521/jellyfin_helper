@@ -4,6 +4,8 @@ https://opensubtitles.stoplight.io/docs/opensubtitles-api
 """
 import os
 import re
+import time
+import threading
 import hashlib
 import requests
 import logging
@@ -31,7 +33,8 @@ class OpenSubtitlesClient:
         'ko': 'ko',
     }
 
-    def __init__(self, api_key: str, username: str = None, password: str = None):
+    def __init__(self, api_key: str, username: str = None, password: str = None,
+                 request_delay: float = 2.0):
         """
         初始化客户端
 
@@ -39,6 +42,8 @@ class OpenSubtitlesClient:
             api_key: OpenSubtitles API Key
             username: 用户名（可选，用于下载）
             password: 密码（可选，用于下载）
+            request_delay: 两次 API 请求之间的最小间隔（秒）。免费层 5/10s 限频，
+                建议 ≥2s 留余量。本类内部串行排队，多线程共享同一实例也安全。
         """
         self.api_key = api_key
         self.username = username
@@ -49,6 +54,17 @@ class OpenSubtitlesClient:
             'Content-Type': 'application/json',
             'User-Agent': 'JellyfinTools v1.0'
         }
+        self.request_delay = max(0.0, float(request_delay))
+        self._last_call = 0.0
+        self._lock = threading.Lock()
+
+    def _wait_quota(self):
+        """两次 OpenSubtitles API 请求之间的强制间隔。"""
+        with self._lock:
+            elapsed = time.monotonic() - self._last_call
+            if elapsed < self.request_delay:
+                time.sleep(self.request_delay - elapsed)
+            self._last_call = time.monotonic()
 
     def login(self) -> bool:
         """登录获取token（下载需要）"""
@@ -57,6 +73,7 @@ class OpenSubtitlesClient:
             return False
 
         try:
+            self._wait_quota()
             response = requests.post(
                 f"{self.BASE_URL}/login",
                 headers=self.headers,
@@ -120,39 +137,52 @@ class OpenSubtitlesClient:
 
         return info
 
-    def search(self, video_path: Path, languages: List[str] = None) -> List[Dict]:
+    def search(
+        self,
+        video_path: Optional[Path] = None,
+        languages: Optional[List[str]] = None,
+        imdb_id: Optional[str] = None,
+        tmdb_id: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> List[Dict]:
         """
-        搜索字幕
+        搜索字幕。优先级（命中即停）：
+          1. imdb_id 给定 → 用 imdb_id（OpenSubtitles 接受不带 'tt' 前缀的纯数字）
+          2. tmdb_id 给定 → 用 tmdb_id
+          3. query 给定 → 直接用
+          4. video_path 给定 → 从 stem 提取 query / year / episode hint
 
-        Args:
-            video_path: 视频文件路径
-            languages: 语言列表 ['chs', 'eng']
-
-        Returns:
-            字幕列表
+        ID 搜索精度远高于文本搜（同名电影 / 不同年份版本完全不会混淆）。
         """
         if languages is None:
             languages = ['chs', 'eng']
-
-        # 转换语言代码
         api_langs = [self.LANG_MAP.get(lang, lang) for lang in languages]
+        params: Dict = {'languages': ','.join(api_langs)}
 
-        # 提取信息
-        info = self.extract_info(video_path.stem)
-
-        params = {
-            'query': info['query'],
-            'languages': ','.join(api_langs),
-        }
-
-        if 'season_number' in info:
-            params['season_number'] = info['season_number']
-        if 'episode_number' in info:
-            params['episode_number'] = info['episode_number']
-        if 'year' in info:
-            params['year'] = info['year']
+        if imdb_id:
+            # OpenSubtitles 接受纯数字 imdb_id；'tt0468569' 要剥前缀
+            clean = str(imdb_id).lower().lstrip('t')
+            params['imdb_id'] = clean
+        elif tmdb_id:
+            params['tmdb_id'] = str(tmdb_id)
+        else:
+            # 文本搜模式
+            if query is None and video_path is not None:
+                info = self.extract_info(video_path.stem)
+                query = info.get('query')
+                if 'year' in info:
+                    params['year'] = info['year']
+                if 'season_number' in info:
+                    params['season_number'] = info['season_number']
+                if 'episode_number' in info:
+                    params['episode_number'] = info['episode_number']
+            if not query:
+                logger.warning("OpenSubtitles search 缺少 query / IDs / video_path，跳过")
+                return []
+            params['query'] = query
 
         try:
+            self._wait_quota()
             response = requests.get(
                 f"{self.BASE_URL}/subtitles",
                 headers=self.headers,
@@ -184,6 +214,7 @@ class OpenSubtitlesClient:
 
         try:
             # 获取下载链接
+            self._wait_quota()
             response = requests.post(
                 f"{self.BASE_URL}/download",
                 headers=headers,

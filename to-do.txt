@@ -1,9 +1,15 @@
-之前我们测试都集中在电影整个媒体库上，想剧集（剧集、season、episode）这个库的显示逻辑需要改进，你先给我一个计划
+div.el-card.is-never-shadow.items-card 这个元素应铺满 container剩余部分，不应再出现处置滚动条
 
-番号库没测试，似乎完全工作不正常
+/jellyfin/libraries 改为medialibraries，/discover/trending改为/discover，/discover/search改为 /resourcesearch，/discover/downloads改为downloadpipeline，这些路由改了之后，api端点、代码文件名等等都跟着一起改，便于识别于维护
 
-从射手网、subhd.cc如何下载字幕？
+RSS?
 
-目前下载是存在/downloads目录的，计划下载后自动搬回库
+热门推荐除了TMDB还有哪些源值得加入？
 
-指定规则自动监视资源（新推荐、追剧等）更新自动下载
+
+美化主题、配色
+
+
+
+ok，还有2件事儿，gateway vm有我的个人网站，部署在/data/home_web，
+我想把192.168.89.4:3000 暴露

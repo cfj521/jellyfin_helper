@@ -223,7 +223,7 @@ const pickSearchName = (item) => {
 
 const searchTorrents = (item) => {
   router.push({
-    path: '/discover/search',
+    path: '/resourcesearch',
     query: { q: pickSearchName(item), type: item.media_type === 'tv' ? 'tv' : 'movie' },
   })
 }

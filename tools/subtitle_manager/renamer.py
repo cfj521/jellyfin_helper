@@ -48,15 +48,22 @@ class SubtitleRenamer:
         return None
 
     def extract_lang_code(self, filename: str) -> Optional[str]:
-        """从文件名提取语言代码（保持原 token，不归一化）。"""
-        name_lower = filename.lower()
-        for code in LANG_CODES:
-            if f".{code.lower()}." in name_lower:
-                return code
-            for ext in SUB_EXTS:
-                if name_lower.endswith(f".{code.lower()}{ext}"):
-                    return code
-        return None
+        """
+        从文件名提取语言代码（归一化为内部代码，支持双语 / 中文关键字）。
+
+        返回 dot-separated 复合 code 或 None：
+          'subtitle.chs.srt'         → 'chs'
+          'subtitle.chs.eng.srt'     → 'chs.eng'
+          'subtitle.chs&eng.ass'     → 'chs.eng'
+          'subtitle.简体&英文.srt'    → 'chs.eng'
+          'subtitle.简英.srt'         → 'chs.eng'
+          'subtitle.简体.srt'        → 'chs'
+          'movie.srt'                → None（裸名 → 上层走内容识别）
+
+        识别规则与 assrt / shooter / scanner 共用同一套（common.lang_utils）。
+        """
+        from common.lang_utils import detect_lang_combo
+        return detect_lang_combo(filename)
 
     def resolve_lang(self, subtitle: Path, force_lang: Optional[str] = None) -> Optional[str]:
         """

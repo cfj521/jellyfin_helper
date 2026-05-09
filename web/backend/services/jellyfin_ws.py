@@ -197,7 +197,9 @@ class JellyfinWSClient:
                         return
                     continue
 
-                self._handle_message(msg)
+                # 同步 handler 里有 DB 写、HTTP 调用等阻塞操作，不能在事件循环上执行；
+                # 否则一次堵住 → FastAPI 整个 API 不响应（包括 /docs）
+                await asyncio.to_thread(self._handle_message, msg)
 
         self._connected = False
 

@@ -242,6 +242,56 @@ def test_item_health_non_empty_season_ok():
     assert h['level'] == 'ok'
 
 
+def test_item_health_no_name_mismatch_for_accented_title():
+    """Shōgun 系列：Jellyfin Name 带音符号、文件夹用 ASCII 不应判 name_mismatch。"""
+    from web.backend.api._item_health import compute_health
+
+    h = compute_health({
+        'Type': 'Series',
+        'Name': 'Shōgun',
+        'Path': '/library/videos/tv/Shogun',
+        'ChildCount': 1,
+    })
+    codes = [iss['code'] for iss in h['issues']]
+    assert 'name_mismatch' not in codes, (
+        f"音符号差异 (ō vs o) 不应触发 name_mismatch；当前 issues={h['issues']}"
+    )
+
+
+def test_item_health_no_name_mismatch_for_dotted_directory():
+    """Star.Wars.Andor 目录：".Andor" 不该被当扩展名截断成 "Star.Wars"。"""
+    from web.backend.api._item_health import compute_health
+
+    h = compute_health({
+        'Type': 'Series',
+        'Name': 'Andor',
+        'Path': '/library/videos/tv/Star.Wars.Andor',
+        'ChildCount': 2,
+    })
+    codes = [iss['code'] for iss in h['issues']]
+    # "Andor" 应该作为 token 出现在文件夹 ["star","wars","andor"] 里 → containment=1.0
+    assert 'name_mismatch' not in codes, (
+        f"Series 目录名末段不应被当扩展名；当前 issues={h['issues']}"
+    )
+
+
+def test_item_health_no_name_mismatch_for_abbreviated_folder():
+    """主标题缩写：文件夹用 'CSI'，Jellyfin 标题 'CSI: Crime Scene Investigation'。
+    文件夹 token 完全落在标题里 → Containment(文件夹)=1.0，不应误报。"""
+    from web.backend.api._item_health import compute_health
+
+    h = compute_health({
+        'Type': 'Series',
+        'Name': 'CSI: Crime Scene Investigation',
+        'Path': '/library/videos/tv/CSI',
+        'ChildCount': 15,
+    })
+    codes = [iss['code'] for iss in h['issues']]
+    assert 'name_mismatch' not in codes, (
+        f"文件夹是主标题缩写不应触发 name_mismatch；当前 issues={h['issues']}"
+    )
+
+
 def test_item_health_empty_series_still_warning():
     """旧的 empty_series 检查没被破坏。"""
     from web.backend.api._item_health import compute_health

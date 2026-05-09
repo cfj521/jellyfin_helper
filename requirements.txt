@@ -17,6 +17,8 @@ requests>=2.28.0
 httpx>=0.26.0
 aiohttp>=3.9.0
 websockets>=12.0
+# curl_cffi: 模拟 Chrome TLS/JA3 指纹，用于绕过 Cloudflare 防护（missav / fourhoi 图床等）
+curl_cffi>=0.7.0
 
 # ── 网页解析（字幕站点 / 成人内容刮削）──
 beautifulsoup4>=4.12.0

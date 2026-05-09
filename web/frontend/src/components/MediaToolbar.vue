@@ -185,13 +185,13 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Picture, User, Document, Download, EditPen, Headset, Operation,
   Delete, Compass, Aim, MagicStick,
 } from '@element-plus/icons-vue'
 import {
-  metadataApi, subtitleApi, audioApi, maintenanceApi,
+  metadataApi, subtitleApi, audioApi, maintenanceApi, taskApi,
 } from '@/api'
 
 const props = defineProps({
@@ -256,6 +256,7 @@ const buttonDefs = [
     key: 'cleanup-samples',
     label: '清理 Sample 内容',
     icon: Delete,
+    taskTypes: ['cleanup_samples'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'danger',
@@ -272,6 +273,7 @@ const buttonDefs = [
     key: 'normalize-paths',
     label: '扫描并规范路径',
     icon: Compass,
+    taskTypes: ['normalize_paths'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'danger',
@@ -288,6 +290,7 @@ const buttonDefs = [
     key: 'auto-identify',
     label: '扫描并修复识别错误',
     icon: Aim,
+    taskTypes: ['auto_identify'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'warning',
@@ -302,60 +305,56 @@ const buttonDefs = [
   },
 
   // ── 元数据修复（图片）──
+  // 海报 + Episode 缩略图（TMDB still）合并：
+  //   - 所有库：调用 poster_fix（影视条目级海报）
+  //   - 剧集 / 混合库：并行调用 episode_stills_fix（TMDB still 图）
+  // 两个会创建独立任务，前端不阻塞等待，并行后台跑
   {
     key: 'posters',
-    label: '扫描并修复缺失海报',
+    label: '扫描并修复缺失海报/缩略图',
     icon: Picture,
+    taskTypes: ['poster_fix', 'episode_still_fix'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'warning',
-      text: '将扫描范围内缺少海报的影视条目，从 TMDB 下载海报并上传到 Jellyfin。',
+      text:
+        '海报：扫描缺海报的影视条目，从 TMDB 下载并上传到 Jellyfin。\n' +
+        '缩略图（仅剧集 / 混合库）：扫描缺 still 的 Episode，从 TMDB 取 still 图上传。',
       supportsDryRun: true,
-      dryRunHint: '仅查询 TMDB 海报地址并列出，不下载也不上传',
+      dryRunHint: '仅查询 TMDB 来源并列出，不下载也不上传',
     },
-    handler: ({ dryRun = false } = {}) => metadataApi.fixPosters({
-      // poster_fix 的 scan_only 等价于 dry_run
-      scan_only: dryRun,
-      skip_existing: true,
-      ...buildScopePayload(),
-    }),
-  },
-  {
-    // Episode 缩略图 = TMDB still。仅在剧集库可见
-    key: 'episode-stills',
-    label: '修复缺失 Episode 缩略图',
-    icon: Picture,
-    supports: ['all', 'library', 'items'],
-    tvOnly: true,
-    confirm: {
-      level: 'warning',
-      text: '将扫描范围内缺缩略图的 Episode，从 TMDB 取 still 图上传到 Jellyfin。',
-      supportsDryRun: true,
-      dryRunHint: '仅查询 TMDB 是否有 still 图并列出，不下载也不上传',
-    },
-    handler: ({ dryRun = false } = {}) => {
-      // items 模式优先用 episode_ids；fallback 到 library_id
+    handler: async ({ dryRun = false } = {}) => {
       const s = props.scope
-      const payload = {
+      // 海报：所有库都跑
+      const posterPromise = metadataApi.fixPosters({
         scan_only: dryRun,
         skip_existing: true,
+        ...buildScopePayload(),
+      })
+      // Episode 缩略图：仅剧集 / 混合库
+      const isTV = ['tvshows', 'mixed'].includes(s.collection_type)
+      if (isTV) {
+        const stillPayload = { scan_only: dryRun, skip_existing: true }
+        if (s.mode === 'items' && (s.episode_ids?.length)) {
+          stillPayload.episode_ids = s.episode_ids
+        } else if (s.mode === 'items' && s.library_id) {
+          stillPayload.library_id = s.library_id
+        } else if (s.mode === 'library' && s.library_id) {
+          stillPayload.library_id = s.library_id
+        } else if (s.mode === 'all' && s.library_ids?.length) {
+          stillPayload.library_ids = s.library_ids
+        }
+        // 不阻塞海报任务返回；让两个任务并行后台跑
+        metadataApi.fixEpisodeStills(stillPayload).catch(() => {})
       }
-      if (s.mode === 'items' && (s.episode_ids?.length)) {
-        payload.episode_ids = s.episode_ids
-      } else if (s.mode === 'items' && s.library_id) {
-        payload.library_id = s.library_id
-      } else if (s.mode === 'library' && s.library_id) {
-        payload.library_id = s.library_id
-      } else if (s.mode === 'all' && s.library_ids?.length) {
-        payload.library_ids = s.library_ids
-      }
-      return metadataApi.fixEpisodeStills(payload)
+      return posterPromise
     },
   },
   {
     key: 'actors',
     label: '扫描并修复演员图片',
     icon: User,
+    taskTypes: ['actor_fix'],
     supports: ['all', 'library'],
     itemFallback: 'library',
     confirm: {
@@ -377,6 +376,7 @@ const buttonDefs = [
     key: 'subtitle-scan',
     label: '扫描字幕缺失',
     icon: Document,
+    taskTypes: ['subtitle_scan'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'info',
@@ -392,6 +392,7 @@ const buttonDefs = [
     key: 'subtitle-auto-fix',
     label: '自动下载字幕',
     icon: Download,
+    taskTypes: ['subtitle_auto_fix'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'warning',
@@ -411,6 +412,7 @@ const buttonDefs = [
     key: 'subtitle-rename',
     label: '字幕文件名对齐',
     icon: EditPen,
+    taskTypes: ['subtitle_rename'],
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'warning',
@@ -432,6 +434,7 @@ const buttonDefs = [
     key: 'audio-default',
     label: '扫描并设置默认音轨',
     icon: Headset,
+    taskTypes: ['audio_default_track'],
     supports: ['all', 'library', 'items'],
     needsDialog: 'audio',
     // 真正的 handler 在用户选完语言后由 confirmAudioDialog 调用
@@ -500,10 +503,60 @@ const buildScopePayload = (options = {}) => {
 }
 
 /**
+ * 检查是否已有给定 task_type 在跑（pending 或 running）。
+ * 命中返回首个匹配的 task；都没在跑返回 null。
+ */
+const checkAlreadyRunning = async (taskTypes) => {
+  if (!taskTypes?.length) return null
+  for (const t of taskTypes) {
+    for (const status of ['running', 'pending']) {
+      try {
+        const r = await taskApi.list({ task_type: t, status, limit: 1 })
+        const hit = r.data?.tasks?.[0]
+        if (hit) return { task_type: t, task: hit }
+      } catch {
+        // 单次查询失败不阻塞按钮 —— 安静吞掉
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * 拦截：如果已有同类任务在跑，弹确认让用户选"查看任务"或"取消"，不让重复创建。
+ * 返回 true = 可以继续；false = 用户已被引导走或选了取消。
+ */
+const guardAgainstDuplicate = async (btn) => {
+  if (!btn.taskTypes?.length) return true
+  const existing = await checkAlreadyRunning(btn.taskTypes)
+  if (!existing) return true
+  const t = existing.task
+  const stateLabel = t.status === 'running' ? '正在运行' : '排队中'
+  try {
+    await ElMessageBox.confirm(
+      `已有「${btn.label}」任务${stateLabel}（#${t.id}），重复创建会浪费资源。是否前往查看？`,
+      '已有同类任务',
+      {
+        type: 'warning',
+        confirmButtonText: '查看任务',
+        cancelButtonText: '关闭',
+      }
+    )
+    router.push({ path: `/tasks/${t.id}` })
+  } catch {
+    // 用户取消 —— 不跳转、不创建
+  }
+  return false
+}
+
+/**
  * 触发某个按钮：调 handler → 收 task_id → 跳 /tasks
  * opts：透传给 handler，含 { dryRun, audioLang }
  */
 const triggerHandler = async (btn, opts = {}) => {
+  // 预检：已有同类任务在跑就不让重复创建
+  if (!await guardAgainstDuplicate(btn)) return
+
   loadingKey.value = btn.key
   try {
     const res = await btn.handler(opts)
@@ -571,6 +624,8 @@ const onConfirmOk = () => {
 
 const onClick = async (btn) => {
   if (btn.disabled) return
+  // 早预检：在打开任何确认 / 音轨语言对话框之前先看是否有同类任务在跑
+  if (!await guardAgainstDuplicate(btn)) return
   if (btn.needsDialog === 'audio') {
     audioDialogVisible.value = true
     return
@@ -623,6 +678,10 @@ const openRunAllDialog = () => {
 
 const confirmRunAll = async () => {
   runAllDialogVisible.value = false
+  // 预检：已有 run_all 在跑就不让重复创建
+  const fakeBtn = { key: 'run-all', label: '一键修复', taskTypes: ['run_all'] }
+  if (!await guardAgainstDuplicate(fakeBtn)) return
+
   loadingKey.value = 'run-all'
   const dryRun = runAllDryRun.value
   try {

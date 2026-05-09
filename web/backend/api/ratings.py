@@ -355,7 +355,7 @@ def queue_douban_fetch(tmdb_id: int, media_type: str, title: str, year: Optional
 # ============================================================
 
 @router.get("", response_model=RatingResponse)
-async def get_rating(
+def get_rating(
     tmdb_id: int,
     media_type: str = "movie",
     imdb_id: Optional[str] = None,
@@ -393,7 +393,7 @@ async def get_rating(
 
 
 @router.post("/batch", response_model=BatchResponse)
-async def get_ratings_batch(
+def get_ratings_batch(
     request: BatchRequest,
     db: Session = Depends(get_db),
 ):
@@ -467,7 +467,7 @@ async def get_ratings_batch(
 
 
 @router.post("/{tmdb_id}/refresh", response_model=RatingResponse)
-async def refresh_rating(
+def refresh_rating(
     tmdb_id: int,
     media_type: str = "movie",
     imdb_id: Optional[str] = None,

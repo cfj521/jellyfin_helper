@@ -29,6 +29,29 @@ VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '
 LIBRARY_COOLDOWN_SEC = 5 * 60
 
 
+def _detect_local_attachments(video_file: Path):
+    """
+    探测视频文件同目录下已存在的 poster / nfo，返回 (poster_path, nfo_path) 字符串或 None。
+    覆盖常见命名：<stem>-poster.{jpg,jpeg,png} / <stem>.nfo
+    """
+    if not video_file:
+        return None, None
+    parent = video_file.parent
+    stem = video_file.stem
+
+    poster_path = None
+    for ext in ('.jpg', '.jpeg', '.png'):
+        cand = parent / f'{stem}-poster{ext}'
+        if cand.exists():
+            poster_path = str(cand)
+            break
+
+    nfo = parent / f'{stem}.nfo'
+    nfo_path = str(nfo) if nfo.exists() else None
+
+    return poster_path, nfo_path
+
+
 class AdultWatcher:
     def __init__(self):
         self._lock = threading.Lock()
@@ -207,7 +230,12 @@ class AdultWatcher:
             }
             new_codes_for_scrape: List[str] = []
 
+            from web.backend.shutdown import is_shutting_down
             for idx, f in enumerate(all_videos):
+                if is_shutting_down():
+                    logger.info(f"收到 shutdown 信号，库扫描提前退出（已扫 {idx}/{total}）")
+                    stats["stopped_by_shutdown"] = True
+                    break
                 try:
                     mtime = f.stat().st_mtime
                 except OSError:
@@ -215,28 +243,97 @@ class AdultWatcher:
                 stats["scanned"] += 1
 
                 existing = db.query(AdultItem).filter(AdultItem.file_path == str(f)).first()
-                if existing and existing.file_mtime is not None and abs(existing.file_mtime - mtime) < 1.0:
+
+                # excluded 项不再自动识别 / 刮削，扫描直接跳
+                if existing and existing.excluded:
                     stats["skipped"] += 1
                     self._append_log(db, task_id, stats, {
-                        "name": f.name, "status": "skipped", "code": existing.code,
+                        "name": f.name, "status": "excluded", "code": existing.code,
                     })
                     self._tick_progress(db, task_id, idx, total, stats)
                     continue
 
-                code = extract_code(f.name)
-                if not code:
-                    stats["unrecognized"] += 1
+                if existing and existing.file_mtime is not None and abs(existing.file_mtime - mtime) < 1.0:
+                    # mtime 没变：跳过。注意 existing.code 可能为 NULL（之前 unrecognized 入库的）
+                    if existing.code:
+                        stats["skipped"] += 1
+                        status = "skipped"
+                    else:
+                        stats["unrecognized"] += 1
+                        status = "unrecognized"
                     self._append_log(db, task_id, stats, {
-                        "name": f.name, "status": "unrecognized",
+                        "name": f.name, "status": status, "code": existing.code,
                     })
                     self._tick_progress(db, task_id, idx, total, stats)
                     continue
+
+                # 父目录名优先：避免文件名里水印 / 网站名造成的误识别
+                # 例如 "PFES-103/hhd800.com@PFES-103.mp4" 文件名会被误识为 HHD-800，
+                #     而父目录 "PFES-103" 是真正的番号，应优先采纳
+                # 父目录识别失败时再退回文件名识别
+                code = extract_code(f.parent.name) or extract_code(f.name)
+                if not code:
+                    # 识别失败也入库（code=NULL），让前端能看到这些文件并人工指 code
+                    stats["unrecognized"] += 1
+                    if existing:
+                        # 旧记录 mtime 变了；如果原本有 code 就保留，没有就还是 NULL
+                        existing.file_mtime = mtime
+                        db.commit()
+                    else:
+                        # 无番号文件入库：title=文件名 stem，默认 excluded=True（普通列表隐藏）
+                        new_item = AdultItem(
+                            code=None,
+                            title=f.stem,
+                            file_path=str(f),
+                            file_mtime=mtime,
+                            excluded=True,
+                        )
+                        db.add(new_item)
+                        db.commit()
+                    self._append_log(db, task_id, stats, {
+                        "name": f.name, "status": "unrecognized",
+                        "code": existing.code if existing else None,
+                    })
+                    self._tick_progress(db, task_id, idx, total, stats)
+                    continue
+
+                # 探测当前 video 同目录下已存在的 poster / nfo
+                # 重要：清表 / 文件位置变更后，本地 poster/nfo 已存在的话直接关联到 DB，
+                # 后续刮削就不必重复下载海报、生成 NFO（_scrape_codes 会跳过）
+                local_poster, local_nfo = _detect_local_attachments(f)
 
                 if existing:
                     # mtime 变了：重新刮削
+                    was_unrecognized = not existing.code
                     existing.file_mtime = mtime
-                    if not existing.code:
+                    if local_poster:
+                        existing.poster_path = local_poster
+                    if local_nfo:
+                        existing.nfo_path = local_nfo
+                    if was_unrecognized:
+                        # 之前 unrecognized，现在能识别 → 升级
+                        # 注意：可能撞上其他记录已占用同 code 的情况
+                        clash = db.query(AdultItem).filter(
+                            AdultItem.code == code, AdultItem.id != existing.id
+                        ).first()
+                        if clash:
+                            # 把当前文件路径并入 clash，删掉本记录
+                            clash.file_path = str(f)
+                            clash.file_mtime = mtime
+                            if local_poster:
+                                clash.poster_path = local_poster
+                            if local_nfo:
+                                clash.nfo_path = local_nfo
+                            db.delete(existing)
+                            db.commit()
+                            self._append_log(db, task_id, stats, {
+                                "name": f.name, "status": "moved", "code": code,
+                            })
+                            new_codes_for_scrape.append(code)
+                            self._tick_progress(db, task_id, idx, total, stats)
+                            continue
                         existing.code = code
+                        stats["new"] += 1  # 算作新识别成功
                     db.commit()
                     self._append_log(db, task_id, stats, {
                         "name": f.name, "status": "updated", "code": existing.code,
@@ -248,12 +345,19 @@ class AdultWatcher:
                         # 视频换位置
                         code_existing.file_path = str(f)
                         code_existing.file_mtime = mtime
+                        if local_poster:
+                            code_existing.poster_path = local_poster
+                        if local_nfo:
+                            code_existing.nfo_path = local_nfo
                         db.commit()
                         self._append_log(db, task_id, stats, {
                             "name": f.name, "status": "moved", "code": code,
                         })
                     else:
-                        new_item = AdultItem(code=code, file_path=str(f), file_mtime=mtime)
+                        new_item = AdultItem(
+                            code=code, file_path=str(f), file_mtime=mtime,
+                            poster_path=local_poster, nfo_path=local_nfo,
+                        )
                         db.add(new_item)
                         db.commit()
                         stats["new"] += 1
@@ -266,32 +370,62 @@ class AdultWatcher:
 
             update_task_progress(db, task_id, 90, f"识别完成，新增 {stats['new']}")
 
-            # 刮削
-            if do_scrape and new_codes_for_scrape:
-                update_task_progress(db, task_id, 92, f"刮削 {len(new_codes_for_scrape)} 条…")
-                stats["scraped"] = self._scrape_codes(new_codes_for_scrape, db, task_id, stats)
+            # 刮削前先释放扫描阶段持有的 DB 连接：刮削里有 HTTP 慢请求，
+            # 旧版本在这里继续持有 db → 整个连接池被锁住，前端 API 全部拿不到连接
+            db.close()
+            db = None
 
-            # 通知 Jellyfin
+            if do_scrape and new_codes_for_scrape:
+                with SessionLocal() as d:
+                    update_task_progress(d, task_id, 92, f"刮削 {len(new_codes_for_scrape)} 条…")
+                stats["scraped"] = self._scrape_codes(new_codes_for_scrape, task_id, stats)
+
+            # 通知 Jellyfin（精准 path 通知，整库扫兜底）
             if stats["new"] > 0 and settings.jellyfin_api_key:
                 try:
                     from common.jellyfin_client import JellyfinClient
-                    JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key).refresh_library(library_id)
+                    jf = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
+
+                    # 收集本轮处理的 item file_path（jellyfin 视角）
+                    paths_for_jf = []
+                    if new_codes_for_scrape:
+                        from web.backend.path_translator import reverse_translate_path_with_settings
+                        with SessionLocal() as d:
+                            items_in_db = (
+                                d.query(AdultItem)
+                                .filter(AdultItem.code.in_(new_codes_for_scrape))
+                                .all()
+                            )
+                            for it in items_in_db:
+                                if it.file_path:
+                                    paths_for_jf.append(
+                                        reverse_translate_path_with_settings(it.file_path) or it.file_path
+                                    )
+
+                    if paths_for_jf and jf.notify_media_updated(paths_for_jf, update_type='Created'):
+                        pass
+                    else:
+                        # 兜底：库级扫描
+                        jf.refresh_library(library_id)
                 except Exception as e:
                     logger.warning(f"通知 Jellyfin 失败: {e}")
 
             self._last_run_summary = {k: v for k, v in stats.items() if k != "scanned_files"}
             self._last_scan_per_lib[library_id] = time.time()
-            complete_task(db, task_id, stats)
+            with SessionLocal() as d:
+                complete_task(d, task_id, stats)
             logger.info(f"watcher: 库 {library_id} 扫描完成 new={stats['new']} scraped={stats['scraped']}")
 
         except Exception as e:
             logger.exception(f"watcher: 库 {library_id} 扫描异常")
             try:
-                complete_task(db, task_id, {"error": str(e)}, success=False)
+                with SessionLocal() as d:
+                    complete_task(d, task_id, {"error": str(e)}, success=False)
             except Exception:
                 pass
         finally:
-            db.close()
+            if db is not None:
+                db.close()
             with self._lock:
                 self._active_tasks.pop(library_id, None)
 
@@ -331,74 +465,128 @@ class AdultWatcher:
             from web.backend.api.tasks import update_task_progress
             update_task_progress(db, task_id, pct, f"识别中 {idx+1}/{total}（新增 {stats['new']}）")
 
-    def _scrape_codes(self, codes: List[str], db, task_id: int, stats: dict) -> int:
+    def _scrape_codes(self, codes: List[str], task_id: int, stats: dict) -> int:
+        """
+        刮削一组番号。**关键**：每条 code 只在读 / 写两个瞬间持有 DB 连接，
+        HTTP 抓取期间不持有，避免连接池被占满拖垮整个 API。
+        """
         from web.backend.config import settings
-        from web.backend.database import AdultItem
+        from web.backend.database import AdultItem, SessionLocal
         from tools.adult_manager.scrapers.manager import ScraperManager
         from tools.adult_manager.nfo_writer import write_nfo as do_write_nfo
-        import requests
 
         manager = ScraperManager(
             delay=settings.adult_scraper_delay,
-            proxy=settings.adult_proxy or None,
             sources=settings.adult_sources,
         )
         if not manager.scrapers:
             return 0
 
+        from web.backend.shutdown import is_shutting_down
+        from datetime import datetime, timedelta
+        from web.backend.api.adult import COOLDOWN_AFTER_FAILURES, COOLDOWN_DAYS
         ok = 0
         for code in codes:
-            item = db.query(AdultItem).filter(AdultItem.code == code).first()
-            if not item:
-                continue
+            if is_shutting_down():
+                logger.info(f"收到 shutdown 信号，watcher 刮削提前退出（已处理 {ok} 条）")
+                break
+            # ---- 短事务 1：读 item 元信息 ----
+            # 跳过条件: 用户主动 excluded 永久跳过；自动 cooldown_until 未到期跳过
+            with SessionLocal() as db:
+                item = db.query(AdultItem).filter(AdultItem.code == code).first()
+                if not item:
+                    continue
+                if item.excluded:
+                    logger.debug(f"watcher 跳过已排除条目 {code}")
+                    continue
+                if item.cooldown_until and item.cooldown_until > datetime.utcnow():
+                    logger.debug(f"watcher 跳过冷却中条目 {code}（到期 {item.cooldown_until}）")
+                    continue
+                file_path = item.file_path
+                item_id = item.id
+
             try:
+                # ---- 慢操作：HTTP 抓取，不持有 DB ----
                 result = manager.scrape(code)
                 if not result:
-                    self._append_log(db, task_id, stats, {
-                        "name": Path(item.file_path).name if item.file_path else code,
-                        "status": "scrape_not_found", "code": code,
-                    })
+                    # 失败 +1；达阈值进 7 天 cooldown
+                    with SessionLocal() as db:
+                        it = db.query(AdultItem).filter(AdultItem.id == item_id).first()
+                        if it:
+                            it.scrape_attempts = (it.scrape_attempts or 0) + 1
+                            it.last_scrape_at = datetime.utcnow()
+                            it.source = 'not_found'
+                            if it.scrape_attempts >= COOLDOWN_AFTER_FAILURES:
+                                it.cooldown_until = datetime.utcnow() + timedelta(days=COOLDOWN_DAYS)
+                                logger.info(
+                                    f"watcher: {code} 连续失败 {it.scrape_attempts} 次，"
+                                    f"进入 {COOLDOWN_DAYS} 天冷却（到 {it.cooldown_until}）"
+                                )
+                            db.commit()
+                        self._append_log(db, task_id, stats, {
+                            "name": Path(file_path).name if file_path else code,
+                            "status": "scrape_not_found", "code": code,
+                        })
                     continue
-                d = result.to_dict()
-                item.title = d.get('title')
-                item.release_date = d.get('release_date')
-                item.studio = d.get('studio')
-                item.director = d.get('director')
-                item.actors = _json.dumps(d.get('actors') or [], ensure_ascii=False)
-                item.tags = _json.dumps(d.get('tags') or [], ensure_ascii=False)
-                item.cover_url = d.get('cover_url')
-                item.rating = d.get('rating')
-                item.source = d.get('source')
 
-                if item.cover_url and item.file_path:
+                d = result.to_dict()
+
+                new_poster_path: Optional[str] = None
+                if d.get('cover_url') and file_path:
                     try:
-                        r = requests.get(item.cover_url, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
-                        r.raise_for_status()
-                        cover_path = Path(item.file_path).with_name(Path(item.file_path).stem + '-poster.jpg')
-                        cover_path.write_bytes(r.content)
-                        item.poster_path = str(cover_path)
+                        from web.backend.api.adult import _download_cover
+                        cover_path = _download_cover(d['cover_url'], Path(file_path))
+                        if cover_path:
+                            new_poster_path = str(cover_path)
                     except Exception as e:
                         logger.warning(f"封面下载失败 {code}: {e}")
 
-                if item.file_path:
+                new_nfo_path: Optional[str] = None
+                if file_path:
                     try:
-                        nfo_path = do_write_nfo(Path(item.file_path), d)
-                        item.nfo_path = str(nfo_path)
+                        nfo_path = do_write_nfo(Path(file_path), d)
+                        new_nfo_path = str(nfo_path)
                     except Exception as e:
                         logger.warning(f"NFO 写入失败 {code}: {e}")
 
-                db.commit()
+                # ---- 短事务 2：回写 ----
+                with SessionLocal() as db:
+                    item = db.query(AdultItem).filter(AdultItem.id == item_id).first()
+                    if not item:
+                        continue
+                    item.title = d.get('title')
+                    item.release_date = d.get('release_date')
+                    item.studio = d.get('studio')
+                    item.director = d.get('director')
+                    item.actors = _json.dumps(d.get('actors') or [], ensure_ascii=False)
+                    item.tags = _json.dumps(d.get('tags') or [], ensure_ascii=False)
+                    item.cover_url = d.get('cover_url')
+                    item.rating = d.get('rating')
+                    item.source = d.get('source')
+                    if new_poster_path:
+                        item.poster_path = new_poster_path
+                    if new_nfo_path:
+                        item.nfo_path = new_nfo_path
+                    # 成功 → reset 计数器，清除自动 cooldown（用户主动 excluded 不动）
+                    item.scrape_attempts = 0
+                    item.cooldown_until = None
+                    item.last_scrape_at = datetime.utcnow()
+                    db.commit()
+                    title = item.title
+
                 ok += 1
-                self._append_log(db, task_id, stats, {
-                    "name": Path(item.file_path).name if item.file_path else code,
-                    "status": "scraped", "code": code, "title": item.title,
-                })
+                with SessionLocal() as db:
+                    self._append_log(db, task_id, stats, {
+                        "name": Path(file_path).name if file_path else code,
+                        "status": "scraped", "code": code, "title": title,
+                    })
             except Exception as e:
                 logger.warning(f"刮削异常 {code}: {e}")
                 stats["failed"] += 1
-                self._append_log(db, task_id, stats, {
-                    "name": code, "status": "scrape_failed", "code": code, "error": str(e)[:100],
-                })
+                with SessionLocal() as db:
+                    self._append_log(db, task_id, stats, {
+                        "name": code, "status": "scrape_failed", "code": code, "error": str(e)[:100],
+                    })
         return ok
 
 

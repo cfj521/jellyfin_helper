@@ -273,6 +273,8 @@ class JellyfinClient:
         sort_by: str = "SortName",
         sort_order: str = "Ascending",
         search_term: Optional[str] = None,
+        years: Optional[str] = None,
+        genres: Optional[str] = None,
     ) -> Dict:
         """
         分页获取库内条目。
@@ -294,6 +296,12 @@ class JellyfinClient:
             params['IncludeItemTypes'] = item_types
         if search_term:
             params['SearchTerm'] = search_term
+        # 年份过滤：jellyfin 接受 Years=2020,2021,2022（多年逗号分隔）
+        if years:
+            params['Years'] = years
+        # 风格过滤：jellyfin 接受 Genres=Action|Comedy（管道分隔，AND 关系）
+        if genres:
+            params['Genres'] = genres
 
         result = self._request('GET', '/Items', params=params) or {}
         return {
@@ -342,7 +350,11 @@ class JellyfinClient:
         params = {
             'ParentId': season_id,
             'IncludeItemTypes': 'Episode',
-            'Recursive': 'false',  # ParentId 已经精确到 Season，不递归更快
+            # 必须 Recursive=true：实测 Jellyfin 在某些 Season 上即便 episode.ParentId
+            # 字段确实指向该 season，Recursive=false 仍返回空（应该是 Jellyfin 内部
+            # 元数据 / Folder 解析的不一致问题）。Episode 是叶子节点，递归不会带来
+            # 额外开销，结果与"直接子查询"等价。
+            'Recursive': 'true',
             'Fields': fields,
             'SortBy': 'ParentIndexNumber,IndexNumber',
             'SortOrder': 'Ascending',
@@ -459,6 +471,63 @@ class JellyfinClient:
             return True
         except Exception as e:
             logger.error(f"全局刷新失败: {e}")
+            return False
+
+    def notify_media_updated(self, paths: List[str], update_type: str = 'Created') -> bool:
+        """
+        精准通知 Jellyfin 某些路径有变动，触发针对性扫描。
+
+        端点：POST /Library/Media/Updated（10.11.8 仍可用，无 deprecated 标记）
+        Body：MediaUpdateInfoDto { Updates: [{Path, UpdateType}, ...] }
+
+        ⚠️ 实践要点（务必看）：
+          1. **不是立刻扫描**：服务端 LibraryMonitor 有硬编码 45s 防抖（源码 Task.Delay(45000)，
+             无 UI / 无配置项可调，见 Emby.Server.Implementations/IO/LibraryMonitor.cs）。
+             调用 → 立刻 GET /Items 看不到新东西是正常的，要等约 45-60 秒。
+             dev 想加快只能 fork 改源码重编。
+          2. **UpdateType 字段是装饰品**：服务端只看 Path，自己 stat 文件判定 Created/Modified/Deleted。
+             我们填什么不影响行为，但保留参数语义清晰。
+          3. **Path 必须是服务端视角真实路径**：jellyfin 容器里的 path，跟我们后端跑的 path
+             可能不一样。调用者自己负责走 reverse_translate_path_with_settings。
+             如果路径错，jellyfin LibraryManager.FindByPath 找不到匹配 item，刷新空跑（无报错）。
+             这是 *arr 系列工具最常见的"通知没生效"原因。
+          4. **不能替代完整扫描**：假设父目录已在媒体库被识别。新增的整个剧集文件夹（jellyfin
+             还没建 Series item）不一定能靠这个生成完整 Series→Season→Episode 层级 ——
+             这种首次入库场景应该 **同时** 调 refresh_library 兜底。
+          5. **管理员 API key 必需**：端点 RequiresElevation，普通 user key 会 401。
+
+        Args:
+            paths: jellyfin 视角的真实路径列表
+            update_type: Created/Modified/Deleted（语义提示，对服务端行为无实质影响）
+
+        返回 True/False（成功就是 204 No Content）。
+        """
+        if not paths:
+            return False
+        if update_type not in ('Created', 'Modified', 'Deleted'):
+            logger.warning(f"非法 update_type={update_type}，回退到 'Created'")
+            update_type = 'Created'
+
+        body = {
+            'Updates': [
+                {'Path': p, 'UpdateType': update_type}
+                for p in paths if p
+            ]
+        }
+        try:
+            self._request('POST', '/Library/Media/Updated', json=body)
+            logger.info(f"已通知 Jellyfin {len(body['Updates'])} 个路径变动 ({update_type})")
+            return True
+        except Exception as e:
+            err_str = str(e)
+            # 端点 RequiresElevation —— 401/403 提示用户换管理员级 API key
+            if '401' in err_str or '403' in err_str or 'Unauthorized' in err_str or 'Forbidden' in err_str:
+                logger.error(
+                    f"notify_media_updated 401/403 —— /Library/Media/Updated 需管理员级 API key，"
+                    f"请在 Jellyfin Dashboard → API Keys 重新创建。原始错误: {e}"
+                )
+            else:
+                logger.warning(f"notify_media_updated 失败（{len(paths)} 路径）: {e}")
             return False
 
     def get_system_info(self) -> Optional[Dict]:

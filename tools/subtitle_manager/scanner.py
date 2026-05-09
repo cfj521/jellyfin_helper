@@ -241,26 +241,21 @@ class SubtitleScanner:
     def extract_lang_codes_from_name(self, filename: str) -> List[str]:
         """
         从字幕文件名里提取所有可识别的语言代码（归一化）。
-        支持 .chs.srt / .chs.eng.srt / .zh-CN.srt 等写法；返回去重列表。
+        支持：
+          - 英文 token：'.chs.srt' / '.chs.eng.srt' / '.zh-CN.srt'
+          - 中文关键字：'简体.srt' / '简体&英文.srt' / '简&英.srt' / '繁体.ass'
+          - 复合写法：'chs&eng' / 'chs_eng' / 'chs-eng'
         识别不到任何 token 返回 []（调用方应进一步内容检测）。
+
+        实现：复用 common.lang_utils.detect_lang_combo，与 assrt / shooter 等
+        多个源共享同一套规则，保证识别一致。
         """
-        name_lower = filename.lower()
-        found: List[str] = []
-        for code in LANG_CODES:
-            code_lower = code.lower()
-            hit = False
-            if f".{code_lower}." in name_lower:
-                hit = True
-            else:
-                for ext in SUB_EXTS:
-                    if name_lower.endswith(f".{code_lower}{ext}"):
-                        hit = True
-                        break
-            if hit:
-                normalized = normalize_lang_code(code_lower)
-                if normalized and normalized not in found:
-                    found.append(normalized)
-        return found
+        from common.lang_utils import detect_lang_combo
+        combo = detect_lang_combo(filename)
+        if not combo:
+            return []
+        # combo 可能是 'chs' 或 'chs.eng' 等；split 成单语 token list
+        return [code for code in combo.split('.') if code]
 
     def get_files(self, directory: Path) -> Tuple[List[Path], List[Path]]:
         """
