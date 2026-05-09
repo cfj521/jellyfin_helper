@@ -131,7 +131,7 @@ def _resolve_targets(req: AudioScanRequest) -> Dict:
 
     # 2. 多库
     if req.library_ids:
-        from web.backend.api.jellyfin import get_library_by_id
+        from web.backend.api.medialibraries import get_library_by_id
         all_paths: List[str] = []
         for lid in req.library_ids:
             lib = get_library_by_id(lid)
@@ -146,7 +146,7 @@ def _resolve_targets(req: AudioScanRequest) -> Dict:
 
     # 3. 单库
     if req.library_id:
-        from web.backend.api.jellyfin import get_library_by_id
+        from web.backend.api.medialibraries import get_library_by_id
         lib = get_library_by_id(req.library_id)
         if not lib:
             raise HTTPException(status_code=404, detail=f"Jellyfin 库不存在: {req.library_id}")
@@ -253,7 +253,7 @@ def run_default_track_inline(
       "error": Optional[str],
     }
     """
-    from web.backend.api.jellyfin import trigger_refresh
+    from web.backend.api.medialibraries import trigger_refresh
 
     if preferred_langs is None:
         preferred_langs = settings.preferred_audio_langs

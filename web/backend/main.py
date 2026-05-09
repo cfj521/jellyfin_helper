@@ -77,7 +77,11 @@ _install_task_log_capture()
 
 from web.backend.config import settings
 from web.backend.database import init_db
-from web.backend.api import subtitle, metadata, media, stats, tasks, config_api, discover, jellyfin, audio, maintenance, ratings, logs as logs_api, dispatch
+from web.backend.api import (
+    subtitle, metadata, media, stats, tasks, config_api,
+    discover, resourcesearch, downloadpipeline,
+    medialibraries, audio, maintenance, ratings, logs as logs_api, dispatch,
+)
 
 
 @asynccontextmanager
@@ -194,8 +198,10 @@ app.include_router(media.router, prefix="/api/media", tags=["媒体库管理"])
 app.include_router(stats.router, prefix="/api/stats", tags=["统计分析"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["任务管理"])
 app.include_router(config_api.router, prefix="/api", tags=["配置管理"])
-app.include_router(discover.router, prefix="/api/discover", tags=["内容推荐与下载"])
-app.include_router(jellyfin.router, prefix="/api/jellyfin", tags=["Jellyfin 直通"])
+app.include_router(discover.router, prefix="/api/discover", tags=["热门推荐"])
+app.include_router(resourcesearch.router, prefix="/api/resourcesearch", tags=["资源搜索"])
+app.include_router(downloadpipeline.router, prefix="/api/downloadpipeline", tags=["下载流水线（torrent 操作）"])
+app.include_router(medialibraries.router, prefix="/api/medialibraries", tags=["媒体库（Jellyfin 直通）"])
 app.include_router(audio.router, prefix="/api/audio", tags=["音轨管理"])
 app.include_router(maintenance.router, prefix="/api/maintenance", tags=["媒体库维护"])
 app.include_router(ratings.router, prefix="/api/ratings", tags=["评分聚合"])

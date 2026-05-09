@@ -332,7 +332,7 @@ def _resolve_target(identified: Dict) -> Dict:
     library_name = ''
     if lib_id:
         try:
-            from web.backend.api.jellyfin import get_library_by_id
+            from web.backend.api.medialibraries import get_library_by_id
             lib = get_library_by_id(lib_id)
             if lib:
                 library_name = lib.get('name', '')

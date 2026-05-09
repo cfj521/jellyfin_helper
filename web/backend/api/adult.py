@@ -242,7 +242,7 @@ def list_items(
         }
 
     # in_jellyfin 过滤需要每条反查
-    from web.backend.api.jellyfin import lookup_jellyfin_item, jellyfin_web_url
+    from web.backend.api.medialibraries import lookup_jellyfin_item, jellyfin_web_url
     all_items = query.order_by(AdultItem.code).all()
     filtered = []
     for i in all_items:
@@ -434,7 +434,7 @@ def _enrich_with_jellyfin(d: dict) -> dict:
     这里调 lookup_jellyfin_item 可能触发 Jellyfin HTTP（path index TTL 30s 过期时），
     所以本函数应当在 db session 关闭之后再调用，避免持连接跨 HTTP。
     """
-    from web.backend.api.jellyfin import lookup_jellyfin_item, jellyfin_web_url
+    from web.backend.api.medialibraries import lookup_jellyfin_item, jellyfin_web_url
     fp = d.get('file_path')
     if not fp:
         return d
@@ -457,7 +457,7 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
     d = _to_dict(item, full=True)
     # 附加 Jellyfin 状态
     if item.file_path:
-        from web.backend.api.jellyfin import lookup_jellyfin_item, jellyfin_web_url
+        from web.backend.api.medialibraries import lookup_jellyfin_item, jellyfin_web_url
         jf = lookup_jellyfin_item(item.file_path)
         if jf:
             d['jellyfin_id'] = jf['id']
@@ -639,7 +639,7 @@ def delete_item(
 
     # 1. 先从 Jellyfin 删（避免删了文件但 Jellyfin 还引用）
     if delete_in_jellyfin and settings.jellyfin_api_key and item.file_path:
-        from web.backend.api.jellyfin import lookup_jellyfin_item, invalidate_path_index
+        from web.backend.api.medialibraries import lookup_jellyfin_item, invalidate_path_index
         from common.jellyfin_client import JellyfinClient
         jf = lookup_jellyfin_item(item.file_path)
         if jf:
@@ -1130,7 +1130,7 @@ def sync_from_jellyfin(item_id: int, db: Session = Depends(get_db)):
     if not item.file_path:
         raise HTTPException(status_code=400, detail="番号没有关联视频文件")
 
-    from web.backend.api.jellyfin import lookup_jellyfin_item
+    from web.backend.api.medialibraries import lookup_jellyfin_item
     from common.jellyfin_client import JellyfinClient
 
     jf = lookup_jellyfin_item(item.file_path)
@@ -1597,7 +1597,7 @@ def adult_library_stats(
     if library_id:
         # 1) 文件系统大小
         try:
-            from web.backend.api.jellyfin import get_library_by_id
+            from web.backend.api.medialibraries import get_library_by_id
             from web.backend.path_translator import translate_path_with_settings as _tr
             video_exts = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '.ts', '.rmvb'}
             lib_info = get_library_by_id(library_id)

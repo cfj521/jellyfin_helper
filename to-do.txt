@@ -1,14 +1,6 @@
-div.el-card.is-never-shadow.items-card 这个元素应铺满 container剩余部分，不应再出现处置滚动条
-
-/jellyfin/libraries 改为medialibraries，/discover/trending改为/discover，/discover/search改为 /resourcesearch，/discover/downloads改为downloadpipeline，这些路由改了之后，api端点、代码文件名等等都跟着一起改，便于识别于维护
-
-RSS?
-
 热门推荐除了TMDB还有哪些源值得加入？
 
-
 美化主题、配色
-
 
 
 ok，还有2件事儿，gateway vm有我的个人网站，部署在/data/home_web，

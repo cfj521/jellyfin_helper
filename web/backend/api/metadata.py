@@ -339,7 +339,7 @@ def _make_scope_label(
         return f'选中 {len(item_paths)} 个条目'
     if library_ids:
         try:
-            from web.backend.api.jellyfin import get_library_by_id
+            from web.backend.api.medialibraries import get_library_by_id
             names = []
             for lid in library_ids[:3]:
                 lib = get_library_by_id(lid)
@@ -354,7 +354,7 @@ def _make_scope_label(
         return f'{len(library_ids)} 个库'
     if library_id:
         try:
-            from web.backend.api.jellyfin import get_library_by_id
+            from web.backend.api.medialibraries import get_library_by_id
             lib = get_library_by_id(library_id)
             if lib and lib.get('name'):
                 return f"库 {lib['name']}"

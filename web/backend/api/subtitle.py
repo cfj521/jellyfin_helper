@@ -126,7 +126,7 @@ def _resolve_scope(
     优先级：item_paths > library_ids > library_id > path
     都不传则展开为所有 jellyfin 库（"全部库"语义）。
     """
-    from web.backend.api.jellyfin import get_library_by_id
+    from web.backend.api.medialibraries import get_library_by_id
     from common.jellyfin_client import JellyfinClient
 
     # 1. 选中具体条目：取每个文件的父目录去重，并强制 recursive=False
@@ -516,7 +516,7 @@ def run_subtitle_rename(
 ):
     """执行字幕重命名（后台任务）。文件重命名 + Jellyfin refresh 期间不持 db。"""
     from web.backend.database import SessionLocal
-    from web.backend.api.jellyfin import trigger_refresh
+    from web.backend.api.medialibraries import trigger_refresh
 
     def _progress(pct, msg, patch=None):
         with SessionLocal() as db:
@@ -861,7 +861,7 @@ def run_subtitle_auto_fix_inline(
     }
     """
     from tools.subtitle_manager.scanner import format_episode
-    from web.backend.api.jellyfin import trigger_refresh
+    from web.backend.api.medialibraries import trigger_refresh
 
     if expected_langs is None:
         expected_langs = settings.preferred_langs

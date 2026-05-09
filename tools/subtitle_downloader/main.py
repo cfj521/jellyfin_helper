@@ -37,7 +37,7 @@ def _lookup_video_metadata(video_path: Path) -> Dict[str, Any]:
     web 后端启动后 jellyfin path index 才可用；CLI 模式可能拿不到，返回空 dict。
     """
     try:
-        from web.backend.api.jellyfin import lookup_jellyfin_item
+        from web.backend.api.medialibraries import lookup_jellyfin_item
     except Exception:
         return {}
     info = lookup_jellyfin_item(str(video_path))
