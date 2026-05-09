@@ -5,7 +5,7 @@
   - lang_detect: UTF-16 LE/BE BOM 解码 + 无 BOM 启发式
   - common.mdblist_client.parse_ratings
   - common.wikidata_client._escape_sparql_literal / _build_query
-  - web.backend.api.jellyfin._TTLCache 行为
+  - web.backend.api.medialibraries._TTLCache 行为
   - web.backend.api._item_health: empty_season 检查
   - common.tmdb_client get_episode_still_path 端点拼接（mock）
 """
@@ -182,7 +182,7 @@ def test_wikidata_build_query_chinese():
 # ============================================================
 
 def test_ttl_cache_get_set_invalidate():
-    from web.backend.api.jellyfin import _TTLCache
+    from web.backend.api.medialibraries import _TTLCache
 
     c = _TTLCache(ttl=60)
     assert c.get('k') is None
@@ -200,7 +200,7 @@ def test_ttl_cache_get_set_invalidate():
 
 def test_ttl_cache_expiration():
     """TTL 到期后 get 返回 None 并把条目从底层 dict 删掉。"""
-    from web.backend.api.jellyfin import _TTLCache
+    from web.backend.api.medialibraries import _TTLCache
 
     c = _TTLCache(ttl=0)  # 立即过期
     c.set('k', 'v')
@@ -346,10 +346,8 @@ def test_get_library_items_defaults_to_series_for_tvshows(monkeypatch):
     访问 TV 库时若调用方未传 item_type，后端应自动注入 IncludeItemTypes=Series，
     防止 tree-table 拿到 Series+Season+Episode 扁平混合列表。
     """
-    import asyncio
-
     from common.jellyfin_client import JellyfinClient
-    from web.backend.api import jellyfin as jf_module
+    from web.backend.api import medialibraries as jf_module
 
     captured: dict = {}
 
@@ -365,7 +363,7 @@ def test_get_library_items_defaults_to_series_for_tvshows(monkeypatch):
     monkeypatch.setattr(JellyfinClient, 'get_libraries_normalized', fake_get_libraries_normalized)
     monkeypatch.setattr(JellyfinClient, 'get_library_items_page', fake_get_library_items_page)
 
-    asyncio.run(jf_module.get_library_items('lib_tv'))
+    jf_module.get_library_items('lib_tv')
 
     assert captured.get('item_types') == 'Series', (
         f"TV 库默认应注入 IncludeItemTypes=Series，实际: {captured.get('item_types')!r}"
@@ -373,9 +371,8 @@ def test_get_library_items_defaults_to_series_for_tvshows(monkeypatch):
 
 
 def test_get_library_items_defaults_to_movie_for_movies(monkeypatch):
-    import asyncio
     from common.jellyfin_client import JellyfinClient
-    from web.backend.api import jellyfin as jf_module
+    from web.backend.api import medialibraries as jf_module
 
     captured: dict = {}
 
@@ -388,15 +385,14 @@ def test_get_library_items_defaults_to_movie_for_movies(monkeypatch):
 
     monkeypatch.setattr(JellyfinClient, 'get_libraries_normalized', fake_get_libraries_normalized)
     monkeypatch.setattr(JellyfinClient, 'get_library_items_page', fake_get_library_items_page)
-    asyncio.run(jf_module.get_library_items('lib_mv'))
+    jf_module.get_library_items('lib_mv')
     assert captured.get('item_types') == 'Movie'
 
 
 def test_get_library_items_explicit_type_overrides(monkeypatch):
     """显式传 item_type 应跳过自动推断。"""
-    import asyncio
     from common.jellyfin_client import JellyfinClient
-    from web.backend.api import jellyfin as jf_module
+    from web.backend.api import medialibraries as jf_module
 
     captured: dict = {}
 
@@ -410,5 +406,5 @@ def test_get_library_items_explicit_type_overrides(monkeypatch):
 
     monkeypatch.setattr(JellyfinClient, 'get_libraries_normalized', fake_get_libraries_normalized)
     monkeypatch.setattr(JellyfinClient, 'get_library_items_page', fake_get_library_items_page)
-    asyncio.run(jf_module.get_library_items('lib_tv', item_type='Episode'))
+    jf_module.get_library_items('lib_tv', item_type='Episode')
     assert captured.get('item_types') == 'Episode'

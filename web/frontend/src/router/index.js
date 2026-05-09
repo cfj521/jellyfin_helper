@@ -31,23 +31,23 @@ const routes = [
     component: () => import('@/views/metadata/Actors.vue'),
     meta: { title: '演员管理' }
   },
-  // 媒体库（Jellyfin 库总览 + 详情）
+  // 媒体库（总览 + 详情）
   {
     path: '/medialibraries',
-    name: 'JellyfinLibraries',
-    component: () => import('@/views/jellyfin/Libraries.vue'),
+    name: 'MediaLibraries',
+    component: () => import('@/views/medialibraries/Libraries.vue'),
     meta: { title: '媒体库' }
   },
   {
     path: '/medialibraries/:id',
-    name: 'JellyfinLibraryDetail',
-    component: () => import('@/views/jellyfin/LibraryDetail.vue'),
+    name: 'MediaLibraryDetail',
+    component: () => import('@/views/medialibraries/LibraryDetail.vue'),
     meta: { title: '库详情' }
   },
-  // 内容推荐与下载
+  // 热门推荐
   {
     path: '/discover',
-    name: 'Trending',
+    name: 'Discover',
     component: () => import('@/views/discover/Trending.vue'),
     meta: { title: '热门推荐' }
   },
@@ -57,16 +57,18 @@ const routes = [
     component: () => import('@/views/discover/Detail.vue'),
     meta: { title: '影视详情' }
   },
+  // 资源搜索
   {
     path: '/resourcesearch',
-    name: 'TorrentSearch',
-    component: () => import('@/views/discover/Search.vue'),
+    name: 'ResourceSearch',
+    component: () => import('@/views/resourcesearch/ResourceSearch.vue'),
     meta: { title: '资源搜索' }
   },
+  // 下载流水线
   {
     path: '/downloadpipeline',
-    name: 'Downloads',
-    component: () => import('@/views/discover/Downloads.vue'),
+    name: 'DownloadPipeline',
+    component: () => import('@/views/downloadpipeline/DownloadPipeline.vue'),
     meta: { title: '下载流水线' }
   },
   // 任务管理

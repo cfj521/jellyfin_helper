@@ -192,23 +192,23 @@ export const taskApi = {
 // Jellyfin 直通 API
 export const jellyfinApi = {
   libraries: (checkPaths = true) =>
-    api.get('/api/jellyfin/libraries', { params: { check_paths: checkPaths } }),
+    api.get('/api/medialibraries/libraries', { params: { check_paths: checkPaths } }),
   // params 支持 start_index / limit / item_type / search / years / genres
   libraryItems: (id, params = {}) =>
-    api.get(`/api/jellyfin/libraries/${id}/items`, { params }),
+    api.get(`/api/medialibraries/libraries/${id}/items`, { params }),
 
   // 拉某库下所有 Genre 名（给"风格"过滤下拉做 options）
   libraryGenres: (id) =>
-    api.get(`/api/jellyfin/libraries/${id}/genres`),
+    api.get(`/api/medialibraries/libraries/${id}/genres`),
 
   // 批量拉 item 的字幕语言（jellyfin 列表 endpoint 不返 MediaStreams，要单独再拉）
   itemsSubtitleLangs: (ids) =>
-    api.post('/api/jellyfin/items/subtitle-langs', { ids }),
+    api.post('/api/medialibraries/items/subtitle-langs', { ids }),
   // 库统计：内存级 2h 缓存。force=true 跳过缓存重算
   // fields: 可选，逗号分隔字符串（例如 'health,poster,tmdb'）；不传 = 全部计算；空串 = 都不算
   //         后端按 fields 跳过隐藏指标的计算，不同 fields 各自缓存
   libraryStats: (id, force = false, fields = null) =>
-    api.get(`/api/jellyfin/libraries/${id}/stats`, {
+    api.get(`/api/medialibraries/libraries/${id}/stats`, {
       params: {
         force_refresh: force,
         ...(fields !== null ? { fields } : {}),
@@ -218,54 +218,54 @@ export const jellyfinApi = {
   // 没有就启新的；force=true 时跳过最近任务复用，直接启新扫描
   // 后端 max_age_minutes 走 config.yaml.cache.subtitle_scan_minutes，前端不再硬编码
   librarySubtitleStats: (id, force = false) =>
-    api.get(`/api/jellyfin/libraries/${id}/subtitle-stats`, {
+    api.get(`/api/medialibraries/libraries/${id}/subtitle-stats`, {
       params: { force_refresh: force },
     }),
   refreshLibrary: (id, mode = 'scan_changes') =>
-    api.post(`/api/jellyfin/libraries/${id}/refresh`, null, { params: { mode } }),
+    api.post(`/api/medialibraries/libraries/${id}/refresh`, null, { params: { mode } }),
   refreshAll: () =>
-    api.post('/api/jellyfin/refresh-all'),
+    api.post('/api/medialibraries/refresh-all'),
 
   // 检查当前配置的 API key 是否有管理员权限（/Library/Media/Updated 需要）
-  checkApiKey: () => api.post('/api/jellyfin/check-api-key'),
+  checkApiKey: () => api.post('/api/medialibraries/check-api-key'),
 
   // 剧集 → 季 → 集 钻取（懒加载，30 分钟缓存；force=true 旁路缓存）
   seasonsOfSeries: (seriesId, force = false) =>
-    api.get(`/api/jellyfin/series/${seriesId}/seasons`, { params: { force } }),
+    api.get(`/api/medialibraries/series/${seriesId}/seasons`, { params: { force } }),
   episodesOfSeason: (seasonId, force = false) =>
-    api.get(`/api/jellyfin/seasons/${seasonId}/episodes`, { params: { force } }),
+    api.get(`/api/medialibraries/seasons/${seasonId}/episodes`, { params: { force } }),
   // 清空 seasons/episodes 缓存（强制刷新按钮触发）
   clearChildrenCache: () =>
-    api.post('/api/jellyfin/cache/clear-children'),
+    api.post('/api/medialibraries/cache/clear-children'),
 
   // 批量取 Series 行的聚合摘要：季数/集数/总时长/字幕覆盖
   // payload: {series_ids: [...]}
   seriesAggregates: (seriesIds) =>
-    api.post('/api/jellyfin/series/aggregates', { series_ids: seriesIds }),
+    api.post('/api/medialibraries/series/aggregates', { series_ids: seriesIds }),
 
   // 重新识别（刮削元数据）
   // payload: { item_type, name?, year?, tmdb_id?, language? }
   identifySearch: (itemId, payload) =>
-    api.post(`/api/jellyfin/items/${itemId}/identify-search`, payload),
+    api.post(`/api/medialibraries/items/${itemId}/identify-search`, payload),
 
   // payload: { candidate, replace_all_images? }
   identifyApply: (itemId, payload) =>
-    api.post(`/api/jellyfin/items/${itemId}/identify-apply`, payload),
+    api.post(`/api/medialibraries/items/${itemId}/identify-apply`, payload),
 
   // Sample 取证：返回 verdict + 证据明细（路径关键字 / 时长 / 兄弟文件大小对比）
   sampleEvidence: (itemId) =>
-    api.get(`/api/jellyfin/items/${itemId}/sample-evidence`),
+    api.get(`/api/medialibraries/items/${itemId}/sample-evidence`),
 
   // 删除条目（连同物理文件，用户须有 EnableContentDeletion 权限）
   deleteItem: (itemId) =>
-    api.delete(`/api/jellyfin/items/${itemId}`),
+    api.delete(`/api/medialibraries/items/${itemId}`),
 
   // 通过本地文件路径反查 Jellyfin Item（用于重复检测 hash 模式删除时找 jellyfin_id）
   lookupByPath: (path) =>
-    api.get('/api/jellyfin/items/by-path', { params: { path } }),
+    api.get('/api/medialibraries/items/by-path', { params: { path } }),
 
   systemInfo: () =>
-    api.get('/api/jellyfin/system'),
+    api.get('/api/medialibraries/system'),
 }
 
 // 成人内容 API
@@ -352,23 +352,23 @@ export const discoverApi = {
   detail: (mediaType, tmdbId, params = {}) =>
     api.get('/api/discover/detail', { params: { media_type: mediaType, tmdb_id: tmdbId, ...params } }),
   clearCache: () => api.post('/api/discover/cache/clear'),
-  search: (payload) => api.post('/api/discover/search', payload),
-  push: (payload) => api.post('/api/discover/download', payload),
-  listDownloads: (params = {}) => api.get('/api/discover/downloads', { params }),
-  pause: (hash) => api.post(`/api/discover/downloads/${hash}/pause`),
-  resume: (hash) => api.post(`/api/discover/downloads/${hash}/resume`),
+  search: (payload) => api.post('/api/resourcesearch/search', payload),
+  push: (payload) => api.post('/api/downloadpipeline/download', payload),
+  listDownloads: (params = {}) => api.get('/api/downloadpipeline/downloads', { params }),
+  pause: (hash) => api.post(`/api/downloadpipeline/downloads/${hash}/pause`),
+  resume: (hash) => api.post(`/api/downloadpipeline/downloads/${hash}/resume`),
   remove: (hash, deleteFiles = false) =>
-    api.delete(`/api/discover/downloads/${hash}`, { params: { delete_files: deleteFiles } }),
+    api.delete(`/api/downloadpipeline/downloads/${hash}`, { params: { delete_files: deleteFiles } }),
   // 批量操作（Phase H）
-  bulkAction: (payload) => api.post('/api/discover/downloads/bulk', payload),
-  recheck: (hash) => api.post(`/api/discover/downloads/${hash}/recheck`),
-  reannounce: (hash) => api.post(`/api/discover/downloads/${hash}/reannounce`),
+  bulkAction: (payload) => api.post('/api/downloadpipeline/downloads/bulk', payload),
+  recheck: (hash) => api.post(`/api/downloadpipeline/downloads/${hash}/recheck`),
+  reannounce: (hash) => api.post(`/api/downloadpipeline/downloads/${hash}/reannounce`),
   forceStart: (hash, force = true) =>
-    api.post(`/api/discover/downloads/${hash}/force-start`, { force }),
+    api.post(`/api/downloadpipeline/downloads/${hash}/force-start`, { force }),
   // 全局传输状态 + 限速控制
-  transferInfo: () => api.get('/api/discover/transfer-info'),
-  setSpeedLimit: (payload) => api.post('/api/discover/transfer-info/speed-limit', payload),
-  toggleAltSpeed: () => api.post('/api/discover/transfer-info/toggle-alt-speed'),
+  transferInfo: () => api.get('/api/downloadpipeline/transfer-info'),
+  setSpeedLimit: (payload) => api.post('/api/downloadpipeline/transfer-info/speed-limit', payload),
+  toggleAltSpeed: () => api.post('/api/downloadpipeline/transfer-info/toggle-alt-speed'),
 }
 
 // 评分聚合 API（IMDB / RT / Metacritic / Trakt / Letterboxd / 豆瓣）

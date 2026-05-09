@@ -78,7 +78,8 @@ def test_renamer_execute_actually_renames(media_dir):
     rn.process_directory(media_dir, dry_run=False, recursive=True)
 
     movie = media_dir / 'My.Movie.2024.1080p'
-    assert (movie / 'My.Movie.2024.1080p.srt').exists()
+    # sub_chs.srt 命中语言识别 → 加 .chs 后缀；视频名同步加上
+    assert (movie / 'My.Movie.2024.1080p.chs.srt').exists()
     assert not (movie / 'sub_chs.srt').exists()
 
     tv = media_dir / 'TV.Show.S01.1080p'
