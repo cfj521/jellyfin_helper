@@ -49,6 +49,11 @@ const TASK_META = {
   // ── 组合 ──
   run_all:          { label: '一键修复', family: 'combo', icon: MagicStick },
 
+  // ── 番号库 ──
+  adult_scan:       { label: '番号库扫描', family: 'scan', icon: Search },
+  adult_scrape:     { label: '番号刮削（单条）', family: 'metadata', icon: MagicStick },
+  adult_scrape_batch: { label: '番号批量刮削', family: 'metadata', icon: MagicStick },
+
   // ── 其它 ──
   media_scan:       { label: '媒体扫描', family: 'scan', icon: DataLine },
 }
@@ -220,6 +225,21 @@ export function summaryChips(task) {
       push('Σ', r.total_steps, '#9333ea', `共 ${r.total_steps} 步`)
       push('✓', r.success_steps, '#67c23a', `成功 ${r.success_steps}`)
       if (r.failed_steps) push('✗', r.failed_steps, '#f56c6c', `失败 ${r.failed_steps}`)
+      break
+
+    case 'adult_scan':
+      push('Σ', r.scanned, '#409eff', `扫到 ${r.scanned}`)
+      push('+', r.new, '#67c23a', `新增 ${r.new}`)
+      push('?', r.unrecognized, '#e6a23c', `未识别 ${r.unrecognized}`)
+      if (r.scraped) push('✎', r.scraped, '#9333ea', `刮削 ${r.scraped}`)
+      break
+
+    case 'adult_scrape':
+    case 'adult_scrape_batch':
+      push('Σ', r.total, '#409eff', `共 ${r.total}`)
+      push('✓', r.success, '#67c23a', `成功 ${r.success}`)
+      push('◌', r.not_found, '#e6a23c', `未找到 ${r.not_found}`)
+      if (r.failed) push('✗', r.failed, '#f56c6c', `失败 ${r.failed}`)
       break
 
     default:

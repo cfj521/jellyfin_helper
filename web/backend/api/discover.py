@@ -8,7 +8,7 @@ import sys
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 ROOT_DIR = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from web.backend.database import get_db, DownloadTask
+from web.backend.database import get_db
 from web.backend.config import settings
 
 logger = logging.getLogger(__name__)
@@ -40,13 +40,18 @@ class DownloadRequest(BaseModel):
     save_path: Optional[str] = None
     category: Optional[str] = None
     source: str = "jackett"
+    # 用户在搜索页选的分类，作为 user_hint 帮助识别（搜索页 form.category）
+    user_hint_media_type: Optional[str] = None
 
 
 # ---------- TMDB 热门（带 30 分钟内存缓存）----------
 
 import time as _time
+from web.backend.config import settings as _settings
 _TMDB_CACHE: dict = {}  # key=str → (data, expire_at)
-_TMDB_CACHE_TTL = 30 * 60  # 30 分钟
+# TTL 来自 settings.cache_tmdb_minutes（分钟），改完需重启后端
+def _tmdb_ttl_secs() -> int:
+    return max(1, _settings.cache_tmdb_minutes) * 60
 
 
 def _cache_get(key: str):
@@ -57,7 +62,7 @@ def _cache_get(key: str):
 
 
 def _cache_set(key: str, data):
-    _TMDB_CACHE[key] = (data, _time.time() + _TMDB_CACHE_TTL)
+    _TMDB_CACHE[key] = (data, _time.time() + _tmdb_ttl_secs())
 
 
 def _cache_clear():
@@ -67,7 +72,7 @@ def _cache_clear():
 
 
 @router.get("/trending")
-async def get_trending(
+def get_trending(
     media_type: str = "all",
     time_window: str = "week",
     refresh: bool = False,
@@ -97,7 +102,7 @@ async def get_trending(
 
 
 @router.get("/popular")
-async def get_popular(media_type: str = "movie", page: int = 1, refresh: bool = False):
+def get_popular(media_type: str = "movie", page: int = 1, refresh: bool = False):
     """TMDB 流行电影/剧集。30 分钟内存缓存；refresh=true 强制刷新"""
     if not settings.tmdb_api_key:
         raise HTTPException(status_code=400, detail="未配置 TMDB API Key")
@@ -124,7 +129,7 @@ async def get_popular(media_type: str = "movie", page: int = 1, refresh: bool = 
 
 
 @router.get("/list")
-async def get_category_list(
+def get_category_list(
     media_type: str,
     category: str,
     page: int = 1,
@@ -175,7 +180,7 @@ async def get_category_list(
 
 
 @router.get("/detail")
-async def get_detail(
+def get_detail(
     media_type: str,
     tmdb_id: int,
     refresh: bool = False,
@@ -340,7 +345,7 @@ def _normalize_detail(raw: dict, media_type: str) -> dict:
 
 
 @router.post("/cache/clear")
-async def clear_tmdb_cache():
+def clear_tmdb_cache():
     """清除推荐/流行列表的内存缓存"""
     _cache_clear()
     return {"ok": True}
@@ -372,7 +377,7 @@ def _normalize_tmdb(items: List[dict], default_type: Optional[str] = None) -> Li
 # ---------- Jackett 搜索 ----------
 
 @router.post("/search")
-async def search_jackett(request: SearchRequest):
+def search_jackett(request: SearchRequest):
     """通过 Jackett 搜索种子"""
     if not settings.jackett_api_key:
         raise HTTPException(status_code=400, detail="未配置 Jackett API Key")
@@ -397,51 +402,115 @@ async def search_jackett(request: SearchRequest):
 # ---------- qBittorrent ----------
 
 @router.post("/download")
-async def push_download(
+def push_download(
     request: DownloadRequest,
     db: Session = Depends(get_db),
 ):
-    """推送下载任务到 qBittorrent"""
+    """推送种子到 qB（stop_condition=MetadataReceived）+ 写 dispatch_map(phase='analyzing')。
+
+    分析由 scheduler 的 analyzer 后台跑：高置信自动入流水线，低置信落 needs_review。
+    """
     if not settings.qbittorrent_host or not settings.qbittorrent_username:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     if not request.magnet and not request.torrent_url:
         raise HTTPException(status_code=400, detail="必须提供 magnet 或 torrent_url")
 
     from common.qbittorrent_client import QBittorrentClient
+    from web.backend.database import DownloadDispatchMap
+
     client = QBittorrentClient(
         settings.qbittorrent_host,
         settings.qbittorrent_username,
         settings.qbittorrent_password,
     )
 
-    save_path = request.save_path or settings.qbittorrent_download_path
+    # save_path 仅当 request 显式指定才传 —— 否则让 qB 用自己的默认下载路径。
+    # 注意：settings.qbittorrent_download_path 是**后端视角**（Windows 上的 X:/），
+    # 不能当 save_path 传给 qB（Linux），否则 qB 会把它拼到自己的默认下载路径后
+    # 形成 /download/X: 这种乱路径。两套路径概念分开：qB 自己管自己的下载路径，
+    # 后端通过 path_mappings 反查文件实际位置。
+    save_path = request.save_path  # None → qB 默认
+    # 拿 metadata 后自动暂停；analyzer 决策后再 resume
     ok = client.add_torrent(
         magnet=request.magnet,
         torrent_url=request.torrent_url,
         save_path=save_path,
         category=request.category,
+        stop_condition='MetadataReceived',
     )
     if not ok:
         raise HTTPException(status_code=500, detail="qBittorrent 推送失败（检查登录或种子链接）")
 
-    # 入库本地下载记录
-    record = DownloadTask(
-        title=request.title,
-        source=request.source,
-        magnet_link=request.magnet or request.torrent_url,
-        status='pending',
-        progress=0.0,
-        download_path=save_path,
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
+    # 拿到 hash —— magnet 里直接抠
+    info_hash = _extract_hash_from_magnet(request.magnet) or ''
+    # .torrent URL 模式没法直接拿 hash，靠 qB 反查（容忍空，analyzer 也兜底）
+    if not info_hash and request.torrent_url:
+        try:
+            for t in client.list_torrents() or []:
+                # 名字匹配是兜底，magnet 链接才稳
+                if (t.get('name') or '').strip() == request.title.strip():
+                    info_hash = (t.get('hash') or '').lower()
+                    break
+        except Exception:
+            pass
 
-    return {"id": record.id, "ok": True, "message": "已推送到 qBittorrent"}
+    # 写 dispatch_map(phase=analyzing) + 触发 analyzer 立刻处理（不等下一个轮询周期）
+    if info_hash:
+        from tools.dispatch.phases import PHASE_ANALYZING, PHASE_DISMISSED, STATUS_RUNNING
+        existing = db.query(DownloadDispatchMap).filter_by(torrent_hash=info_hash).first()
+
+        if existing and existing.phase == PHASE_DISMISSED:
+            # 用户之前拒绝过，现在又主动 push 同 hash → 视为重新申请，重置为 analyzing
+            logger.info(f"push: 重置已拒绝的 dispatch_map 行 hash={info_hash[:16]}..")
+            existing.phase = PHASE_ANALYZING
+            existing.phase_status = STATUS_RUNNING
+            existing.media_type = request.user_hint_media_type or 'unknown'
+            existing.title = request.title
+            existing.status_message = '从已拒绝重新提交，等待分析...'
+            existing.cleaned_at = None
+            db.commit()
+            try:
+                from tools.dispatch.analyzer import trigger
+                trigger.set()
+            except Exception:
+                pass
+        elif not existing:
+            # user_hint 暂存到 media_type，analyzer 读取后生成 user_hint 再 identify
+            db.add(DownloadDispatchMap(
+                torrent_hash=info_hash,
+                phase=PHASE_ANALYZING,
+                phase_status=STATUS_RUNNING,
+                media_type=request.user_hint_media_type or 'unknown',
+                title=request.title,
+                status_message='等待分析中...',
+                created_at=datetime.utcnow(),
+            ))
+            db.commit()
+            try:
+                from tools.dispatch.analyzer import trigger
+                trigger.set()
+            except Exception:
+                pass
+        # existing 但不是 dismissed → 已经在流水线里跑（重复 push 同 hash 不动）
+
+    return {
+        "ok": True,
+        "torrent_hash": info_hash,
+        "message": "已推送到分析队列，识别后自动入流水线",
+    }
+
+
+def _extract_hash_from_magnet(magnet: Optional[str]) -> Optional[str]:
+    """从 magnet:?xt=urn:btih:<hash> 抠出 info_hash（小写）。"""
+    if not magnet:
+        return None
+    import re
+    m = re.search(r'btih:([0-9a-fA-F]{40})', magnet)
+    return m.group(1).lower() if m else None
 
 
 @router.get("/downloads")
-async def list_downloads(
+def list_downloads(
     filter_status: str = "all",
     refresh: bool = True,
     db: Session = Depends(get_db),
@@ -464,8 +533,54 @@ async def list_downloads(
         except Exception as e:
             logger.warning(f"qBittorrent 状态获取失败: {e}")
 
-    # 从数据库取本地记录
-    local = db.query(DownloadTask).order_by(DownloadTask.created_at.desc()).limit(200).all()
+    # ---- 关联 dispatch_map：拿"目标媒体库 / 目标路径 / 流水线 phase"展示给前端 ----
+    # 取代之前展示的 qB category / tags（那两个我们只写不读，对用户没有诊断价值）
+    from web.backend.database import DownloadDispatchMap
+    hashes = [(t.get('hash') or '').lower() for t in qbit_torrents if t.get('hash')]
+    dispatch_by_hash: Dict[str, DownloadDispatchMap] = {}
+    if hashes:
+        rows = (
+            db.query(DownloadDispatchMap)
+            .filter(DownloadDispatchMap.torrent_hash.in_(hashes))
+            .all()
+        )
+        dispatch_by_hash = {r.torrent_hash: r for r in rows}
+
+    # library_id → name 映射：用于把 target_library_id 翻译成可读名字
+    lib_id_to_name: Dict[str, str] = {}
+    try:
+        from common.jellyfin_client import JellyfinClient
+        if settings.jellyfin_api_key:
+            jc = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
+            for lib in (jc.get_libraries_normalized() or []):
+                lib_id_to_name[lib['id']] = lib['name']
+    except Exception as e:
+        logger.warning(f"加载 Jellyfin 库列表失败: {e}")
+
+    def _build_dispatch_info(t: Dict) -> Optional[Dict]:
+        """从 dispatch_map 取目标路径 / 库名 / phase；没记录返回 None。
+        包含 needs_review 行人工审核 modal 需要的全部元数据（含重复检测结果）。
+        """
+        h = (t.get('hash') or '').lower()
+        dm = dispatch_by_hash.get(h)
+        if not dm:
+            return None
+        # 从 phase_timings JSONB 里取 duplicates 信息（analyzer 写入的）
+        timings = dm.phase_timings or {}
+        return {
+            "media_type": dm.media_type,
+            "title": dm.title,
+            "year": dm.year,
+            "series_name": dm.series_name,
+            "target_library_id": dm.target_library_id,
+            "target_library_name": lib_id_to_name.get(dm.target_library_id) if dm.target_library_id else None,
+            "target_path": dm.target_path,
+            "move_mode": dm.move_mode,
+            "phase": dm.phase,
+            "phase_status": dm.phase_status,
+            "status_message": dm.status_message,
+            "duplicates": timings.get('duplicates'),    # {type, existing, new, skip_file_indexes}
+        }
 
     return {
         "qbittorrent": [
@@ -473,32 +588,30 @@ async def list_downloads(
                 "hash": t.get('hash'),
                 "name": t.get('name'),
                 "size": t.get('size'),
-                "progress": round((t.get('progress') or 0) * 100, 1),
+                # qB 原始 progress 是 0–1 浮点（spec），前端 el-progress 自己 *100 显示。
+                # 之前在这里又 *100，跟前端组合起来会变成 *10000 → 永远满格。原始透传即可。
+                "progress": t.get('progress') or 0,
                 "state": t.get('state'),
                 "dlspeed": t.get('dlspeed'),
                 "upspeed": t.get('upspeed'),
                 "save_path": t.get('save_path'),
                 "added_on": t.get('added_on'),
+                "ratio": t.get('ratio') or 0,
+                "eta": t.get('eta'),
+                "seeding_time": t.get('seeding_time'),
+                "completion_on": t.get('completion_on'),
+                "downloaded": t.get('downloaded'),
+                "uploaded": t.get('uploaded'),
+                # 我们的转移信息（替代了原来的 category/tags 展示）
+                "dispatch": _build_dispatch_info(t),
             }
             for t in qbit_torrents
-        ],
-        "local": [
-            {
-                "id": d.id,
-                "title": d.title,
-                "source": d.source,
-                "status": d.status,
-                "progress": d.progress,
-                "download_path": d.download_path,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-            }
-            for d in local
         ],
     }
 
 
 @router.post("/downloads/{torrent_hash}/pause")
-async def pause_download(torrent_hash: str):
+def pause_download(torrent_hash: str):
     if not settings.qbittorrent_host:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     from common.qbittorrent_client import QBittorrentClient
@@ -511,7 +624,7 @@ async def pause_download(torrent_hash: str):
 
 
 @router.post("/downloads/{torrent_hash}/resume")
-async def resume_download(torrent_hash: str):
+def resume_download(torrent_hash: str):
     if not settings.qbittorrent_host:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     from common.qbittorrent_client import QBittorrentClient
@@ -523,64 +636,8 @@ async def resume_download(torrent_hash: str):
     return {"ok": client.resume(torrent_hash)}
 
 
-@router.post("/sync-completed")
-async def sync_completed(db: Session = Depends(get_db)):
-    """
-    扫描 qBittorrent 中已完成（progress >= 1.0）的种子，
-    更新数据库状态，并通知 Jellyfin 重新扫描媒体库。
-    适合前端定时调用（如每 30 秒一次）。
-    """
-    if not settings.qbittorrent_host or not settings.qbittorrent_username:
-        return {"updated": 0, "refreshed": False, "message": "qBittorrent 未配置"}
-
-    from common.qbittorrent_client import QBittorrentClient
-    client = QBittorrentClient(
-        settings.qbittorrent_host,
-        settings.qbittorrent_username,
-        settings.qbittorrent_password,
-    )
-
-    try:
-        torrents = client.list_torrents('completed')
-    except Exception as e:
-        return {"updated": 0, "refreshed": False, "error": str(e)}
-
-    completed_hashes = {t.get('hash') for t in torrents if t.get('hash')}
-    completed_titles = {t.get('name') for t in torrents}
-
-    # 把数据库里 status != 'completed' 但实际已完成的更新过来
-    updated = 0
-    for d in db.query(DownloadTask).filter(DownloadTask.status != 'completed').all():
-        # 名字粗匹配（qBit 的 name 可能跟 title 略有差异）
-        if d.title in completed_titles or any(d.title in n for n in completed_titles if n):
-            d.status = 'completed'
-            d.progress = 100.0
-            from datetime import datetime
-            d.completed_at = datetime.utcnow()
-            updated += 1
-
-    db.commit()
-
-    # 有新完成的 → 触发 Jellyfin 刷新
-    refreshed = False
-    if updated > 0 and settings.jellyfin_api_key:
-        try:
-            from common.jellyfin_client import JellyfinClient
-            JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key).refresh_all_libraries()
-            refreshed = True
-            logger.info(f"sync-completed: 检测到 {updated} 个新完成下载，已触发 Jellyfin 刷新")
-        except Exception as e:
-            logger.warning(f"触发 Jellyfin 刷新失败: {e}")
-
-    return {
-        "updated": updated,
-        "refreshed": refreshed,
-        "completed_total": len(completed_hashes),
-    }
-
-
 @router.delete("/downloads/{torrent_hash}")
-async def delete_download(torrent_hash: str, delete_files: bool = False):
+def delete_download(torrent_hash: str, delete_files: bool = False):
     if not settings.qbittorrent_host:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     from common.qbittorrent_client import QBittorrentClient
@@ -590,3 +647,104 @@ async def delete_download(torrent_hash: str, delete_files: bool = False):
         settings.qbittorrent_password,
     )
     return {"ok": client.delete(torrent_hash, delete_files=delete_files)}
+
+
+# ============================================================================
+# 批量操作 / 单条增强 / 全局速度控制（Phase H）
+# ============================================================================
+
+class BulkActionRequest(BaseModel):
+    hashes: List[str]
+    action: str   # pause / resume / delete / force_start / recheck / reannounce
+    delete_files: bool = False
+
+
+def _qb():
+    from common.qbittorrent_client import QBittorrentClient
+    return QBittorrentClient(
+        settings.qbittorrent_host,
+        settings.qbittorrent_username,
+        settings.qbittorrent_password,
+    )
+
+
+@router.post("/downloads/bulk")
+def bulk_action(request: BulkActionRequest):
+    if not request.hashes:
+        return {"ok": False, "message": "未选中任何种子"}
+    client = _qb()
+    client.login()
+    a = request.action.lower()
+    ok = False
+    if a == 'pause':
+        ok = all(client.pause(h) for h in request.hashes)
+    elif a == 'resume':
+        ok = all(client.resume(h) for h in request.hashes)
+    elif a == 'delete':
+        ok = all(client.delete(h, delete_files=request.delete_files) for h in request.hashes)
+    elif a == 'force_start':
+        ok = client.set_force_start(request.hashes, force=True)
+    elif a == 'recheck':
+        ok = client.recheck(request.hashes)
+    elif a == 'reannounce':
+        ok = client.reannounce(request.hashes)
+    else:
+        raise HTTPException(status_code=400, detail=f'未知 action: {a}')
+    return {"ok": ok, "count": len(request.hashes), "action": a}
+
+
+@router.post("/downloads/{torrent_hash}/recheck")
+def recheck(torrent_hash: str):
+    return {"ok": _qb().recheck(torrent_hash)}
+
+
+@router.post("/downloads/{torrent_hash}/reannounce")
+def reannounce(torrent_hash: str):
+    return {"ok": _qb().reannounce(torrent_hash)}
+
+
+class ForceStartRequest(BaseModel):
+    force: bool = True
+
+
+@router.post("/downloads/{torrent_hash}/force-start")
+def force_start(torrent_hash: str, request: ForceStartRequest):
+    return {"ok": _qb().set_force_start(torrent_hash, force=request.force)}
+
+
+@router.get("/transfer-info")
+def transfer_info():
+    """全局传输状态（速度 / 限速 / 备用速度模式 / 总下载上传量）。"""
+    client = _qb()
+    info = client.transfer_info() or {}
+    return {
+        'dl_info_speed': info.get('dl_info_speed', 0),
+        'up_info_speed': info.get('up_info_speed', 0),
+        'dl_info_data': info.get('dl_info_data', 0),
+        'up_info_data': info.get('up_info_data', 0),
+        'connection_status': info.get('connection_status'),
+        'global_dl_limit': client.get_global_download_limit(),
+        'global_up_limit': client.get_global_upload_limit(),
+        'alt_speed_enabled': client.get_alt_speed_limits_enabled(),
+    }
+
+
+class SpeedLimitRequest(BaseModel):
+    download_limit: Optional[int] = None  # bytes/s
+    upload_limit: Optional[int] = None
+
+
+@router.post("/transfer-info/speed-limit")
+def set_speed_limit(request: SpeedLimitRequest):
+    client = _qb()
+    results = {}
+    if request.download_limit is not None:
+        results['download'] = client.set_global_download_limit(request.download_limit)
+    if request.upload_limit is not None:
+        results['upload'] = client.set_global_upload_limit(request.upload_limit)
+    return results
+
+
+@router.post("/transfer-info/toggle-alt-speed")
+def toggle_alt_speed():
+    return {"ok": _qb().toggle_alt_speed_limits()}

@@ -306,7 +306,7 @@ const searchTorrents = () => {
     || d.original_title
     || d.title
   router.push({
-    path: '/discover/search',
+    path: '/resourcesearch',
     query: { q: name, type: d.media_type === 'tv' ? 'tv' : 'movie' },
   })
 }

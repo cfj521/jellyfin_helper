@@ -44,3 +44,4 @@ temp/
 # 扫描报告输出
 subtitle_report_*.html
 subtitle_report_*.json
+.claude/

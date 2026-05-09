@@ -67,7 +67,7 @@ class ActorResponse(BaseModel):
 
 
 @router.get("/actors")
-async def list_actors(
+def list_actors(
     has_image: Optional[bool] = None,
     search: Optional[str] = None,
     limit: int = 50,
@@ -102,7 +102,7 @@ async def list_actors(
 
 
 @router.post("/actors/scan")
-async def scan_actors(
+def scan_actors(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
@@ -215,7 +215,7 @@ def _has_cjk(s: str) -> bool:
 
 
 @router.post("/actors/delete-cjk")
-async def delete_cjk_named_actors(
+def delete_cjk_named_actors(
     req: DeleteCjkActorsRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -365,7 +365,7 @@ def _make_scope_label(
 
 
 @router.post("/actors/fix")
-async def fix_actor_images(
+def fix_actor_images(
     request: ActorFixRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
@@ -419,14 +419,21 @@ def run_actor_fix(
     library_ids: Optional[List[str]] = None,
     skip_refresh: bool = False,
 ):
-    """执行演员图片修复（后台任务）"""
+    """执行演员图片修复（后台任务）。
+
+    DB 仅在读 actor 字段、写回结果、进度回写时短期持有；
+    TMDB / Wikidata HTTP 与 Jellyfin 上传期间一律不持 db。
+    """
     from web.backend.database import SessionLocal
     from common.jellyfin_client import JellyfinClient
     from common.tmdb_client import TMDBClient
 
-    db = SessionLocal()
+    def _progress(pct, msg, patch=None):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg, result_patch=patch)
+
     try:
-        update_task_progress(db, task_id, 5, "初始化...")
+        _progress(5, "初始化...")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
@@ -453,20 +460,23 @@ def run_actor_fix(
             except Exception as e:
                 logger.warning(f"获取库内演员失败，回退到全部演员: {e}")
 
-        # 获取需要处理的演员
-        query = db.query(ActorInfo)
-        if skip_existing:
-            query = query.filter(ActorInfo.has_image == False)
-        if library_actor_ids is not None:
-            query = query.filter(ActorInfo.jellyfin_id.in_(library_actor_ids))
+        # 获取需要处理的演员（短事务：只取 id/name/jellyfin_id/tmdb_id）
+        with SessionLocal() as db:
+            query = db.query(ActorInfo)
+            if skip_existing:
+                query = query.filter(ActorInfo.has_image == False)
+            if library_actor_ids is not None:
+                query = query.filter(ActorInfo.jellyfin_id.in_(library_actor_ids))
+            actor_rows = query.all()
+            if limit:
+                actor_rows = actor_rows[:limit]
+            actor_targets = [
+                {'id': a.id, 'name': a.name, 'jellyfin_id': a.jellyfin_id, 'tmdb_id': a.tmdb_id}
+                for a in actor_rows
+            ]
 
-        actors = query.all()
-
-        if limit:
-            actors = actors[:limit]
-
-        total = len(actors)
-        update_task_progress(db, task_id, 10, f"共 {total} 个演员需要处理")
+        total = len(actor_targets)
+        _progress(10, f"共 {total} 个演员需要处理")
 
         success_count = 0
         failed_count = 0
@@ -474,22 +484,22 @@ def run_actor_fix(
         details: List[dict] = []  # 记录每个演员的处理结果（成功/失败/原因）
         EMIT_EVERY = 5  # 每 5 个演员 emit partial result
 
-        for i, actor in enumerate(actors):
+        for i, actor_info in enumerate(actor_targets):
             entry = {
-                'id': actor.id,
-                'name': actor.name,
-                'jellyfin_id': actor.jellyfin_id,
-                'tmdb_id': actor.tmdb_id,
+                'id': actor_info['id'],
+                'name': actor_info['name'],
+                'jellyfin_id': actor_info['jellyfin_id'],
+                'tmdb_id': actor_info['tmdb_id'],
                 'status': None,           # success / not_found / no_image / failed
                 'error': None,
                 'image_url': None,
             }
             try:
-                progress = 10 + (i / total) * 85
+                progress = 10 + (i / max(total, 1)) * 85
                 should_emit = (i > 0 and i % EMIT_EVERY == 0)
-                update_task_progress(
-                    db, task_id, progress, f"处理: {actor.name}",
-                    result_patch=({
+                _progress(
+                    progress, f"处理: {actor_info['name']}",
+                    patch=({
                         "total": total,
                         "success": success_count,
                         "failed": failed_count,
@@ -499,15 +509,16 @@ def run_actor_fix(
                     } if should_emit else None),
                 )
 
-                # ---- Step 1: TMDB 主源 ----
+                # ---- Step 1: TMDB 主源（HTTP，无 db）----
                 resolved_url: Optional[str] = None
                 image_data: Optional[bytes] = None
                 source: Optional[str] = None  # 命中后填 'tmdb' / 'wikidata'
+                new_tmdb_id: Optional[int] = None
 
-                tmdb_result = tmdb_client.search_person(actor.name)
+                tmdb_result = tmdb_client.search_person(actor_info['name'])
                 if tmdb_result:
-                    actor.tmdb_id = tmdb_result.get('id')
-                    entry['tmdb_id'] = actor.tmdb_id
+                    new_tmdb_id = tmdb_result.get('id')
+                    entry['tmdb_id'] = new_tmdb_id
                     profile_path = tmdb_result.get('profile_path')
                     if profile_path:
                         resolved_url = f"https://image.tmdb.org/t/p/original{profile_path}"
@@ -516,12 +527,12 @@ def run_actor_fix(
                         if scan_only or image_data:
                             source = 'tmdb'
 
-                # ---- Step 2: Wikidata 兜底 ----
+                # ---- Step 2: Wikidata 兜底（HTTP，无 db）----
                 if source is None and wd_client is not None:
                     try:
-                        wd_url, _wd_qid = wd_client.search_person_image(actor.name)
+                        wd_url, _wd_qid = wd_client.search_person_image(actor_info['name'])
                     except Exception as e:
-                        logger.warning(f"Wikidata 查询异常 {actor.name}: {e}")
+                        logger.warning(f"Wikidata 查询异常 {actor_info['name']}: {e}")
                         wd_url = None
                     if wd_url:
                         resolved_url = wd_url
@@ -535,25 +546,48 @@ def run_actor_fix(
                     failed_count += 1
                     entry['status'] = 'no_image_anywhere'
                     entry['error'] = 'TMDB 与 Wikidata 都没找到图片'
-                    actor.image_source = 'none'
+                    with SessionLocal() as db:
+                        a = db.query(ActorInfo).filter(ActorInfo.id == actor_info['id']).first()
+                        if a:
+                            a.image_source = 'none'
+                            if new_tmdb_id is not None:
+                                a.tmdb_id = new_tmdb_id
+                            db.commit()
                     details.append(entry)
-                    db.commit()
                     continue
 
-                actor.image_url = resolved_url
                 entry['image_url'] = resolved_url
                 entry['source'] = source
 
                 if scan_only:
                     success_count += 1
                     entry['status'] = 'success'
+                    with SessionLocal() as db:
+                        a = db.query(ActorInfo).filter(ActorInfo.id == actor_info['id']).first()
+                        if a:
+                            if new_tmdb_id is not None:
+                                a.tmdb_id = new_tmdb_id
+                            a.image_url = resolved_url
+                            db.commit()
                     details.append(entry)
                     continue
 
-                # 上传到 Jellyfin（image_data 一定有，否则上面已 continue）
-                if jf_client.upload_person_image(actor.jellyfin_id, image_data):
-                    actor.has_image = True
-                    actor.image_source = source
+                # 上传到 Jellyfin（HTTP，无 db）
+                upload_ok = jf_client.upload_person_image(actor_info['jellyfin_id'], image_data)
+
+                # 短事务回写
+                with SessionLocal() as db:
+                    a = db.query(ActorInfo).filter(ActorInfo.id == actor_info['id']).first()
+                    if a:
+                        if new_tmdb_id is not None:
+                            a.tmdb_id = new_tmdb_id
+                        a.image_url = resolved_url
+                        if upload_ok:
+                            a.has_image = True
+                            a.image_source = source
+                        db.commit()
+
+                if upload_ok:
                     success_count += 1
                     entry['status'] = 'success'
                 else:
@@ -562,7 +596,6 @@ def run_actor_fix(
                     entry['error'] = '上传到 Jellyfin 失败'
 
                 details.append(entry)
-                db.commit()
 
             except Exception as e:
                 failed_count += 1
@@ -570,33 +603,31 @@ def run_actor_fix(
                 entry['error'] = str(e)
                 details.append(entry)
 
-        db.commit()
-
         # 演员图上传成功 → 触发刷新（run_all 模式会传 skip_refresh=True 让编排器统一刷）
         refreshed = False
         if not scan_only and success_count > 0 and not skip_refresh:
-            update_task_progress(db, task_id, 99, "通知 Jellyfin 刷新...")
+            _progress(99, "通知 Jellyfin 刷新...")
             _refresh_jellyfin_libraries()
             refreshed = True
 
-        complete_task(db, task_id, {
-            "total": total,
-            "success": success_count,
-            "failed": failed_count,
-            "skipped": skipped_count,
-            "scan_only": scan_only,
-            "jellyfin_refreshed": refreshed,
-            "details": details[:500],  # 详情页用，最多保留 500 条
-        })
+        with SessionLocal() as db:
+            complete_task(db, task_id, {
+                "total": total,
+                "success": success_count,
+                "failed": failed_count,
+                "skipped": skipped_count,
+                "scan_only": scan_only,
+                "jellyfin_refreshed": refreshed,
+                "details": details[:500],  # 详情页用，最多保留 500 条
+            })
 
     except Exception as e:
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)
 
 
 @router.post("/actors/{actor_id}/fix")
-async def fix_single_actor(
+def fix_single_actor(
     actor_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
@@ -614,17 +645,24 @@ async def fix_single_actor(
 
 
 def run_single_actor_fix(task_id: int, actor_id: int):
-    """修复单个演员（TMDB 主源 + Wikidata 兜底）"""
+    """修复单个演员（TMDB 主源 + Wikidata 兜底）。HTTP 期间不持 db。"""
     from web.backend.database import SessionLocal
     from common.jellyfin_client import JellyfinClient
     from common.tmdb_client import TMDBClient
 
-    db = SessionLocal()
+    def _progress(pct, msg):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg)
+
     try:
-        actor = db.query(ActorInfo).filter(ActorInfo.id == actor_id).first()
-        if not actor:
-            complete_task(db, task_id, {"error": "演员不存在"}, success=False)
-            return
+        # 短事务读出 actor 元信息
+        with SessionLocal() as db:
+            actor = db.query(ActorInfo).filter(ActorInfo.id == actor_id).first()
+            if not actor:
+                complete_task(db, task_id, {"error": "演员不存在"}, success=False)
+                return
+            actor_name = actor.name
+            actor_jellyfin_id = actor.jellyfin_id
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
@@ -633,65 +671,82 @@ def run_single_actor_fix(task_id: int, actor_id: int):
         resolved_url: Optional[str] = None
         image_data: Optional[bytes] = None
         source: Optional[str] = None
+        new_tmdb_id: Optional[int] = None
 
-        # ---- TMDB 主源 ----
-        update_task_progress(db, task_id, 20, f"搜索 TMDB: {actor.name}")
-        tmdb_result = tmdb_client.search_person(actor.name)
+        # ---- TMDB 主源（HTTP，无 db）----
+        _progress(20, f"搜索 TMDB: {actor_name}")
+        tmdb_result = tmdb_client.search_person(actor_name)
         if tmdb_result:
-            actor.tmdb_id = tmdb_result.get('id')
+            new_tmdb_id = tmdb_result.get('id')
             profile_path = tmdb_result.get('profile_path')
             if profile_path:
                 resolved_url = f"https://image.tmdb.org/t/p/original{profile_path}"
-                update_task_progress(db, task_id, 40, "下载 TMDB 图片...")
+                _progress(40, "下载 TMDB 图片...")
                 image_data = tmdb_client.download_image(profile_path)
                 if image_data:
                     source = 'tmdb'
 
-        # ---- Wikidata 兜底 ----
+        # ---- Wikidata 兜底（HTTP，无 db）----
         if source is None and wd_client is not None:
-            update_task_progress(db, task_id, 60, f"搜索 Wikidata: {actor.name}")
+            _progress(60, f"搜索 Wikidata: {actor_name}")
             try:
-                wd_url, _ = wd_client.search_person_image(actor.name)
+                wd_url, _ = wd_client.search_person_image(actor_name)
             except Exception as e:
-                logger.warning(f"Wikidata 查询异常 {actor.name}: {e}")
+                logger.warning(f"Wikidata 查询异常 {actor_name}: {e}")
                 wd_url = None
             if wd_url:
                 resolved_url = wd_url
-                update_task_progress(db, task_id, 70, "下载 Wikidata 图片...")
+                _progress(70, "下载 Wikidata 图片...")
                 image_data = wd_client.download_image(wd_url)
                 if image_data:
                     source = 'wikidata'
 
         # ---- 处理结果 ----
         if source is None:
-            actor.image_source = 'none'
-            db.commit()
-            complete_task(
-                db, task_id,
-                {"error": "TMDB 与 Wikidata 都没找到图片", "actor": actor.name},
-                success=False,
-            )
+            with SessionLocal() as db:
+                a = db.query(ActorInfo).filter(ActorInfo.id == actor_id).first()
+                if a:
+                    a.image_source = 'none'
+                    if new_tmdb_id is not None:
+                        a.tmdb_id = new_tmdb_id
+                    db.commit()
+                complete_task(
+                    db, task_id,
+                    {"error": "TMDB 与 Wikidata 都没找到图片", "actor": actor_name},
+                    success=False,
+                )
             return
 
-        update_task_progress(db, task_id, 85, "上传到 Jellyfin...")
-        if jf_client.upload_person_image(actor.jellyfin_id, image_data):
-            actor.has_image = True
-            actor.image_source = source
-            actor.image_url = resolved_url
-            db.commit()
-            complete_task(db, task_id, {
-                "actor": actor.name,
-                "tmdb_id": actor.tmdb_id,
-                "image_url": resolved_url,
-                "source": source,
-            })
-        else:
-            complete_task(db, task_id, {"error": "上传失败", "source": source}, success=False)
+        _progress(85, "上传到 Jellyfin...")
+        upload_ok = jf_client.upload_person_image(actor_jellyfin_id, image_data)
+
+        with SessionLocal() as db:
+            a = db.query(ActorInfo).filter(ActorInfo.id == actor_id).first()
+            if a:
+                if new_tmdb_id is not None:
+                    a.tmdb_id = new_tmdb_id
+                a.image_url = resolved_url
+                if upload_ok:
+                    a.has_image = True
+                    a.image_source = source
+                db.commit()
+                final_tmdb_id = a.tmdb_id
+            else:
+                final_tmdb_id = new_tmdb_id
+
+            if upload_ok:
+                complete_task(db, task_id, {
+                    "actor": actor_name,
+                    "tmdb_id": final_tmdb_id,
+                    "image_url": resolved_url,
+                    "source": source,
+                })
+            else:
+                complete_task(db, task_id, {"error": "上传失败", "source": source}, success=False)
 
     except Exception as e:
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)
 
 
 @router.post("/actors/{actor_id}/upload-image")
@@ -768,7 +823,7 @@ class PosterFixRequest(BaseModel):
 
 
 @router.get("/posters")
-async def list_media_for_posters(
+def list_media_for_posters(
     has_poster: Optional[bool] = None,
     media_type: Optional[str] = None,
     search: Optional[str] = None,
@@ -809,7 +864,7 @@ async def list_media_for_posters(
 
 
 @router.post("/posters/scan")
-async def scan_posters(
+def scan_posters(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
@@ -824,29 +879,32 @@ async def scan_posters(
 
 @register_resumable("poster_scan", [])
 def run_poster_scan(task_id: int):
-    """扫描媒体条目并入库（后台任务）"""
+    """扫描媒体条目并入库（后台任务）。Jellyfin HTTP 期间不持 db。"""
     from web.backend.database import SessionLocal
     from common.jellyfin_client import JellyfinClient
 
-    db = SessionLocal()
+    def _progress(pct, msg):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg)
+
     try:
-        update_task_progress(db, task_id, 5, "连接 Jellyfin...")
+        _progress(5, "连接 Jellyfin...")
         client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
 
-        update_task_progress(db, task_id, 15, "获取电影列表...")
+        # ---- HTTP：拉所有电影和剧集（不持 db）----
+        _progress(15, "获取电影列表...")
         movies = client.get_all_movies()
-
-        update_task_progress(db, task_id, 40, f"电影 {len(movies)} 部，获取剧集列表...")
+        _progress(40, f"电影 {len(movies)} 部，获取剧集列表...")
         series = client.get_all_series()
 
         total = len(movies) + len(series)
-        update_task_progress(db, task_id, 60, f"共 {total} 个条目，写入数据库...")
+        _progress(60, f"共 {total} 个条目，写入数据库...")
 
         new_count = 0
         updated_count = 0
         without_poster = 0
 
-        def upsert(item: dict, mtype: str):
+        def upsert(db, item: dict, mtype: str):
             nonlocal new_count, updated_count, without_poster
             jellyfin_id = item.get('Id')
             name = item.get('Name')
@@ -886,67 +944,84 @@ def run_poster_scan(task_id: int):
                 ))
                 new_count += 1
 
-        for i, item in enumerate(movies):
-            upsert(item, 'movie')
-            if i % 100 == 0:
-                db.commit()
+        # ---- DB 批量 upsert：每 100 条一个短事务 ----
+        BATCH = 100
 
-        for i, item in enumerate(series):
-            upsert(item, 'series')
-            if i % 100 == 0:
-                db.commit()
+        def _flush_batch(items, mtype):
+            for chunk_start in range(0, len(items), BATCH):
+                chunk = items[chunk_start:chunk_start + BATCH]
+                with SessionLocal() as db:
+                    for item in chunk:
+                        upsert(db, item, mtype)
+                    db.commit()
 
-        db.commit()
+        _flush_batch(movies, 'movie')
+        _flush_batch(series, 'series')
 
-        complete_task(db, task_id, {
-            "total": total,
-            "movies": len(movies),
-            "series": len(series),
-            "new": new_count,
-            "updated": updated_count,
-            "without_poster": without_poster,
-        })
+        with SessionLocal() as db:
+            complete_task(db, task_id, {
+                "total": total,
+                "movies": len(movies),
+                "series": len(series),
+                "new": new_count,
+                "updated": updated_count,
+                "without_poster": without_poster,
+            })
 
     except Exception as e:
         logger.exception("海报扫描失败")
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)
 
 
-def _fix_one_poster(jf_client, tmdb_client, item: MediaItem, scan_only: bool) -> dict:
-    """对单个 MediaItem 走完 search → download → upload 流程，返回结果 dict。"""
-    out = {"id": item.id, "title": item.title, "media_type": item.media_type}
+def _fix_one_poster_pure(jf_client, tmdb_client, item_data: dict, scan_only: bool) -> dict:
+    """
+    对单个条目走完 TMDB 搜索 → 下载 → Jellyfin 上传，**全程不持 DB 连接**。
+    返回的 dict 既是日志条目（status/error/poster_url），也带回需要写库的字段：
+      - new_tmdb_id：更新 MediaItem.tmdb_id
+      - new_poster_url：更新 MediaItem.poster_url
+      - mark_has_poster：True 时把 MediaItem.has_poster 置 True
 
-    tmdb_id = item.tmdb_id
+    输入 item_data 为快照 dict：{id, title, media_type, tmdb_id, jellyfin_id, production_year}
+    """
+    out = {
+        "id": item_data['id'],
+        "title": item_data['title'],
+        "media_type": item_data['media_type'],
+    }
+
+    tmdb_id = item_data.get('tmdb_id')
     poster_path: Optional[str] = None
+    new_tmdb_id: Optional[int] = None
 
     if tmdb_id:
-        if item.media_type == 'movie':
+        if item_data['media_type'] == 'movie':
             poster_path = tmdb_client.get_movie_poster_path(tmdb_id)
         else:
             poster_path = tmdb_client.get_tv_poster_path(tmdb_id)
 
     if not poster_path:
         # 退化为搜索
-        if item.media_type == 'movie':
-            search = tmdb_client.search_movie(item.title, year=item.production_year)
+        if item_data['media_type'] == 'movie':
+            search = tmdb_client.search_movie(item_data['title'], year=item_data.get('production_year'))
         else:
-            search = tmdb_client.search_tv(item.title, year=item.production_year)
+            search = tmdb_client.search_tv(item_data['title'], year=item_data.get('production_year'))
         if not search:
             out.update({"status": "not_found", "error": "TMDB 未找到此条目"})
             return out
-        tmdb_id = search.get('id')
+        new_tmdb_id = search.get('id')
         poster_path = search.get('poster_path')
-        item.tmdb_id = tmdb_id
 
     if not poster_path:
+        out["new_tmdb_id"] = new_tmdb_id
         out.update({"status": "not_found", "error": "TMDB 条目无海报"})
         return out
 
     image_url = tmdb_client.get_image_url(poster_path)
-    item.poster_url = image_url
     out["poster_url"] = image_url
+    out["new_poster_url"] = image_url
+    if new_tmdb_id is not None:
+        out["new_tmdb_id"] = new_tmdb_id
 
     if scan_only:
         out["status"] = "found"
@@ -957,16 +1032,30 @@ def _fix_one_poster(jf_client, tmdb_client, item: MediaItem, scan_only: bool) ->
         out.update({"status": "failed", "error": "海报下载失败"})
         return out
 
-    if jf_client.upload_item_image(item.jellyfin_id, image_data, image_type='Primary'):
-        item.has_poster = True
+    if jf_client.upload_item_image(item_data['jellyfin_id'], image_data, image_type='Primary'):
+        out["mark_has_poster"] = True
         out["status"] = "success"
         return out
     out.update({"status": "failed", "error": "上传到 Jellyfin 失败"})
     return out
 
 
+def _apply_poster_result(db, item_id: int, result: dict) -> None:
+    """把 _fix_one_poster_pure 返回里需要持久化的字段写回 MediaItem。"""
+    item = db.query(MediaItem).filter(MediaItem.id == item_id).first()
+    if not item:
+        return
+    if result.get('new_tmdb_id') is not None:
+        item.tmdb_id = result['new_tmdb_id']
+    if result.get('new_poster_url'):
+        item.poster_url = result['new_poster_url']
+    if result.get('mark_has_poster'):
+        item.has_poster = True
+    db.commit()
+
+
 @router.post("/posters/fix")
-async def fix_posters(
+def fix_posters(
     request: PosterFixRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -1108,51 +1197,65 @@ def run_poster_fix(
     item_paths: Optional[List[str]] = None,
     skip_refresh: bool = False,
 ):
-    """批量海报修复（后台任务）"""
+    """批量海报修复（后台任务）。HTTP 阶段不持 db。"""
     from web.backend.database import SessionLocal
     from common.jellyfin_client import JellyfinClient
     from common.tmdb_client import TMDBClient
 
-    db = SessionLocal()
+    def _progress(pct, msg, patch=None):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg, result_patch=patch)
+
     try:
-        update_task_progress(db, task_id, 5, "初始化...")
+        _progress(5, "初始化...")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
 
-        query = db.query(MediaItem).filter(MediaItem.media_type.in_(['movie', 'series']))
-        if skip_existing:
-            query = query.filter(MediaItem.has_poster == False)
-        if media_type:
-            query = query.filter(MediaItem.media_type == media_type)
+        # ---- 短事务：把待处理条目快照成 dict 列表 ----
+        with SessionLocal() as db:
+            query = db.query(MediaItem).filter(MediaItem.media_type.in_(['movie', 'series']))
+            if skip_existing:
+                query = query.filter(MediaItem.has_poster == False)
+            if media_type:
+                query = query.filter(MediaItem.media_type == media_type)
+            query = _filter_items_by_scope(query, library_id, library_ids, item_paths)
+            items_raw = query.all()
+            if limit:
+                items_raw = items_raw[:limit]
+            items_data = [
+                {
+                    'id': it.id,
+                    'title': it.title,
+                    'media_type': it.media_type,
+                    'tmdb_id': it.tmdb_id,
+                    'jellyfin_id': it.jellyfin_id,
+                    'production_year': it.production_year,
+                }
+                for it in items_raw
+            ]
 
-        # 按 toolbar 的 scope 进一步过滤
-        query = _filter_items_by_scope(query, library_id, library_ids, item_paths)
-
-        items = query.all()
-        if limit:
-            items = items[:limit]
-
-        total = len(items)
-        update_task_progress(db, task_id, 10, f"共 {total} 个条目需要处理")
+        total = len(items_data)
+        _progress(10, f"共 {total} 个条目需要处理")
 
         if total == 0:
-            complete_task(db, task_id, {
-                "total": 0, "success": 0, "failed": 0, "not_found": 0,
-                "scan_only": scan_only, "details": [],
-            })
+            with SessionLocal() as db:
+                complete_task(db, task_id, {
+                    "total": 0, "success": 0, "failed": 0, "not_found": 0,
+                    "scan_only": scan_only, "details": [],
+                })
             return
 
         success = failed = not_found = 0
         details: List[dict] = []
         EMIT_EVERY = 5  # 每 5 个条目 emit partial result
 
-        for i, item in enumerate(items):
+        for i, item_data in enumerate(items_data):
             progress = 10 + int(85 * (i + 1) / total)
             should_emit = (i > 0 and i % EMIT_EVERY == 0)
-            update_task_progress(
-                db, task_id, progress, f"[{i+1}/{total}] {item.title}",
-                result_patch=({
+            _progress(
+                progress, f"[{i+1}/{total}] {item_data['title']}",
+                patch=({
                     "total": total,
                     "success": success,
                     "failed": failed,
@@ -1163,10 +1266,17 @@ def run_poster_fix(
             )
 
             try:
-                result = _fix_one_poster(jf_client, tmdb_client, item, scan_only)
+                result = _fix_one_poster_pure(jf_client, tmdb_client, item_data, scan_only)
             except Exception as e:
-                logger.exception(f"处理失败: {item.title}")
-                result = {"id": item.id, "title": item.title, "status": "failed", "error": str(e)}
+                logger.exception(f"处理失败: {item_data['title']}")
+                result = {"id": item_data['id'], "title": item_data['title'], "status": "failed", "error": str(e)}
+
+            # 短事务回写
+            try:
+                with SessionLocal() as db:
+                    _apply_poster_result(db, item_data['id'], result)
+            except Exception as e:
+                logger.warning(f"回写 poster 字段失败 {item_data['id']}: {e}")
 
             details.append(result)
             status = result.get("status")
@@ -1177,37 +1287,32 @@ def run_poster_fix(
             else:
                 failed += 1
 
-            if i % 10 == 0:
-                db.commit()
-
-        db.commit()
-
         # 上传成功 → 触发刷新（仅 scan_only=False 模式；run_all 会传 skip_refresh=True）
         refreshed = False
         if not scan_only and success > 0 and not skip_refresh:
-            update_task_progress(db, task_id, 99, "通知 Jellyfin 刷新...")
+            _progress(99, "通知 Jellyfin 刷新...")
             _refresh_jellyfin_libraries()
             refreshed = True
 
-        complete_task(db, task_id, {
-            "total": total,
-            "success": success,
-            "failed": failed,
-            "not_found": not_found,
-            "scan_only": scan_only,
-            "jellyfin_refreshed": refreshed,
-            "details": details[:300],
-        })
+        with SessionLocal() as db:
+            complete_task(db, task_id, {
+                "total": total,
+                "success": success,
+                "failed": failed,
+                "not_found": not_found,
+                "scan_only": scan_only,
+                "jellyfin_refreshed": refreshed,
+                "details": details[:300],
+            })
 
     except Exception as e:
         logger.exception("海报修复任务失败")
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)
 
 
 @router.post("/posters/{item_id}/fix")
-async def fix_single_poster(
+def fix_single_poster(
     item_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -1223,34 +1328,43 @@ async def fix_single_poster(
 
 
 def run_single_poster_fix(task_id: int, item_id: int):
-    """单个条目海报修复"""
+    """单个条目海报修复。HTTP 期间不持 db。"""
     from web.backend.database import SessionLocal
     from common.jellyfin_client import JellyfinClient
     from common.tmdb_client import TMDBClient
 
-    db = SessionLocal()
     try:
-        item = db.query(MediaItem).filter(MediaItem.id == item_id).first()
-        if not item:
-            complete_task(db, task_id, {"error": "条目不存在"}, success=False)
-            return
-
-        update_task_progress(db, task_id, 30, f"搜索 TMDB: {item.title}")
+        # 读快照
+        with SessionLocal() as db:
+            item = db.query(MediaItem).filter(MediaItem.id == item_id).first()
+            if not item:
+                complete_task(db, task_id, {"error": "条目不存在"}, success=False)
+                return
+            item_data = {
+                'id': item.id,
+                'title': item.title,
+                'media_type': item.media_type,
+                'tmdb_id': item.tmdb_id,
+                'jellyfin_id': item.jellyfin_id,
+                'production_year': item.production_year,
+            }
+            update_task_progress(db, task_id, 30, f"搜索 TMDB: {item_data['title']}")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
 
-        result = _fix_one_poster(jf_client, tmdb_client, item, scan_only=False)
-        db.commit()
+        result = _fix_one_poster_pure(jf_client, tmdb_client, item_data, scan_only=False)
 
-        success = result.get("status") == "success"
-        complete_task(db, task_id, result, success=success)
+        # 回写 + 完成
+        with SessionLocal() as db:
+            _apply_poster_result(db, item_id, result)
+            success = result.get("status") == "success"
+            complete_task(db, task_id, result, success=success)
 
     except Exception as e:
         logger.exception("单个海报修复失败")
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)
 
 
 # ==================== Episode 缩略图修复 ====================
@@ -1322,7 +1436,7 @@ def _resolve_episode_targets(
 
 
 @router.post("/episodes/fix-stills")
-async def fix_episode_stills(
+def fix_episode_stills(
     request: EpisodeStillFixRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -1391,14 +1505,19 @@ def run_episode_still_fix(
       2. 对每集：用 SeriesId 反查父剧获取 TMDB tv_id（带本任务内缓存）
       3. 拿 (tv_id, season_number, episode_number) 调 TMDB /tv/.../episode/...
       4. 下载 still_path，上传到 Jellyfin /Items/{episode_id}/Images/Primary
+
+    DB 仅用于 progress / complete，HTTP 期间不持有连接。
     """
     from web.backend.database import SessionLocal
     from common.jellyfin_client import JellyfinClient
     from common.tmdb_client import TMDBClient
 
-    db = SessionLocal()
+    def _progress(pct, msg, patch=None):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg, result_patch=patch)
+
     try:
-        update_task_progress(db, task_id, 5, "初始化...")
+        _progress(5, "初始化...")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         tmdb_client = TMDBClient(
@@ -1407,17 +1526,18 @@ def run_episode_still_fix(
             language=settings.tmdb_language,
         )
 
-        update_task_progress(db, task_id, 10, "解析 Episode 列表...")
+        _progress(10, "解析 Episode 列表...")
         episodes = _resolve_episode_targets(jf_client, library_id, library_ids, episode_ids)
         if limit:
             episodes = episodes[:limit]
 
         total = len(episodes)
         if total == 0:
-            complete_task(db, task_id, {"total": 0, "message": "没有找到需要处理的 Episode"})
+            with SessionLocal() as db:
+                complete_task(db, task_id, {"total": 0, "message": "没有找到需要处理的 Episode"})
             return
 
-        update_task_progress(db, task_id, 15, f"共 {total} 集需要处理")
+        _progress(15, f"共 {total} 集需要处理")
 
         # SeriesId → TMDB tv_id 缓存（同一剧的多集免重复查）
         series_tmdb_cache: dict = {}
@@ -1460,10 +1580,10 @@ def run_episode_still_fix(
             try:
                 progress = 15 + (i / total) * 80
                 if i > 0 and i % EMIT_EVERY == 0:
-                    update_task_progress(
-                        db, task_id, progress,
+                    _progress(
+                        progress,
                         f"处理: {ep.get('SeriesName')} S{ep.get('ParentIndexNumber'):02d}E{ep.get('IndexNumber'):02d}",
-                        result_patch={
+                        patch={
                             "total": total,
                             "success": success_count,
                             "skipped": skipped_count,
@@ -1533,24 +1653,24 @@ def run_episode_still_fix(
                 entry['error'] = str(e)
                 details.append(entry)
 
-        complete_task(db, task_id, {
-            "total": total,
-            "success": success_count,
-            "skipped": skipped_count,
-            "failed": failed_count,
-            "scan_only": scan_only,
-            "details": details[:500],
-        })
+        with SessionLocal() as db:
+            complete_task(db, task_id, {
+                "total": total,
+                "success": success_count,
+                "skipped": skipped_count,
+                "failed": failed_count,
+                "scan_only": scan_only,
+                "details": details[:500],
+            })
 
     except Exception as e:
         logger.exception("Episode 缩略图修复失败")
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)
 
 
 @router.post("/episodes/{episode_id}/fix-still")
-async def fix_single_episode_still(
+def fix_single_episode_still(
     episode_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),

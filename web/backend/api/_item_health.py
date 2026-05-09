@@ -12,8 +12,22 @@ Jellyfin 库条目健康检查
   - empty_season   : Season 的 ChildCount = 0
 """
 import re
+import unicodedata
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Dict, List, Optional, Tuple
+
+
+def _strip_accents(s: str) -> str:
+    """
+    去除拉丁字母上的音符号（diacritics），CJK / 假名 / 谚文等保持不变。
+    用法：标准化 token 前先剥音符，让 'Shōgun' 与 'Shogun' 视为同字符串。
+
+    NFD 分解把 'ō' 拆成 'o' + 组合长音符（U+0304），过滤 category=Mn（Mark, Nonspacing）即去音符。
+    """
+    if not s:
+        return s
+    nfd = unicodedata.normalize('NFD', s)
+    return ''.join(ch for ch in nfd if unicodedata.category(ch) != 'Mn')
 
 
 # 释放命名里要剥离的画质/编码/源标签
@@ -83,13 +97,20 @@ def _release_names_for(item: Dict) -> List[str]:
       3) 自身名（Folder 类型，没有 file 概念）
 
     比对时对每个候选都算一次相似度取最大值，避免任一方"被改坏"导致误报。
+
+    关键约束：仅 Movie / Episode 这种 path 是文件的类型才走"剥扩展名"分支。
+    Series/Season/Folder 类型的 path 是目录，目录末段恰好像扩展名（如
+    "Star.Wars.Andor" 的 ".Andor"）会被 _looks_like_file 误判为扩展名导致截断。
     """
     path = item.get('Path') or ''
     if not path:
         return []
+    item_type = item.get('Type', '')
     base = _basename(path)
     out: List[str] = []
-    if _looks_like_file(base):
+    # 仅 Movie / Episode 的 path 才可能是真正的文件；其它类型一律按目录处理
+    is_file_type = item_type in ('Movie', 'Episode')
+    if is_file_type and _looks_like_file(base):
         # 视频文件：先文件名（去扩展名）
         stem = base.rsplit('.', 1)[0]
         out.append(stem)
@@ -98,7 +119,7 @@ def _release_names_for(item: Dict) -> List[str]:
         if parent and parent != stem:
             out.append(parent)
     else:
-        # 目录类型：用自身
+        # 目录类型（Series/Season/Folder/未知）：用自身
         out.append(base)
     return out
 
@@ -227,7 +248,9 @@ def _normalize_tokens(name: str) -> List[str]:
     """
     if not name:
         return []
-    s = name.lower()
+    # 先剥音符：Shōgun → Shogun，Pokémon → Pokemon，Beyoncé → Beyonce
+    # 解决"文件夹用 ASCII 命名 vs Jellyfin 显示带音符"的对比误报
+    s = _strip_accents(name).lower()
     s = re.sub(r'\[[^\]]*\]', ' ', s)
     s = re.sub(r'\([^)]*\)', ' ', s)
     # 释放组名通常是结尾的 "-XXXX"（如 -RARBG / -HONE / -DEFLATE），先剥掉
@@ -321,15 +344,17 @@ def _jaccard(a: List[str], b: List[str]) -> float:
 
 def _similarity(folder_tokens: List[str], title_tokens: List[str]) -> float:
     """
-    标题/文件夹相似度。综合三个指标取最大值：
+    标题/文件夹相似度。综合四个指标取最大值：
 
       Jaccard               = |F ∩ T| / |F ∪ T|   （对称，看整体重叠）
       Containment(标题)     = |F ∩ T| / |T|       （非对称，看标题是否落在文件夹里）
+      Containment(文件夹)   = |F ∩ T| / |F|       （非对称，看文件夹是否完全落在标题里——主标题缩写场景）
       Concat-equal fallback = 标题 token 拼接后能匹配文件夹某个 token  （处理"Ne Zha" 对应 "nezha"）
 
-    单 token 标题（Joker/Inception）：靠 Containment 不被释放噪音稀释
+    单 token 标题（Joker/Inception）：靠 Containment(标题) 不被释放噪音稀释
+    主标题缩写（"CSI" 对应 "CSI: Crime Scene Investigation"）：靠 Containment(文件夹)
     分词差异（"Ne Zha" / "Iron Man" / "King Kong"）：靠 Concat-equal fallback
-    误报场景下三者都低，识别能力不退化
+    误报场景下四者都低，识别能力不退化
     """
     if not folder_tokens or not title_tokens:
         return 0.0
@@ -339,6 +364,7 @@ def _similarity(folder_tokens: List[str], title_tokens: List[str]) -> float:
 
     jaccard = len(inter) / len(F | T) if F | T else 0.0
     contain = len(inter) / len(T) if T else 0.0
+    contain_F = len(inter) / len(F) if F else 0.0
 
     # Fallback: 标题 token 拼接后是否等于文件夹的某个 token
     # （Jellyfin 把 "Nezha" 显示成 "Ne Zha"，文件夹是 "Nezha"）
@@ -359,7 +385,7 @@ def _similarity(folder_tokens: List[str], title_tokens: List[str]) -> float:
             elif ft_lower in title_concat and len(title_concat) <= len(ft_lower) * 1.25:
                 concat_score = max(concat_score, 0.9)
 
-    return max(jaccard, contain, concat_score)
+    return max(jaccard, contain, contain_F, concat_score)
 
 
 def compute_health(item: Dict) -> Dict:

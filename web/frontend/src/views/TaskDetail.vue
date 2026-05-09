@@ -122,15 +122,46 @@
         </div>
       </el-card>
 
-      <!-- 失败：显示错误 -->
-      <el-alert
-        v-if="task.status === 'failed' && task.result?.error"
-        type="error"
-        :closable="false"
-        show-icon
-        :title="task.result.error"
-        style="margin-bottom: 16px"
-      />
+      <!-- 失败原因：仅 task 整体失败，或部分子项失败/未找到时显示。
+           按 sub_key（视频番号 / 文件名）合并同源警告，避免一行视频刷出 N 条同类信息 -->
+      <el-card v-if="showFailureReasons" shadow="never" class="failure-card">
+        <template #header>
+          <div class="content-header">
+            <span>失败原因</span>
+            <span class="muted">{{ failureSummary }}</span>
+          </div>
+        </template>
+        <el-alert
+          v-if="task.result?.error"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="task.result.error"
+          style="margin-bottom: 12px"
+        />
+        <div v-if="groupedWarnings.length" class="warning-groups">
+          <div v-for="g in groupedWarnings" :key="g.key" class="warning-group">
+            <div class="group-head">
+              <span class="group-key">{{ g.label }}</span>
+              <el-tag
+                v-if="g.count > 1"
+                size="small"
+                type="info"
+                effect="plain"
+              >×{{ g.count }}</el-tag>
+            </div>
+            <div
+              v-for="(w, idx) in g.entries"
+              :key="idx"
+              class="warning-line"
+              :class="{ 'is-error': w.level === 'ERROR' || w.level === 'CRITICAL' }"
+            >
+              <span class="w-source">{{ shortLogger(w.logger) }}</span>
+              <span class="w-msg" :title="w.msg">{{ w.msg }}</span>
+            </div>
+          </div>
+        </div>
+      </el-card>
 
       <!-- 详情区 -->
       <el-card shadow="never">
@@ -168,6 +199,9 @@ import CleanupSamplesView   from '@/components/task-detail/CleanupSamplesView.vu
 import NormalizePathsView   from '@/components/task-detail/NormalizePathsView.vue'
 import AutoIdentifyView     from '@/components/task-detail/AutoIdentifyView.vue'
 import RunAllView           from '@/components/task-detail/RunAllView.vue'
+import AdultScanView          from '@/components/task-detail/AdultScanView.vue'
+import AdultScrapeBatchView   from '@/components/task-detail/AdultScrapeBatchView.vue'
+import AdultRepairCoversView  from '@/components/task-detail/AdultRepairCoversView.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -207,6 +241,81 @@ const currentProgressMsg = computed(() => {
   return task.value.message || ''
 })
 
+// "tools.adult_manager.scrapers.base" → "scrapers.base"
+const shortLogger = (name) => {
+  if (!name) return ''
+  const parts = name.split('.')
+  return parts.length > 2 ? parts.slice(-2).join('.') : name
+}
+
+/**
+ * 失败原因区是否显示：
+ *   - task 整体失败（status === 'failed'），或
+ *   - task 已完成但 result 里有 not_found / failed > 0（部分失败）
+ *   - 任务运行中且已经累积了 warnings：也显示（让用户实时知道有问题）
+ * 完全成功的任务（completed + 0 失败 + 无 warnings）不显示这个区域。
+ */
+// 这些 task type 自己有更细粒度的 per-row 失败信息，不再额外显示通用"失败原因"区
+const _SUPPRESS_FAILURE_PANEL = new Set([
+  'adult_scrape_batch',
+  'adult_scrape',
+  'adult_repair_covers',
+])
+
+const showFailureReasons = computed(() => {
+  if (!task.value) return false
+  if (_SUPPRESS_FAILURE_PANEL.has(task.value.task_type)) return false
+  if (task.value.status === 'failed') return true
+  const r = task.value.result || {}
+  if ((r.failed || 0) > 0) return true
+  if ((r.not_found || 0) > 0) return true
+  // 运行中或完成态有 warnings 也展示
+  if ((r.warnings || []).length > 0) return true
+  return false
+})
+
+const failureSummary = computed(() => {
+  const r = task.value?.result || {}
+  const parts = []
+  if (r.failed) parts.push(`${r.failed} 失败`)
+  if (r.not_found) parts.push(`${r.not_found} 未找到`)
+  if (task.value?.status === 'failed') parts.push('任务整体失败')
+  return parts.join(' / ')
+})
+
+/**
+ * 把 result.warnings 按 sub_key（视频番号 / 文件名）合并：
+ *   - 同一 sub_key 下的多条警告合并到一组，header 显示 ×N 计数
+ *   - 没有 sub_key 的合并到 "通用"组（如 task 启动 / 收尾阶段产生的）
+ *   - 同组内按"logger + msg 的前 100 字符"再去重一次（同源同消息只保留一条）
+ */
+const groupedWarnings = computed(() => {
+  const all = task.value?.result?.warnings || []
+  if (!all.length) return []
+
+  const groups = new Map()
+  for (const w of all) {
+    const key = w.sub_key || '__general__'
+    if (!groups.has(key)) {
+      groups.set(key, { key, label: w.sub_key || '通用', entries: [], _seen: new Set() })
+    }
+    const g = groups.get(key)
+    // 去重：同 logger + 同 msg 前 100 字符 视为重复
+    const dedup = `${w.logger}|${(w.msg || '').slice(0, 100)}`
+    if (!g._seen.has(dedup)) {
+      g._seen.add(dedup)
+      g.entries.push(w)
+    }
+  }
+
+  return Array.from(groups.values()).map(g => ({
+    key: g.key,
+    label: g.label,
+    count: g.entries.length,
+    entries: g.entries,
+  }))
+})
+
 // task_type → 子组件映射；未注册的回退到 GenericJsonView
 const CONTENT_MAP = {
   poster_fix:           PosterFixView,
@@ -219,6 +328,10 @@ const CONTENT_MAP = {
   normalize_paths:      NormalizePathsView,
   auto_identify:        AutoIdentifyView,
   run_all:              RunAllView,
+  adult_scan:           AdultScanView,
+  adult_scrape:         AdultScrapeBatchView,
+  adult_scrape_batch:   AdultScrapeBatchView,
+  adult_repair_covers:  AdultRepairCoversView,
 }
 
 /**
@@ -432,6 +545,59 @@ onUnmounted(() => stopPolling())
   gap: 10px;
 
   .muted { color: #94a3b8; font-size: 12px; }
+}
+
+// 失败原因卡（仅未正常完成 / 有失败的项时显示，按 sub_key 合并）
+.failure-card {
+  margin-bottom: 16px;
+
+  .warning-groups {
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .warning-group {
+    padding: 8px 0;
+    border-bottom: 1px solid #f1f5f9;
+
+    &:last-child { border-bottom: none; }
+  }
+  .group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+
+    .group-key {
+      color: #6366f1;
+      font-weight: 600;
+      font-family: monospace;
+    }
+  }
+  .warning-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 0 2px 12px;
+    font-size: 12px;
+    line-height: 1.6;
+
+    &.is-error .w-msg { color: #b91c1c; }
+
+    .w-source {
+      color: #94a3b8;
+      flex-shrink: 0;
+      min-width: 90px;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .w-msg {
+      color: #475569;
+      flex: 1;
+      word-break: break-all;
+    }
+  }
 }
 
 // 当前进度（运行中实时变化的 message 文本）

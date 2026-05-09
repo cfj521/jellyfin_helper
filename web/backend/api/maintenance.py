@@ -219,12 +219,42 @@ def _enumerate_items_in_scope(target: Dict) -> List[Dict]:
     return all_items
 
 
-def _refresh_libraries(library_ids: List[str]):
-    """触发一组库的 Jellyfin 重扫（去重）。"""
-    if not library_ids:
-        return []
+def _refresh_libraries(
+    library_ids: List[str],
+    affected_paths: Optional[List[str]] = None,
+    update_type: str = 'Modified',
+):
+    """通知 Jellyfin 重扫。
+    - affected_paths 给定 → 优先用 /Library/Media/Updated 精准通知（毫秒触发，针对性扫描）
+    - 失败或 paths 为空 → 回落到 /Items/{lib_id}/Refresh 整库扫
+    - update_type: 'Created' / 'Modified' / 'Deleted'
+
+    返回已触发的标识列表（库 id 或 '(media_updated)'）。
+    """
     seen = []
     client = _client()
+
+    # ① 精准通知（path 已知场景）
+    if affected_paths:
+        from web.backend.path_translator import reverse_translate_path_with_settings
+        paths_for_jf = []
+        for p in affected_paths:
+            if not p:
+                continue
+            try:
+                paths_for_jf.append(reverse_translate_path_with_settings(p) or p)
+            except Exception:
+                paths_for_jf.append(p)
+        if paths_for_jf:
+            try:
+                if client.notify_media_updated(paths_for_jf, update_type=update_type):
+                    return ['(media_updated)']
+            except Exception as e:
+                logger.warning(f"notify_media_updated 失败，回落整库扫: {e}")
+
+    # ② 整库扫兜底
+    if not library_ids:
+        return seen
     for lid in library_ids:
         if not lid or lid in seen:
             continue
@@ -239,7 +269,7 @@ def _refresh_libraries(library_ids: List[str]):
 # ---------- cleanup-samples ----------
 
 @router.post("/cleanup-samples", response_model=TaskStartResponse)
-async def cleanup_samples(
+def cleanup_samples(
     req: MaintenanceRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -456,7 +486,13 @@ def run_cleanup_samples(
                 affected_libs.append(r['_library_id'])
 
         # ===== Phase 3: 刷新库（run_all 会传 skip_refresh=True 让编排器统一刷）=====
-        refreshed = _refresh_libraries(affected_libs) if (not dry_run and not skip_refresh) else []
+        # 精准通知：删 sample 文件 + 删空目录 → 收集这些路径让 jellyfin 仅扫这些位置
+        deleted_paths = [r['path'] for r in sample_results if r.get('deleted') and r.get('path')]
+        deleted_paths += [r['path'] for r in dir_results if r.get('deleted') and r.get('path')]
+        refreshed = (
+            _refresh_libraries(affected_libs, affected_paths=deleted_paths, update_type='Deleted')
+            if (not dry_run and not skip_refresh) else []
+        )
 
         # 清掉内部字段，再返回结果
         for r in sample_results:
@@ -488,7 +524,7 @@ def run_cleanup_samples(
 # ---------- auto-identify ----------
 
 @router.post("/auto-identify", response_model=TaskStartResponse)
-async def auto_identify(
+def auto_identify(
     req: MaintenanceRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -513,19 +549,21 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
       Step 2: compute_health 过滤 unrecognized
       Step 3: 对每个 → extract_suggested_title_year → remote_search → apply first
       Step 4: 刷新受影响库
+
+    DB 只用于进度/完成回写，不持有连接跨 Jellyfin / TMDB HTTP。
     """
     from web.backend.database import SessionLocal
 
-    db = SessionLocal()
+    def _progress(pct: int, msg: str, patch: Optional[Dict] = None):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg, result_patch=patch)
+
     try:
-        update_task_progress(db, task_id, 2, "开始拉取条目列表...")
+        _progress(2, "开始拉取条目列表...")
         client = _client()
 
         all_items = _enumerate_items_in_scope(target)
-        update_task_progress(
-            db, task_id, 10,
-            f"共 {len(all_items)} 个条目，正在筛选未识别项...",
-        )
+        _progress(10, f"共 {len(all_items)} 个条目，正在筛选未识别项...")
 
         # 过滤未识别
         unrecognized = []
@@ -535,22 +573,20 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                 unrecognized.append(it)
 
         total = len(unrecognized)
-        update_task_progress(
-            db, task_id, 15,
-            f"找到 {total} 个未识别条目，开始搜索 + 应用...",
-        )
+        _progress(15, f"找到 {total} 个未识别条目，开始搜索 + 应用...")
 
         if total == 0:
-            complete_task(db, task_id, {
-                'dry_run': dry_run,
-                'scanned': len(all_items),
-                'unrecognized_count': 0,
-                'fixed_count': 0,
-                'no_match_count': 0,
-                'errors': [],
-                'details': [],
-                'libraries_refreshed': [],
-            })
+            with SessionLocal() as db:
+                complete_task(db, task_id, {
+                    'dry_run': dry_run,
+                    'scanned': len(all_items),
+                    'unrecognized_count': 0,
+                    'fixed_count': 0,
+                    'no_match_count': 0,
+                    'errors': [],
+                    'details': [],
+                    'libraries_refreshed': [],
+                })
             return
 
         results: List[Dict] = []
@@ -572,9 +608,9 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
 
             # 处理上一轮累积的 results：每 EMIT_EVERY 个就 emit partial
             should_emit = (idx > 0 and idx % EMIT_EVERY == 0)
-            update_task_progress(
-                db, task_id, pct, progress_msg,
-                result_patch=({
+            _progress(
+                pct, progress_msg,
+                patch=({
                     'dry_run': dry_run,
                     'scanned': len(all_items),
                     'unrecognized_count': total,
@@ -656,28 +692,28 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
 
         refreshed = _refresh_libraries(affected_libs) if (not dry_run and not skip_refresh) else []
 
-        complete_task(db, task_id, {
-            'dry_run': dry_run,
-            'scanned': len(all_items),
-            'unrecognized_count': total,
-            'fixed_count': fixed_count,
-            'no_match_count': no_match_count,
-            'errors': [r for r in results if r.get('error') and r['error'] != '(预览模式)'],
-            'details': results[:500],
-            'libraries_refreshed': refreshed,
-        })
+        with SessionLocal() as db:
+            complete_task(db, task_id, {
+                'dry_run': dry_run,
+                'scanned': len(all_items),
+                'unrecognized_count': total,
+                'fixed_count': fixed_count,
+                'no_match_count': no_match_count,
+                'errors': [r for r in results if r.get('error') and r['error'] != '(预览模式)'],
+                'details': results[:500],
+                'libraries_refreshed': refreshed,
+            })
 
     except Exception as e:
         logger.exception("auto-identify 任务失败")
-        complete_task(db, task_id, {'error': str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {'error': str(e)}, success=False)
 
 
 # ---------- normalize-paths ----------
 
 @router.post("/normalize-paths", response_model=TaskStartResponse)
-async def normalize_paths(
+def normalize_paths(
     req: MaintenanceRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -809,7 +845,17 @@ def run_normalize_paths(
 
             results.append(item)
 
-        refreshed = _refresh_libraries(affected_libs) if (not dry_run and not skip_refresh) else []
+        # 精准通知：移动文件 → 通知 from（Deleted）+ to（Created）；jellyfin 自己合并成"重命名"
+        # （注意 notify_media_updated 单次调用只接收一个 update_type，故拆两次：先 Created 通知新位置）
+        moved_to_paths = [r['to'] for r in results if r.get('moved') and r.get('to')]
+        if not dry_run and not skip_refresh:
+            refreshed = _refresh_libraries(
+                affected_libs,
+                affected_paths=moved_to_paths,
+                update_type='Created',
+            )
+        else:
+            refreshed = []
 
         complete_task(db, task_id, {
             'dry_run': dry_run,
@@ -846,7 +892,7 @@ class RunAllRequest(BaseModel):
 
 
 @router.post("/run-all", response_model=TaskStartResponse)
-async def run_all(
+def run_all(
     req: RunAllRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),

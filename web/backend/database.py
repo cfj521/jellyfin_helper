@@ -8,8 +8,9 @@ from pathlib import Path
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, DateTime, Text, Boolean, Float,
-    BigInteger, UniqueConstraint, Index,
+    BigInteger, Numeric, UniqueConstraint, Index,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from web.backend.config import settings
@@ -110,22 +111,6 @@ class MediaItem(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class DownloadTask(Base):
-    """下载任务"""
-    __tablename__ = "download_tasks"
-
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String(500), nullable=False)
-    source = Column(String(50))  # jackett, manual
-    magnet_link = Column(Text)
-    torrent_hash = Column(String(100))
-    status = Column(String(20), default="pending")  # pending, downloading, completed, failed
-    progress = Column(Float, default=0.0)
-    download_path = Column(String(1000))
-    created_at = Column(DateTime, default=datetime.utcnow)
-    completed_at = Column(DateTime)
-
-
 class VideoAnnotation(Base):
     """
     视频文件级用户标注。
@@ -199,22 +184,164 @@ class AdultItem(Base):
     __tablename__ = "adult_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    code = Column(String(50), unique=True, nullable=False)  # 番号
+    # 番号；未识别的文件 code 为 NULL（PostgreSQL 的 UNIQUE 允许多个 NULL）
+    code = Column(String(50), unique=True, nullable=True)
     title = Column(String(500))
     release_date = Column(String(20))
     studio = Column(String(200))
     director = Column(String(200))
-    actors = Column(Text)  # JSON 数组
+    actors = Column(Text)  # JSON 数组（女优日文名，按出演顺序）
     tags = Column(Text)  # JSON 数组
     cover_url = Column(String(500))
     poster_path = Column(String(500))
     nfo_path = Column(String(500))
     file_path = Column(String(1000))
     file_mtime = Column(Float)  # 文件 mtime；用于增量扫描跳过已扫文件
+    # 手动覆盖"有/无码"判定：NULL = 走自动判定（_UNCENSORED_KEYWORDS）；True/False = 用户手动指定
+    is_uncensored_override = Column(Boolean, nullable=True)
     rating = Column(Float)
     source = Column(String(50))  # javbus, javdb
+    # 永久排除（用户主动标"这不是有效番号"）：所有自动流程跳过；只能用户手动取消
+    excluded = Column(Boolean, default=False, nullable=False, index=True)
+    # 自动冷却到期时间戳：自动流程连续失败 N 次设为 now + COOLDOWN_DAYS
+    # 自动流程过滤条件：cooldown_until IS NULL OR cooldown_until < NOW()
+    # 时间到了自动失效，无需用户介入；用户也可以手动"立即重试"清掉
+    cooldown_until = Column(DateTime, index=True)
+    # 连续失败次数：每次刮削失败 +1，成功 / 用户介入时重置为 0。达 N 次进入 cooldown
+    scrape_attempts = Column(Integer, default=0, nullable=False)
+    last_scrape_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AdultActress(Base):
+    """女优档案。
+    日文名是规范主键（站点 / NFO 都以日文名为锚），中/英文为本地化展示。
+    年龄是由 birth_date 计算的派生属性（age），不入库 —— 否则随日期变化得每天 update。
+    """
+    __tablename__ = "adult_actresses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # 日文艺名：唯一索引；用作和 AdultItem.actors[] 中字符串匹配的锚
+    jp_name = Column(String(128), unique=True, nullable=False, index=True)
+    # 中文译名（可手填或从中文站点抓）；可能多个译名共存，先存最常见的一个
+    zh_name = Column(String(128), index=True)
+    # 英文罗马字名（如 "Tsukasa Aoi"）
+    en_name = Column(String(128))
+    # 别名列表（曾用名 / 不同站点拼写）；JSON 字符串数组
+    aliases = Column(Text)
+    # 头像 URL（落地路径或外链；本地化下载后存相对路径）
+    avatar_url = Column(String(500))
+    # 出生日期 YYYY-MM-DD；前端用来算 age = today.year - year - (mm-dd 是否过)
+    birth_date = Column(String(20))
+    # 出道日期 YYYY-MM-DD
+    debut_date = Column(String(20))
+    # 数据来源 / 解析状态：
+    #   pending    —— 已发现待解析（discover 阶段插入的占位）
+    #   not_found  —— 解析过但站点没找到，跳过重试
+    #   javdb / javbus / manual …  —— 已成功解析，标记数据来源
+    source = Column(String(50), index=True)
+    # javdb 的 actor 永久 id（同一人不同名查回都是同一 id），用作跨名归一化锚
+    javdb_id = Column(String(40), unique=True, index=True)
+    # 备注：身高/三围/事务所等自由字段，不规范化
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def age(self) -> Optional[int]:
+        """根据 birth_date 计算当前年龄；缺数据或解析失败返回 None。"""
+        if not self.birth_date:
+            return None
+        try:
+            from datetime import date
+            y, m, d = (int(x) for x in self.birth_date.split('-'))
+            today = date.today()
+            return today.year - y - ((today.month, today.day) < (m, d))
+        except Exception:
+            return None
+
+
+class DownloadDispatchMap(Base):
+    """
+    下载入库流水线映射表（核心调度表）。
+
+    生命周期（phase 流转）：
+      analyzing → dispatch_queued → downloading → download_done →
+      copying → organizing → jellyfin_recognizing → jellyfin_recognize_done →
+      subtitle_fetching → audio_track_order_adjusting → all_jobs_done →
+      (软清/硬清) → cleaned
+    侧分支：analyzing(needs_review) → dismissed → 复活回 dispatch_queued
+    所有 phase 常量见 tools/dispatch/phases.py
+    """
+    __tablename__ = "download_dispatch_map"
+
+    torrent_hash = Column(String(64), primary_key=True)
+
+    # ---- 媒体识别 ----
+    media_type = Column(String(20))            # movie / tv / anime / adult / unknown
+    tmdb_id = Column(String(32))
+    imdb_id = Column(String(32))
+    series_tmdb_id = Column(String(32))        # 剧集才有，跨季归属
+    series_name = Column(String(500))
+    title = Column(String(500))
+    year = Column(Integer)
+
+    # ---- 目标 ----
+    target_library_id = Column(String(64))
+    target_root = Column(String(500))
+    target_path = Column(String(1000))
+    move_mode = Column(String(10), default='copy')  # copy / move
+    dispatched_files = Column(JSONB)                # ["/library/.../S01E12.mkv", ...]
+
+    # ---- 状态机（拆 phase + phase_status，比单字段 N 个并列状态清晰）----
+    # phase 取值见 tools/dispatch/phases.py PHASE_*
+    phase = Column(String(40), default='analyzing', index=True)
+    phase_status = Column(String(30), default='running')
+    # status: running / succeeded / failed / warned / skipped / needs_review
+    #         + downloading 阶段专属：metadata_pending / stalled / paused
+    status_message = Column(Text)
+    error_log = Column(Text)
+    # 各 phase 耗时（秒），便于审计
+    phase_timings = Column(JSONB, default=dict)
+    # copy phase 实时进度（大文件可能跑几十分钟）
+    copy_bytes_done = Column(BigInteger, default=0)
+    copy_bytes_total = Column(BigInteger, default=0)
+
+    # ---- 配额清理决策用 ----
+    ratio_at_dispatch = Column(Numeric(8, 2))
+    last_seen_ratio = Column(Numeric(8, 2))
+    seeded_seconds = Column(BigInteger, default=0)
+    upload_bytes = Column(BigInteger, default=0)
+    cleanup_eligible_at = Column(DateTime, index=True)
+
+    # ---- 时间戳 ----
+    created_at = Column(DateTime, default=datetime.utcnow)
+    # phase 或 phase_status 任一变化时更新；sweeper 据此判定 zombie（卡住 30min+ running）
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    dispatched_at = Column(DateTime)         # 完成转移到库的时刻
+    cleaned_at = Column(DateTime)            # NVMe 副本清理时刻
+    # qB 那边记录的"加入 qB 的时间"。逻辑唯一身份 = (torrent_hash, qb_added_on)：
+    # 同 hash 但 qB 重新加种（删了重加），qb_added_on 变化 → adopt 视为新任务重置
+    qb_added_on = Column(DateTime, index=True)
+
+
+class LLMClassifyCache(Base):
+    """LLM 类型识别结果缓存（按 torrent_name + sorted(files) 指纹）。"""
+    __tablename__ = "llm_classify_cache"
+
+    fingerprint_hash = Column(String(64), primary_key=True)
+    media_type = Column(String(20))
+    title_native = Column(String(500))
+    title_en = Column(String(500))
+    title_zh = Column(String(500))
+    year = Column(Integer)
+    season = Column(Integer)
+    episode = Column(Integer)
+    confidence = Column(Numeric(3, 2))
+    tmdb_search_hint = Column(String(500))
+    raw_response = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # 已迭代加入的字段，需要兼容旧数据库（PostgreSQL ALTER TABLE IF NOT EXISTS）
@@ -226,13 +353,29 @@ _SCHEMA_PATCHES = [
     ("media_items", "has_backdrop", "BOOLEAN DEFAULT FALSE"),
     ("media_items", "poster_url", "VARCHAR(500)"),
     ("adult_items", "file_mtime", "DOUBLE PRECISION"),
+    ("adult_items", "excluded", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("adult_items", "scrape_attempts", "INTEGER DEFAULT 0 NOT NULL"),
+    ("adult_items", "last_scrape_at", "TIMESTAMP"),
+    ("adult_items", "cooldown_until", "TIMESTAMP"),
+    ("adult_items", "is_uncensored_override", "BOOLEAN"),
     ("tasks", "params", "TEXT"),
     ("actors", "image_source", "VARCHAR(20)"),
+    # dispatch 流水线 v2 重构（2026-05-10）：sweeper 判定 zombie 用的"最后变更"时间戳
+    ("download_dispatch_map", "updated_at",
+     "TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'UTC')"),
+    # qb_added_on：qB 那边的加种时间戳，用于 adopt 识别"同 hash 重新加种"
+    ("download_dispatch_map", "qb_added_on", "TIMESTAMP"),
+]
+
+
+_COLUMN_NULLABLE_PATCHES = [
+    # 把已建表的 NOT NULL 约束改为允许 NULL（用于"未识别文件也入库"等场景）
+    ("adult_items", "code"),
 ]
 
 
 def _apply_schema_patches():
-    """对已存在的表追加新增列（幂等）。"""
+    """对已存在的表追加新增列、放宽 NOT NULL 约束（幂等）。"""
     from sqlalchemy import text
     with engine.begin() as conn:
         for table, column, col_def in _SCHEMA_PATCHES:
@@ -242,9 +385,89 @@ def _apply_schema_patches():
             except Exception:
                 # 忽略：表还没创建（首次启动 create_all 已经把所有列建好了）
                 pass
+        for table, column in _COLUMN_NULLABLE_PATCHES:
+            try:
+                conn.execute(text(f'ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL'))
+            except Exception:
+                pass
+
+
+# ============================================================================
+# 一次性迁移（schema_migrations 标记，跑过就跳过）
+# ============================================================================
+
+# 每条：(migration_id, [SQL 列表])
+# 跑成功 → INSERT 标记到 schema_migrations，重启不会重复跑
+# 跑失败 → 不写标记，下次重启再试
+_ONESHOT_MIGRATIONS = [
+    (
+        "2026-05-10__pipeline_v2_phase_rename",
+        # dispatch 流水线 v2：phase/status 全部重命名 + 字段扩宽 + 清理 DownloadTask 旧表
+        # 旧 phase 值（analyze/copy/organize/jellyfin/done/subtitle/audio）跟新代码的
+        # phase 常量不一致，sweeper 看不懂会忽略 → 直接 TRUNCATE 让流水线从空表起步。
+        [
+            # ① 删旧的 DownloadTask 表（已被 DownloadDispatchMap 完全替代）
+            "DROP TABLE IF EXISTS download_tasks",
+
+            # ② phase / phase_status 列扩宽（新值最长 ~40 字符）
+            "ALTER TABLE download_dispatch_map "
+            "ALTER COLUMN phase TYPE VARCHAR(40)",
+            "ALTER TABLE download_dispatch_map "
+            "ALTER COLUMN phase_status TYPE VARCHAR(30)",
+
+            # ③ 清空 dispatch_map 表（旧 phase 值跟新常量不兼容；qB 上的种子下次 adopt 会重认）
+            "TRUNCATE TABLE download_dispatch_map",
+        ],
+    ),
+]
+
+
+def _apply_oneshot_migrations():
+    """跑一次性迁移：跑过就在 schema_migrations 表里记一笔，下次跳过。"""
+    import logging
+    from sqlalchemy import text
+    logger = logging.getLogger(__name__)
+
+    with engine.begin() as conn:
+        # 确保版本表存在
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id VARCHAR(200) PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'UTC')
+            )
+        """))
+
+        # 拉已应用的迁移 id
+        applied = {
+            r[0] for r in conn.execute(text("SELECT id FROM schema_migrations")).fetchall()
+        }
+
+        pending = [(mid, sqls) for mid, sqls in _ONESHOT_MIGRATIONS if mid not in applied]
+        if not pending:
+            logger.info(f"schema migrations: 全部已应用（{len(applied)} 条），无待跑")
+            return
+
+        logger.info(f"schema migrations: {len(pending)} 条待跑，{len(applied)} 条已应用")
+        for mig_id, sql_list in pending:
+            try:
+                for sql in sql_list:
+                    logger.info(f"  [migration {mig_id}] EXEC: {sql[:120]}")
+                    conn.execute(text(sql))
+                conn.execute(
+                    text("INSERT INTO schema_migrations (id) VALUES (:id)"),
+                    {"id": mig_id},
+                )
+                logger.info(f"✓ [migration] applied: {mig_id}")
+            except Exception as e:
+                logger.error(f"✗ [migration] FAILED: {mig_id} → {e}")
+                raise
 
 
 def init_db():
-    """初始化数据库：建表 + 应用新增列。"""
+    """初始化数据库：一次性迁移 → 建表 → 应用新增列（顺序敏感）。
+
+    注意：一次性迁移先跑（含 TRUNCATE / DROP），再 create_all 让新增表/列补齐。
+    """
+    _apply_oneshot_migrations()
     Base.metadata.create_all(bind=engine)
     _apply_schema_patches()

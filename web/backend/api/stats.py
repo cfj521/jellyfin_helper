@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from web.backend.database import get_db, Task, ActorInfo, ScanReport, MediaItem, AdultItem, DownloadTask
+from web.backend.database import get_db, Task, ActorInfo, ScanReport, MediaItem, AdultItem, DownloadDispatchMap
 from web.backend.config import settings
 
 
@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("/overview")
-async def get_overview(db: Session = Depends(get_db)):
+def get_overview(db: Session = Depends(get_db)):
     """
     仪表盘总览数据，分模块返回：
       - jellyfin: 连接状态、库数量
@@ -49,8 +49,13 @@ async def get_overview(db: Session = Depends(get_db)):
     adult_matched = db.query(AdultItem).filter(AdultItem.title != None).count()  # noqa: E711
 
     # ========== 下载（活跃中的）==========
-    downloads_running = db.query(DownloadTask).filter(
-        DownloadTask.status.in_(['downloading', 'pending'])
+    # "活跃" = 在主流水线/等待 worker 接管的所有 phase（不含终态：cleaned/dismissed/all_jobs_done）
+    from tools.dispatch.phases import (
+        ACTIVE_PHASES, PHASE_ANALYZING, PHASE_DISPATCH_QUEUED,
+    )
+    active_phase_set = ACTIVE_PHASES | {PHASE_ANALYZING, PHASE_DISPATCH_QUEUED}
+    downloads_running = db.query(DownloadDispatchMap).filter(
+        DownloadDispatchMap.phase.in_(list(active_phase_set))
     ).count()
 
     # ========== Jellyfin 库数量（实时拉，可能慢/失败，try-except）==========
@@ -78,7 +83,7 @@ async def get_overview(db: Session = Depends(get_db)):
         "discover": {
             "tmdb_connected": bool(settings.tmdb_api_key),
             "downloads_running": downloads_running,
-            "downloads_total": db.query(DownloadTask).count(),
+            "downloads_total": db.query(DownloadDispatchMap).count(),
             # 日/周/月推荐数依赖 trending API，前端实时拉，这里给 placeholder
         },
         "metadata": {
@@ -140,7 +145,7 @@ async def get_overview(db: Session = Depends(get_db)):
 
 
 @router.get("/tasks/history")
-async def get_task_history(
+def get_task_history(
     days: int = 7,
     db: Session = Depends(get_db)
 ):
@@ -186,7 +191,7 @@ async def get_task_history(
 
 
 @router.get("/posters/stats")
-async def get_poster_stats(db: Session = Depends(get_db)):
+def get_poster_stats(db: Session = Depends(get_db)):
     """获取海报统计"""
     media_filter = MediaItem.media_type.in_(['movie', 'series'])
     total = db.query(MediaItem).filter(media_filter).count()
@@ -215,7 +220,7 @@ async def get_poster_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/actors/stats")
-async def get_actor_stats(db: Session = Depends(get_db)):
+def get_actor_stats(db: Session = Depends(get_db)):
     """获取演员统计"""
     total = db.query(ActorInfo).count()
     with_image = db.query(ActorInfo).filter(ActorInfo.has_image == True).count()

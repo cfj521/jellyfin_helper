@@ -58,11 +58,15 @@ def task_to_response(task: Task) -> TaskResponse:
     )
 
 
+# 用 sync `def`：FastAPI 自动扔 threadpool，避免阻塞 event loop。
+# 当后台 worker 频繁 commit 让 PG 繁忙时，async + 同步 SQL 会让所有请求都卡。
+
 @router.get("", response_model=TaskListResponse)
-async def list_tasks(
+def list_tasks(
     task_type: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
+    include_auto: bool = False,
     limit: int = 20,
     offset: int = 0,
     db: Session = Depends(get_db)
@@ -73,6 +77,10 @@ async def list_tasks(
     search：在 message 和 result（含 initial_message + 各类 detail JSON）字段上做
     ILIKE %text%。任务的"描述"通常是 result.initial_message，所以同时搜两个字段
     才能覆盖到运行中和已完成两种状态。
+
+    include_auto：默认 False。会过滤掉 params 中标记 auto_triggered=true 的内部任务
+    （例如 LibraryDetail 打开时静默启动的字幕扫描），它们不是用户主动发起的，
+    出现在列表里只会干扰。
     """
     query = db.query(Task)
 
@@ -80,6 +88,14 @@ async def list_tasks(
         query = query.filter(Task.task_type == task_type)
     if status:
         query = query.filter(Task.status == status)
+    if not include_auto:
+        # params 是 TEXT(JSON)。用 ILIKE 匹配 '"auto_triggered": true' 比 PG JSON ops 更可移植
+        # NOT (params ILIKE ...) 在 NULL 上为 NULL，要 OR IS NULL 兜底
+        from sqlalchemy import or_, not_
+        query = query.filter(or_(
+            Task.params.is_(None),
+            not_(Task.params.ilike('%"auto_triggered": true%')),
+        ))
     if search:
         from sqlalchemy import or_
         # 转义 ILIKE 的通配符：% 和 _ 当字面量看
@@ -100,7 +116,7 @@ async def list_tasks(
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: int, db: Session = Depends(get_db)):
+def get_task(task_id: int, db: Session = Depends(get_db)):
     """获取任务详情"""
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -110,7 +126,7 @@ async def get_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{task_id}")
-async def delete_task(task_id: int, db: Session = Depends(get_db)):
+def delete_task(task_id: int, db: Session = Depends(get_db)):
     """删除任务"""
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -126,7 +142,7 @@ async def delete_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{task_id}/cancel")
-async def cancel_task(task_id: int, db: Session = Depends(get_db)):
+def cancel_task(task_id: int, db: Session = Depends(get_db)):
     """取消任务"""
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -187,8 +203,17 @@ def update_task_progress(
     result_patch（可选）：把字段合并写入 task.result，用于让长任务在运行中持续输出
     details，详情页就能看到已完成的子项明细，而不是要等 complete_task 才一起出现。
 
+    顺带：把当前 worker 线程关联到此 task_id（task_log_capture），后续 WARNING+ 级别
+    日志会自动归集到这个 task 的 result.warnings；并把已积累的 warnings 一并合并
+    写入 result（让前端运行中也能看到）。
+
     注意：每次调用都会写一次 DB，调用方应自行限流（如每 N 条记录调用一次）。
     """
+    # 先 attach 当前 worker 线程，让接下来的 logger.warning 等都被关联到本 task
+    from web.backend.task_log_capture import attach as _log_attach, peek as _log_peek
+    _log_attach(task_id)
+    captured = _log_peek(task_id)
+
     task = db.query(Task).filter(Task.id == task_id).first()
     if task:
         task.progress = progress
@@ -198,7 +223,7 @@ def update_task_progress(
             task.status = "running"
             task.started_at = datetime.utcnow()
 
-        if result_patch:
+        if result_patch or captured:
             merged: dict = {}
             if task.result:
                 try:
@@ -207,7 +232,10 @@ def update_task_progress(
                         merged.update(existing)
                 except Exception:
                     pass
-            merged.update(result_patch)
+            if result_patch:
+                merged.update(result_patch)
+            if captured:
+                merged['warnings'] = captured
             task.result = json.dumps(merged, ensure_ascii=False)
         db.commit()
 
@@ -230,13 +258,17 @@ def complete_task(
         - 失败且不传：自动用 result.error 作为 message
         - 推荐：调用方显式传一个总结，如"扫描完成: N 个视频"
     """
+    # 取出本 task 累积的 WARNING+ 日志，并丢弃缓冲（task 完结）
+    from web.backend.task_log_capture import drain as _log_drain, detach as _log_detach
+    captured = _log_drain(task_id)
+
     task = db.query(Task).filter(Task.id == task_id).first()
     if task:
         task.status = "completed" if success else "failed"
         task.progress = 100.0
         task.completed_at = datetime.utcnow()
 
-        # 合并已有 result（含 initial_message）+ 本次传入
+        # 合并已有 result（含 initial_message）+ 本次传入 + 捕获的 warnings
         merged: dict = {}
         if task.result:
             try:
@@ -247,6 +279,14 @@ def complete_task(
                 pass
         if result:
             merged.update(result)
+        if captured:
+            # 合并 update_task_progress 期间已写入的 warnings + 最后一次 drain 的
+            existing_warns = merged.get('warnings') or []
+            seen = {(w.get('ts'), w.get('msg')) for w in existing_warns}
+            for w in captured:
+                if (w.get('ts'), w.get('msg')) not in seen:
+                    existing_warns.append(w)
+            merged['warnings'] = existing_warns
         if merged:
             task.result = json.dumps(merged, ensure_ascii=False)
 
@@ -257,3 +297,4 @@ def complete_task(
             task.message = f"失败: {result['error']}"
 
         db.commit()
+    _log_detach()

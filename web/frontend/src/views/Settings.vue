@@ -48,7 +48,32 @@
             <el-form-item label="API Key">
               <el-input v-model="form.jellyfin.api_key" type="password" show-password />
               <div class="form-hint">
-                Jellyfin 后台 → 控制台 → API 密钥 → 创建
+                Jellyfin 后台 → 控制台 → API 密钥 → 创建（必须是管理员账号创建的 key）
+              </div>
+            </el-form-item>
+            <el-form-item label=" ">
+              <el-button
+                size="small"
+                :loading="checkingApiKey"
+                :icon="Check"
+                @click="onCheckApiKey"
+              >检查权限</el-button>
+              <el-tag
+                v-if="apiKeyCheckResult"
+                :type="apiKeyCheckResult.ok ? 'success' : 'danger'"
+                size="small"
+                effect="light"
+                style="margin-left: 12px"
+              >
+                {{ apiKeyCheckResult.ok ? '✓ 管理员权限 OK' : '✗ 权限不足或不通' }}
+              </el-tag>
+              <div v-if="apiKeyCheckResult" class="form-hint" style="margin-top: 4px">
+                <span v-if="apiKeyCheckResult.server_name">
+                  服务器：{{ apiKeyCheckResult.server_name }}
+                  <span v-if="apiKeyCheckResult.server_version">(v{{ apiKeyCheckResult.server_version }})</span>
+                  ·
+                </span>
+                {{ apiKeyCheckResult.message }}
               </div>
             </el-form-item>
           </el-form>
@@ -110,31 +135,37 @@
           </div>
         </el-card>
 
+        <!-- 数据库 (PostgreSQL) section 已移除 UI 展示 ——
+             连接配置仅在 config.yaml 里维护（database: 段），
+             form.database 保留以便保存时不丢字段，但不再渲染表单 -->
+
+        <!-- ===== 工具路径 section（原独立 tab 并入此处）===== -->
         <el-card shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
-              <el-icon><Coin /></el-icon>
-              <span>数据库 (PostgreSQL)</span>
+              <span class="badge tools-badge">TOOLS</span>
+              <span>外部命令行工具路径</span>
             </div>
           </template>
-          <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 16px">
-            修改数据库连接后必须重启后端服务才能生效。如有同名环境变量（JF_DB_*），会优先于此处的设置。
-          </el-alert>
-          <el-form :model="form.database" label-width="120px">
-            <el-form-item label="主机">
-              <el-input v-model="form.database.host" />
+
+          <p class="form-hint" style="margin-bottom: 12px">
+            启动时若指定的目录存在，会自动加到当前进程 PATH 最前面，方便 ffprobe / mkvpropedit 直接调用。
+            留空则依赖系统 PATH。改完 <strong>需保存配置 + 重启后端</strong> 才生效。
+          </p>
+
+          <el-form :model="form.tools" label-width="160px" @submit.prevent>
+            <el-form-item label="ffmpeg 目录">
+              <el-input v-model="form.tools.ffmpeg_dir"
+                        placeholder="如 C:/ffmpeg/bin 或 /usr/local/bin（留空用系统 PATH）"
+                        clearable />
+              <span class="form-hint">用于音轨扫描（ffprobe）</span>
             </el-form-item>
-            <el-form-item label="端口">
-              <el-input-number v-model="form.database.port" :min="1" :max="65535" />
-            </el-form-item>
-            <el-form-item label="数据库名">
-              <el-input v-model="form.database.name" />
-            </el-form-item>
-            <el-form-item label="用户">
-              <el-input v-model="form.database.user" />
-            </el-form-item>
-            <el-form-item label="密码">
-              <el-input v-model="form.database.password" type="password" show-password />
+
+            <el-form-item label="mkvtoolnix 目录">
+              <el-input v-model="form.tools.mkvtoolnix_dir"
+                        placeholder="如 C:/Program Files/MKVToolNix 或 /usr/bin（留空用系统 PATH）"
+                        clearable />
+              <span class="form-hint">用于改默认音轨（mkvpropedit）</span>
             </el-form-item>
           </el-form>
         </el-card>
@@ -203,38 +234,110 @@
           </el-form>
         </el-card>
 
-        <!-- OpenSubtitles -->
+        <!-- Wikidata 演员元数据 -->
         <el-card shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
-              <span class="badge opensubs">OS</span>
-              <span>OpenSubtitles</span>
-              <el-tag size="small" :type="form.subtitle.opensubtitles_api_key ? 'success' : 'info'" effect="plain">
-                {{ form.subtitle.opensubtitles_api_key ? '已配置' : '未配置' }}
+              <span class="badge wikidata">WD</span>
+              <span>Wikidata 元数据</span>
+              <el-tag size="small" :type="form.wikidata.enabled ? 'success' : 'info'" effect="plain">
+                {{ form.wikidata.enabled ? '已启用' : '未启用' }}
               </el-tag>
             </div>
           </template>
-          <el-form :model="form.subtitle" label-width="160px">
-            <el-form-item label="API Key">
-              <el-input v-model="form.subtitle.opensubtitles_api_key" type="password" show-password />
+          <el-form :model="form.wikidata" label-width="120px">
+            <el-form-item label="启用">
+              <el-switch v-model="form.wikidata.enabled" />
               <div class="form-hint">
-                <a href="https://www.opensubtitles.com/consumers" target="_blank">opensubtitles.com/consumers</a> 申请
+                演员管理页面在 TMDB 找不到中文名时，回退到 Wikidata 拉取（公共 SPARQL 端点，无需 Key）
               </div>
             </el-form-item>
-            <el-form-item label="用户名">
-              <el-input v-model="form.subtitle.opensubtitles_username" />
+            <el-form-item label="User-Agent">
+              <el-input v-model="form.wikidata.user_agent" placeholder="如 JellyfinTools/1.0 (your@email.com)" />
+              <div class="form-hint">
+                Wikidata 强制要求带联系邮箱的 UA，否则会被 429。改完邮箱保存即可
+              </div>
             </el-form-item>
-            <el-form-item label="密码">
-              <el-input v-model="form.subtitle.opensubtitles_password" type="password" show-password />
-            </el-form-item>
-            <el-form-item label="期望语言">
-              <el-checkbox-group v-model="form.subtitle.preferred_langs">
-                <el-checkbox label="chs">简体中文</el-checkbox>
-                <el-checkbox label="cht">繁体中文</el-checkbox>
-                <el-checkbox label="eng">英语</el-checkbox>
-                <el-checkbox label="jpn">日语</el-checkbox>
-                <el-checkbox label="kor">韩语</el-checkbox>
+            <el-form-item label="语言优先">
+              <el-checkbox-group v-model="form.wikidata.language_order" class="lang-line">
+                <el-checkbox label="zh">中文 (zh)</el-checkbox>
+                <el-checkbox label="zh-Hans">简体 (zh-Hans)</el-checkbox>
+                <el-checkbox label="zh-Hant">繁体 (zh-Hant)</el-checkbox>
+                <el-checkbox label="en">英文 (en)</el-checkbox>
+                <el-checkbox label="ja">日文 (ja)</el-checkbox>
+                <el-checkbox label="ko">韩文 (ko)</el-checkbox>
               </el-checkbox-group>
+              <div class="form-hint">
+                按顺序找标签；勾的语言都没有时，落到 Wikidata label 默认值
+              </div>
+            </el-form-item>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number v-model="form.wikidata.request_delay" :min="0" :max="10" :step="0.5" />
+              <div class="form-hint">SPARQL 端点对单 IP 限速，1s 一般足够</div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- MDB List 评分聚合 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge mdblist">MDB</span>
+              <span>MDB List 评分聚合</span>
+              <el-tag size="small" :type="form.mdblist.enabled && form.mdblist.api_key ? 'success' : 'info'" effect="plain">
+                {{ form.mdblist.enabled && form.mdblist.api_key ? '已配置' : (form.mdblist.enabled ? '缺 API Key' : '未启用') }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form :model="form.mdblist" label-width="120px">
+            <el-form-item label="启用">
+              <el-switch v-model="form.mdblist.enabled" />
+              <div class="form-hint">
+                关闭后所有库列表 / 详情页不再显示 IMDb / Rotten Tomatoes / Metacritic / Trakt / Letterboxd 等多源评分
+              </div>
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input v-model="form.mdblist.api_key" type="password" show-password />
+              <div class="form-hint">
+                <a href="https://mdblist.com/api" target="_blank">在 mdblist.com 登录后申请</a>
+                — 免费额度 1000 req/天，足够单人媒体库使用
+              </div>
+            </el-form-item>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number v-model="form.mdblist.request_delay" :min="0" :max="60" :step="0.5" />
+              <div class="form-hint">两次 API 请求之间的最小间隔；MDB List 限速宽松，1s 通常足够</div>
+            </el-form-item>
+            <el-form-item label="缓存 TTL(天)">
+              <el-input-number v-model="form.mdblist.cache_ttl_days" :min="1" :max="365" />
+              <div class="form-hint">同一作品在该天数内不再重新拉取（电影评分变化不大，30 天合理）</div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- 豆瓣 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge douban">豆</span>
+              <span>豆瓣评分（HTML 爬虫）</span>
+              <el-tag size="small" :type="form.douban.enabled ? 'success' : 'info'" effect="plain">
+                {{ form.douban.enabled ? '已启用' : '未启用' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form :model="form.douban" label-width="120px">
+            <el-form-item label="启用">
+              <el-switch v-model="form.douban.enabled" />
+              <div class="form-hint">
+                豆瓣无官方公开 API，靠抓 HTML；首次访问异步爬取（10-20s），结果落库 30 天内不再重抓
+              </div>
+            </el-form-item>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number v-model="form.douban.request_delay" :min="0" :max="60" :step="1" />
+              <div class="form-hint">豆瓣反爬较严，建议 ≥5s。短了容易被临时封 IP</div>
+            </el-form-item>
+            <el-form-item label="缓存 TTL(天)">
+              <el-input-number v-model="form.douban.cache_ttl_days" :min="1" :max="365" />
             </el-form-item>
           </el-form>
         </el-card>
@@ -318,6 +421,205 @@
         </el-card>
       </el-tab-pane>
 
+      <!-- ============ 缓存 TTL ============ -->
+      <el-tab-pane name="cache">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><Timer /></el-icon>
+            <span>缓存 TTL</span>
+          </div>
+        </template>
+
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><Timer /></el-icon>
+              <span>缓存有效期</span>
+            </div>
+          </template>
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
+            修改后<b>必须重启后端</b>才生效（设置在模块加载时一次性读取）。<br/>
+            路径反查索引固定 30 秒不可改；其余缓存都在这里。
+          </el-alert>
+          <el-form label-width="200px">
+            <el-form-item label="TMDB API 缓存(分钟)">
+              <el-input-number v-model="form.cache.tmdb_minutes" :min="1" :max="10080" />
+              <span class="form-hint">热门 / 详情 / 搜索结果</span>
+            </el-form-item>
+            <el-form-item label="库统计缓存(分钟)">
+              <el-input-number v-model="form.cache.library_stats_minutes" :min="1" :max="10080" />
+              <span class="form-hint">视频数 / 总占用 / 总时长 / 缺海报</span>
+            </el-form-item>
+            <el-form-item label="剧集树形子节点(分钟)">
+              <el-input-number v-model="form.cache.tree_children_minutes" :min="1" :max="10080" />
+              <span class="form-hint">Series→Seasons / Season→Episodes / Series 聚合摘要</span>
+            </el-form-item>
+            <el-form-item label="字幕扫描结果(分钟)">
+              <el-input-number v-model="form.cache.subtitle_scan_minutes" :min="1" :max="20160" />
+              <span class="form-hint">缺字幕统计的复用窗口</span>
+            </el-form-item>
+            <el-form-item label="MDB List 评分(天)">
+              <el-input-number v-model="form.mdblist.cache_ttl_days" :min="1" :max="365" />
+              <span class="form-hint">DB 字段过期判定（IMDB / RT / Metacritic 等）</span>
+            </el-form-item>
+            <el-form-item label="豆瓣评分(天)">
+              <el-input-number v-model="form.douban.cache_ttl_days" :min="1" :max="365" />
+              <span class="form-hint">DB 字段过期判定</span>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- ============ 字幕下载 ============ -->
+      <el-tab-pane name="subtitle">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><Document /></el-icon>
+            <span>字幕下载</span>
+          </div>
+        </template>
+
+        <!-- 语言偏好 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge subtitle-common">字幕</span>
+              <span>语言偏好</span>
+            </div>
+          </template>
+          <el-form :model="form.subtitle" label-width="160px">
+            <el-form-item label-width="0" class="lang-stacked">
+              <el-checkbox-group v-model="form.subtitle.preferred_langs" class="lang-line">
+                <el-checkbox label="chs.eng">简英双语</el-checkbox>
+                <el-checkbox label="chs">简体中文</el-checkbox>
+                <el-checkbox label="cht.eng">繁英双语</el-checkbox>
+                <el-checkbox label="cht">繁体中文</el-checkbox>
+                <el-checkbox label="eng">英语</el-checkbox>
+                <el-checkbox label="jpn">日语</el-checkbox>
+                <el-checkbox label="kor">韩语</el-checkbox>
+              </el-checkbox-group>
+              <div class="form-hint">
+                字幕扫描判定"是否缺字幕"的依据；下载时也按此顺序挑最匹配的字幕。<strong>简英双语</strong>对应 <code>.chs.eng.srt</code> / <code>chs&amp;eng</code> 等双语字幕，命中优先级最高。
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- 字幕格式偏好（紧跟语言偏好，跟"想要什么字幕"语义聚合） -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge subtitle-common">字幕</span>
+              <span>格式偏好</span>
+            </div>
+          </template>
+          <p class="form-hint" style="margin-bottom: 12px">
+            压缩包内同语言有多种格式时，按下方顺序只保留排名最高的一份（不再重复下载所有格式）。
+            <strong>ASS</strong> 支持丰富样式，<strong>SRT</strong> 通用兼容性好，<strong>SUP</strong> 是蓝光图形字幕。
+          </p>
+          <SourcePool
+            v-model="form.subtitle.preferred_formats"
+            :all-keys="allSubtitleFormatKeys"
+            :labels="subtitleFormatLabels"
+          />
+        </el-card>
+
+        <!-- 字幕下载源 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><Files /></el-icon>
+              <span>下载源</span>
+            </div>
+          </template>
+          <p class="form-hint" style="margin-bottom: 12px">
+            自动下载缺失字幕时按下方顺序尝试，第一个返回结果即采用。assrt / OpenSubtitles 走"搜索"接口；
+            Shooter 用文件 hash 命中（中文电影率高、不需 Key）。
+          </p>
+          <SourcePool
+            v-model="form.subtitle.sources"
+            :all-keys="allSubtitleSourceKeys"
+            :labels="subtitleSourceLabels"
+          />
+        </el-card>
+
+        <!-- OpenSubtitles -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge opensubs">OS</span>
+              <span>OpenSubtitles</span>
+              <el-tag size="small" :type="form.subtitle.opensubtitles_api_key ? 'success' : 'info'" effect="plain">
+                {{ form.subtitle.opensubtitles_api_key ? '已配置' : '未配置' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form :model="form.subtitle" label-width="160px">
+            <el-form-item label="API Key">
+              <el-input v-model="form.subtitle.opensubtitles_api_key" type="password" show-password />
+              <div class="form-hint">
+                <a href="https://www.opensubtitles.com/consumers" target="_blank">opensubtitles.com/consumers</a> 申请
+              </div>
+            </el-form-item>
+            <el-form-item label="用户名">
+              <el-input v-model="form.subtitle.opensubtitles_username" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="form.subtitle.opensubtitles_password" type="password" show-password />
+            </el-form-item>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number
+                v-model="form.subtitle.opensubtitles_request_delay"
+                :min="0"
+                :max="60"
+                :step="0.5"
+                :precision="1"
+              />
+              <div class="form-hint">
+                两次请求之间的最小间隔。免费层 5 次/10s + 200 次/天，建议 ≥2s 留余量。
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- 射手字幕 assrt.net -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge assrt">射手</span>
+              <span>assrt.net（射手字幕）</span>
+              <el-tag size="small" :type="form.subtitle.assrt_api_token ? 'success' : 'info'" effect="plain">
+                {{ form.subtitle.assrt_api_token ? '已配置' : '未配置' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form :model="form.subtitle" label-width="160px">
+            <el-form-item label="API Token">
+              <el-input v-model="form.subtitle.assrt_api_token" type="password" show-password />
+              <div class="form-hint">
+                注册账号后在
+                <a href="https://secure.assrt.net/usercp.php" target="_blank">secure.assrt.net/usercp.php</a>
+                复制 32 位 Token
+              </div>
+            </el-form-item>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number
+                v-model="form.subtitle.assrt_request_delay"
+                :min="0"
+                :max="60"
+                :step="0.5"
+                :precision="1"
+              />
+              <div class="form-hint">
+                官方限频 20 次/分钟（按 token + IP 共享），建议 ≥3s 不会触发限频。
+                超频时 API 会返回 30900，前端会提示"配额超限"。
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- ============ 缓存 TTL ============ -->
       <!-- ============ 成人内容 ============ -->
       <el-tab-pane name="adult">
         <template #label>
@@ -334,9 +636,8 @@
               <el-switch v-model="form.adult.enabled" />
               <span class="form-hint">禁用时菜单不显示、相关 API 不挂载</span>
             </el-form-item>
-            <el-form-item label="刮削间隔(秒)">
-              <el-input-number v-model="form.adult.scraper_delay" :min="1" :max="300" :step="5" />
-              <span class="form-hint">两次刮削请求之间的间隔（默认 30 秒，避免被封）</span>
+            <el-form-item label="同源连续刮削间隔(秒)">
+              <el-input-number v-model="form.adult.scraper_delay" :min="1" :max="300" :step="1" />
             </el-form-item>
             <el-form-item label="自动监视">
               <el-switch v-model="form.adult.auto_scrape" />
@@ -353,59 +654,386 @@
             <div class="cfg-card-head">
               <el-icon><Files /></el-icon>
               <span>刮削数据源</span>
-              <el-tag size="small" type="info" effect="plain">{{ enabledSourceCount }} 个启用</el-tag>
             </div>
           </template>
 
           <p class="form-hint" style="margin-bottom: 12px">
-            按顺序尝试，第一个命中即返回。可拖动排序、自定义镜像 URL、单独配代理。
+            按顺序尝试，第一个命中即返回。可拖动 / 上下调优先级，可自定义镜像 URL。
           </p>
 
-          <div class="sources-list">
-            <div
-              v-for="(src, idx) in form.adult.sources"
-              :key="idx"
-              class="source-row"
-              :class="{ disabled: !src.enabled }"
-            >
-              <el-switch v-model="src.enabled" />
-              <el-select v-model="src.name" style="width: 140px">
-                <el-option
-                  v-for="key in availableSources(src.name)"
-                  :key="key"
-                  :label="sourceLabels[key] || key"
-                  :value="key"
-                />
-              </el-select>
-              <el-input
-                v-model="src.base_url"
-                :placeholder="`默认 ${defaultBaseUrls[src.name] || ''}`"
-                clearable
+          <SourcePool
+            v-model="form.adult.sources"
+            :all-keys="allSourceKeys"
+            :labels="sourceLabels"
+            :default-base-urls="defaultBaseUrls"
+            allow-base-url
+          />
+        </el-card>
+
+        <!-- 女优库 lazy 构建 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><User /></el-icon>
+              <span>女优档案库</span>
+              <el-tag
+                size="small"
+                :type="actressStatus.running ? 'success' : 'info'"
+                effect="plain"
+              >
+                {{ actressStatus.running ? `运行中 · ${actressStatus.current_phase || '...'}` : '未运行' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <p class="form-hint" style="margin-bottom: 12px">
+            后台慢爬 javdb 把番号库里出现过的所有女优名字（中/日/英/别名）归一化到同一档案，
+            后续可"葵司"="葵つかさ"="Tsukasa Aoi"互相对应。运行期间可随时停，下次再点开始会接着跑。
+          </p>
+
+          <el-form label-width="160px">
+            <el-form-item label="请求间隔(秒)">
+              <el-input-number
+                v-model="actressDelay"
+                :min="2"
+                :max="60"
+                :step="1"
+                :disabled="actressStatus.running"
+                style="width: 140px"
               />
-              <el-input
-                v-model="src.proxy"
-                placeholder="此源专用代理（可选）"
-                style="width: 200px"
-                clearable
-              />
-              <el-button-group>
-                <el-button size="small" :disabled="idx === 0" @click="moveSource(idx, -1)" title="上移">
-                  <el-icon><ArrowUp /></el-icon>
-                </el-button>
-                <el-button size="small" :disabled="idx === form.adult.sources.length - 1" @click="moveSource(idx, 1)" title="下移">
-                  <el-icon><ArrowDown /></el-icon>
-                </el-button>
-                <el-button size="small" type="danger" @click="form.adult.sources.splice(idx, 1)" title="删除">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </el-button-group>
+              <span class="form-hint">
+                两次请求最小间隔。**保守爬**建议 ≥5s，避免被 javdb 风控。
+              </span>
+            </el-form-item>
+          </el-form>
+
+          <div class="actress-stats">
+            <div class="stat-cell">
+              <div class="stat-num">{{ actressStatus.total ?? 0 }}</div>
+              <div class="stat-label">总数</div>
+            </div>
+            <div class="stat-cell ok">
+              <div class="stat-num">{{ actressStatus.resolved ?? 0 }}</div>
+              <div class="stat-label">已解析</div>
+            </div>
+            <div class="stat-cell pending">
+              <div class="stat-num">{{ actressStatus.pending ?? 0 }}</div>
+              <div class="stat-label">待解析</div>
+            </div>
+            <div class="stat-cell miss">
+              <div class="stat-num">{{ actressStatus.not_found ?? 0 }}</div>
+              <div class="stat-label">未找到</div>
             </div>
           </div>
 
-          <el-button text type="primary" @click="addSource" style="margin-top: 12px">
-            <el-icon><Plus /></el-icon>
-            添加数据源
-          </el-button>
+          <div v-if="actressStatus.running" class="actress-current">
+            <el-icon class="spin"><Loading /></el-icon>
+            正在解析：<strong>{{ actressStatus.current_query || '(准备中...)' }}</strong>
+            <span class="run-counts">
+              本轮 +{{ actressStatus.resolved_in_run || 0 }} 解析 ·
+              {{ actressStatus.merged_in_run || 0 }} 合并 ·
+              {{ actressStatus.not_found_in_run || 0 }} 未找到
+            </span>
+          </div>
+
+          <div v-if="actressStatus.last_error" class="actress-error">
+            <el-icon><Warning /></el-icon> {{ actressStatus.last_error }}
+          </div>
+
+          <div class="actress-actions">
+            <el-button
+              v-if="!actressStatus.running"
+              type="primary"
+              :icon="VideoPlay"
+              @click="startActressBuild"
+            >
+              开始构建
+            </el-button>
+            <el-button
+              v-else
+              type="warning"
+              :icon="VideoPause"
+              @click="stopActressBuild"
+            >
+              停止
+            </el-button>
+            <el-button :icon="Refresh" @click="refreshActressStatus" plain>刷新</el-button>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- ============ 入库流水线 ============ -->
+      <el-tab-pane name="dispatch">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><Download /></el-icon>
+            <span>入库流水线</span>
+          </div>
+        </template>
+
+        <!-- 顶部：全局设置 + LLM 识别 双列并排 -->
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-card shadow="never" class="cfg-card">
+              <template #header>
+                <div class="cfg-card-head">
+                  <span class="badge dispatch-badge">DISPATCH</span>
+                  <span>全局设置</span>
+                </div>
+              </template>
+
+              <el-form :model="form.dispatch" label-width="140px" size="small" @submit.prevent>
+                <el-form-item label="启用流水线">
+                  <el-switch v-model="form.dispatch.enabled" />
+                  <span class="form-hint">关闭后所有自动转移、孤儿认领暂停</span>
+                </el-form-item>
+
+                <el-form-item label="转移模式">
+                  <el-radio-group v-model="form.dispatch.default_move_mode">
+                    <el-radio value="copy">复制（保种）</el-radio>
+                    <el-radio value="move">移动（不保种）</el-radio>
+                  </el-radio-group>
+                  <span class="form-hint">所有 media_type 统一使用</span>
+                </el-form-item>
+
+                <el-form-item label="复制 buffer (MB)">
+                  <el-input-number v-model="form.dispatch.copy_buffer_mb" :min="1" :max="64" controls-position="right" />
+                </el-form-item>
+
+                <el-form-item label="Sweeper 轮询 (秒)">
+                  <el-input-number v-model="form.dispatch.poll_interval_seconds" :min="30" :max="600" controls-position="right" />
+                  <span class="form-hint">扫描失败/僵尸任务并重派的兜底周期</span>
+                </el-form-item>
+
+                <el-form-item label="下载项认领 (秒)">
+                  <el-input-number v-model="form.dispatch.adopt_interval_seconds" :min="60" :max="3600" :step="60" controls-position="right" />
+                  <span class="form-hint">认领 qB Web / Jackett RSS 推过来的下载项（流水线之外加进来的种子）</span>
+                </el-form-item>
+
+                <el-form-item label="下载目录">
+                  <el-input v-model="form.qbittorrent.download_path" placeholder="X:/downloads 或 /downloads" />
+                  <span class="form-hint">
+                    <strong>仅用于后端配额监视</strong>（shutil.disk_usage），写**后端能直接 stat 到的路径**。
+                    qB 加种子用它自己的默认下载路径，跟这里无关。
+                  </span>
+                </el-form-item>
+
+                <el-form-item label="垃圾目录">
+                  <el-input v-model="form.dispatch.trash_dir" placeholder="/downloads/.trash" />
+                  <span class="form-hint">organizer 把 sample/nfo/RARBG.txt 等丢到这里</span>
+                </el-form-item>
+
+                <el-form-item label="垃圾清理 (天)">
+                  <el-input-number v-model="trashIntervalDays" :min="1" :max="30" :step="1" controls-position="right" />
+                  <span class="form-hint">到点清空整个垃圾目录（想保留更久就调大）</span>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </el-col>
+
+          <el-col :span="12">
+            <el-card shadow="never" class="cfg-card">
+              <template #header>
+                <div class="cfg-card-head">
+                  <span class="badge llm-badge">LLM</span>
+                  <span>识别兜底 AI</span>
+                  <el-tag size="small" :type="form.llm.api_key ? 'success' : 'info'" effect="plain">
+                    {{ form.llm.api_key ? '已配置' : '未配置' }}
+                  </el-tag>
+                </div>
+              </template>
+
+              <el-form :model="form.llm" label-width="100px" size="small" @submit.prevent>
+                <el-form-item label="启用">
+                  <el-switch v-model="form.llm.enabled" />
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Aim"
+                    :loading="llmTesting"
+                    @click="testLlm"
+                    style="margin-left: 32px"
+                  >测试连接</el-button>
+                  <span v-if="llmTestResult" class="llm-test-result" :class="llmTestResult.ok ? 'ok' : 'fail'">
+                    {{ llmTestResult.message }}
+                  </span>
+                </el-form-item>
+
+                <el-form-item label="Provider">
+                  <el-select v-model="form.llm.provider" style="width: 100%" @change="onLlmProviderChange">
+                    <el-option label="阿里通义千问 (qwen)" value="qwen" />
+                    <el-option label="DeepSeek" value="deepseek" />
+                    <el-option label="OpenAI" value="openai" />
+                    <el-option label="LM Studio（本地）" value="lmstudio" />
+                  </el-select>
+                </el-form-item>
+
+                <el-form-item label="API Key">
+                  <el-input v-model="form.llm.api_key" type="password" show-password placeholder="sk-xxxxxxxx" clearable />
+                </el-form-item>
+
+                <el-form-item label="Base URL">
+                  <el-input v-model="form.llm.base_url" placeholder="OpenAI 兼容接口地址" />
+                </el-form-item>
+
+                <el-form-item label="模型">
+                  <el-input v-model="form.llm.model" placeholder="如 qwen-plus / gpt-4o-mini" />
+                </el-form-item>
+
+                <el-form-item label="信心阈值">
+                  <el-input-number v-model="form.llm.confidence_threshold" :min="0.5" :max="1.0" :step="0.05" :precision="2" controls-position="right" />
+                  <span class="form-hint">
+                    LLM 返回的 confidence ≥ 此值，识别结果直接采用；低于此值落入「待审核」等用户人工确认。推荐 0.80–0.90。
+                  </span>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <!-- 各类型规则：每行 2 列 -->
+        <el-card shadow="never" class="cfg-card" style="margin-top: 12px">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge dispatch-badge">RULES</span>
+              <span>各类型的目标库 + 路径模板</span>
+              <el-tag size="small" :type="dispatchAllConfigured ? 'success' : 'warning'" effect="plain">
+                {{ dispatchAllConfigured ? '已全部配置' : '部分未配置' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <p class="form-hint" style="margin-bottom: 12px">
+            未配置 library 的类型，自动认领（adopt）会落到「待审核」队列让用户人工选；
+            手动添加种子时会显示库选择下拉，不影响。
+          </p>
+
+          <el-row :gutter="12">
+            <el-col v-for="mt in dispatchMediaTypes" :key="mt.key" :span="12">
+              <div class="dispatch-rule-row">
+                <div class="dispatch-rule-head">
+                  <el-icon class="mt-icon" :class="`mt-${mt.key}`"><component :is="mt.icon" /></el-icon>
+                  <span class="mt-label">{{ mt.label }}</span>
+                  <span class="mt-tag">{{ mt.key }}</span>
+                  <el-tag
+                    size="small"
+                    :type="form.dispatch.rules[mt.key]?.library_id ? 'success' : 'warning'"
+                    effect="plain"
+                  >
+                    {{ form.dispatch.rules[mt.key]?.library_id ? '已选库' : '未选库' }}
+                  </el-tag>
+                </div>
+
+                <el-form :model="form.dispatch.rules[mt.key]" label-width="80px" size="small" @submit.prevent>
+                  <el-form-item label="目标库">
+                    <el-select
+                      v-model="form.dispatch.rules[mt.key].library_id"
+                      placeholder="选 Jellyfin 库"
+                      filterable
+                      clearable
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="lib in jellyfinLibraries"
+                        :key="lib.id"
+                        :label="`${lib.name} (${lib.collection_type || '?'})`"
+                        :value="lib.id"
+                      />
+                    </el-select>
+                  </el-form-item>
+
+                  <el-form-item label="路径模板">
+                    <el-input v-model="form.dispatch.rules[mt.key].location_template" />
+                    <span class="form-hint default-hint">目录默认：{{ DISPATCH_DEFAULT_LOCATION[mt.key] }}</span>
+                  </el-form-item>
+
+                  <el-form-item label="文件模板">
+                    <el-input v-model="form.dispatch.rules[mt.key].file_template" />
+                    <span class="form-hint default-hint">文件默认：{{ DISPATCH_DEFAULT_FILE[mt.key] }}（不含扩展名）</span>
+                  </el-form-item>
+                </el-form>
+              </div>
+            </el-col>
+          </el-row>
+
+          <!-- 模板变量速查 + 库列表刷新按钮 -->
+          <div class="template-vars-hint">
+            <strong>模板变量</strong>
+            <code>{library_root}</code>
+            <code>{title}</code>
+            <code>{year}</code>
+            <code>{series_name}</code>
+            <code>{anime_name}</code>
+            <code>{season:02d}</code>
+            <code>{episode:02d}</code>
+            <code>{code}</code>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- ============ 日志 ============ -->
+      <el-tab-pane name="logs">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><Document /></el-icon>
+            <span>日志</span>
+          </div>
+        </template>
+
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge logs">LOG</span>
+              <span>后端日志（{{ logsState.file || '...' }}）</span>
+              <el-tag size="small" type="info" effect="plain">
+                root level: {{ logsState.level || '?' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <div class="logs-toolbar">
+            <el-form-item label="日志级别" label-width="100px" style="margin-bottom: 0">
+              <el-select v-model="logsLevelChoice" size="small" style="width: 130px" @change="onLogLevelChange">
+                <el-option label="DEBUG" value="DEBUG" />
+                <el-option label="INFO" value="INFO" />
+                <el-option label="WARNING" value="WARNING" />
+                <el-option label="ERROR" value="ERROR" />
+                <el-option label="CRITICAL" value="CRITICAL" />
+              </el-select>
+              <span class="form-hint">
+                修改即生效；重启后端将回到默认 INFO
+              </span>
+            </el-form-item>
+
+            <el-form-item label="过滤显示" label-width="100px" style="margin-bottom: 0">
+              <el-select v-model="logsViewLevel" size="small" style="width: 130px" @change="loadLogs">
+                <el-option label="全部" value="" />
+                <el-option label="DEBUG+" value="DEBUG" />
+                <el-option label="INFO+" value="INFO" />
+                <el-option label="WARNING+" value="WARNING" />
+                <el-option label="ERROR+" value="ERROR" />
+              </el-select>
+              <span class="form-hint">
+                只过滤显示，不影响后端记录
+              </span>
+            </el-form-item>
+
+            <el-form-item label="行数" label-width="60px" style="margin-bottom: 0">
+              <el-input-number v-model="logsLines" :min="50" :max="5000" :step="100" size="small" @change="loadLogs" />
+            </el-form-item>
+
+            <div class="logs-actions">
+              <el-switch v-model="logsAutoRefresh" active-text="自动刷新(3s)" />
+              <el-button size="small" :icon="Refresh" @click="loadLogs" :loading="logsLoading">手动刷新</el-button>
+            </div>
+          </div>
+
+          <div class="logs-meta" v-if="logsState.size_bytes">
+            文件大小: {{ formatBytes(logsState.size_bytes) }} ·
+            显示 {{ logsState.count }} 行
+          </div>
+
+          <pre ref="logsViewer" class="logs-viewer" v-loading="logsLoading">{{ logsContent || '（无日志）' }}</pre>
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -416,15 +1044,51 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import {
-  Refresh, Check, Connection, Coin, Link, Lock,
-  Files, Plus, Delete, ArrowUp, ArrowDown, Right,
+  Refresh, Check, Connection, Link, Lock,
+  Files, Plus, Delete, ArrowUp, ArrowDown, Right, Timer,
+  Document, User, Loading, VideoPlay, VideoPause, Warning,
+  Aim, Download,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi } from '@/api'
+import { configApi, adultApi, logsApi, jellyfinApi } from '@/api'
+import SourcePool from '@/components/SourcePool.vue'
 
 const activeTab = ref('basic')
 const loading = ref(false)
 const saving = ref(false)
+
+// Jellyfin API key 权限检查
+const checkingApiKey = ref(false)
+const apiKeyCheckResult = ref(null)
+const onCheckApiKey = async () => {
+  checkingApiKey.value = true
+  apiKeyCheckResult.value = null
+  try {
+    const r = await jellyfinApi.checkApiKey()
+    apiKeyCheckResult.value = r.data || {}
+    if (r.data?.ok) {
+      ElMessage.success('Jellyfin 管理员权限 OK')
+    } else {
+      ElMessage.warning(r.data?.message || '权限检查失败')
+    }
+  } catch (e) {
+    apiKeyCheckResult.value = {
+      ok: false,
+      message: e.response?.data?.detail || e.message || '请求失败',
+    }
+    ElMessage.error('检查失败：' + apiKeyCheckResult.value.message)
+  } finally {
+    checkingApiKey.value = false
+  }
+}
+
+// 垃圾清理周期：UI 用"天"输入，db/config 仍用秒存储
+const trashIntervalDays = computed({
+  get: () => Math.max(1, Math.round((form.dispatch?.trash_interval_seconds || 86400) / 86400)),
+  set: (days) => {
+    form.dispatch.trash_interval_seconds = Math.max(1, Number(days || 1)) * 86400
+  },
+})
 
 // 脏数据相关变量（form 在下面定义，watch 注册延后到 form 定义之后）
 const dirty = ref(false)
@@ -432,18 +1096,62 @@ let initialSnapshot = ''
 let watchStarted = false
 
 const sourceLabels = {
+  missav: 'MissAV',
   javbus: 'JavBus',
   javdb: 'JavDB',
   javlibrary: 'JavLibrary',
-  avmoo: 'AvMoo',
+  avbase: 'AvBase',
 }
 const defaultBaseUrls = {
+  missav: 'https://missav.ai/cn',
   javbus: 'https://www.javbus.com',
   javdb: 'https://javdb.com',
   javlibrary: 'https://www.javlibrary.com/cn',
-  avmoo: 'https://avmoo.cyou/cn',
+  avbase: 'https://www.avbase.net',
 }
 const allSourceKeys = Object.keys(sourceLabels)
+
+// 字幕下载源
+const subtitleSourceLabels = {
+  assrt: '射手网 (assrt.net)',
+  opensubtitles: 'OpenSubtitles',
+  shooter: 'Shooter (shooter.cn / hash 命中)',
+}
+const allSubtitleSourceKeys = Object.keys(subtitleSourceLabels)
+
+// 字幕格式偏好（用 SourcePool 渲染，行为同下载源排序）
+const subtitleFormatLabels = {
+  ass: 'ASS / SSA（带样式，首选）',
+  srt: 'SRT（通用兼容）',
+  sup: 'SUP（蓝光图形字幕）',
+  vtt: 'VTT（WebVTT）',
+}
+const allSubtitleFormatKeys = Object.keys(subtitleFormatLabels)
+
+// 入库流水线 - 各 media_type 的规则卡片元数据（标签 + 图标）
+// 各 media_type 卡片元数据。纪录片不独立成 media_type，按 TMDB 设计走 movie/tv + genre 99
+const dispatchMediaTypes = [
+  { key: 'movie', label: '电影', icon: VideoPlay },
+  { key: 'tv',    label: '剧集', icon: Document },
+  { key: 'anime', label: '动漫', icon: Files },
+  { key: 'adult', label: '成人', icon: Lock },
+]
+
+// 路径模板默认值（跟 blank() / mergeIntoForm rulesDefaults 同步；
+// 也跟后端 config_models.py DispatchConfig.rules 默认一致）
+// 拆成目录 + 文件名 两套，分别对应 location_template / file_template
+const DISPATCH_DEFAULT_LOCATION = {
+  movie: '{library_root}/{title} ({year})',
+  tv:    '{library_root}/{series_name}/Season {season:02d}',
+  anime: '{library_root}/{anime_name}',
+  adult: '{library_root}/{code}',
+}
+const DISPATCH_DEFAULT_FILE = {
+  movie: '{title} ({year})',
+  tv:    '({series_name})S{season:02d}E{episode:02d}',
+  anime: '({anime_name}){episode:03d}',
+  adult: '{code}({title})',
+}
 
 const blank = () => ({
   jellyfin: { host: '', api_key: '' },
@@ -452,18 +1160,79 @@ const blank = () => ({
     opensubtitles_api_key: '',
     opensubtitles_username: '',
     opensubtitles_password: '',
+    opensubtitles_request_delay: 2.0,
     preferred_langs: ['chs', 'eng'],
+    assrt_api_token: '',
+    assrt_request_delay: 3.0,
+    sources: [
+      { name: 'assrt', enabled: true },
+      { name: 'opensubtitles', enabled: true },
+    ],
+    // 字幕格式偏好（SourcePool 复用：用 [{name}] 形式存储，submit 时拍平）
+    preferred_formats: [
+      { name: 'ass' }, { name: 'srt' }, { name: 'sup' },
+    ],
   },
   jackett: { host: '', api_key: '', search_keywords: [], default_keywords: '' },
   qbittorrent: { host: '', username: '', password: '', download_path: '/downloads' },
+  // 外部命令行工具路径（启动时注入到 PATH 前缀）
+  tools: {
+    ffmpeg_dir: '',
+    mkvtoolnix_dir: '',
+  },
+  // LLM 兜底识别配置
+  llm: {
+    enabled: false,
+    provider: 'qwen',
+    api_key: '',
+    model: 'qwen-plus',
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    timeout_seconds: 15,
+    max_retries: 1,
+    cache_ttl_days: 30,
+    confidence_threshold: 0.85,
+    daily_call_limit: 500,
+  },
+  // 入库流水线（每 media_type 仅配 library_id + location_template；
+  // file_template 由 organizer 内置；move_mode 由全局 default_move_mode 统一）
+  dispatch: {
+    enabled: true,
+    poll_interval_seconds: 30,
+    adopt_interval_seconds: 300,
+    trash_interval_seconds: 86400,
+    worker_concurrency: 1,
+    copy_buffer_mb: 8,
+    default_move_mode: 'copy',
+    trash_dir: '/downloads/.trash',
+    rules: {
+      movie: { library_id: '', location_template: '{library_root}/{title} ({year})',                  file_template: '{title} ({year})' },
+      tv:    { library_id: '', location_template: '{library_root}/{series_name}/Season {season:02d}', file_template: '({series_name})S{season:02d}E{episode:02d}' },
+      anime: { library_id: '', location_template: '{library_root}/{anime_name}',                     file_template: '({anime_name}){episode:03d}' },
+      adult: { library_id: '', location_template: '{library_root}/{code}',                            file_template: '{code}({title})' },
+    },
+  },
   database: { host: '', port: 5432, name: '', user: '', password: '' },
   path_mappings: { enabled: false, rules: [] },
+  cache: {
+    tmdb_minutes: 120,
+    library_stats_minutes: 120,
+    tree_children_minutes: 120,
+    subtitle_scan_minutes: 1440,
+  },
+  mdblist: { enabled: true, api_key: '', request_delay: 1.0, cache_ttl_days: 30 },
+  douban: { enabled: true, request_delay: 5.0, cache_ttl_days: 30 },
+  wikidata: {
+    enabled: true,
+    user_agent: 'JellyfinTools/1.0',
+    language_order: ['zh', 'en'],
+    request_delay: 1.0,
+  },
   adult: {
     enabled: false,
     library_ids: [],
     auto_detect: true,
     auto_scrape: false,
-    scraper_delay: 30,
+    scraper_delay: 3,
     sources: [],
   },
 })
@@ -485,16 +1254,6 @@ watch(form, () => {
   dirty.value = computeSnapshot() !== initialSnapshot
 }, { deep: true })
 
-const enabledSourceCount = computed(() =>
-  form.adult.sources.filter(s => s.enabled).length
-)
-
-const availableSources = (current) => {
-  // 已被其他行选中的不可选（除了自己当前的）
-  const used = new Set(form.adult.sources.map(s => s.name).filter(n => n !== current))
-  return allSourceKeys.filter(k => !used.has(k))
-}
-
 const mergeIntoForm = (cfg) => {
   for (const section of Object.keys(form)) {
     if (cfg[section]) {
@@ -507,8 +1266,44 @@ const mergeIntoForm = (cfg) => {
   }
   // 兜底：数组字段
   if (!Array.isArray(form.adult.sources)) form.adult.sources = []
+  // 清洗：把已下线/未知的源（如老配置里残留的 avmoo）过滤掉，避免显示空名行
+  form.adult.sources = form.adult.sources.filter(s => allSourceKeys.includes(s.name))
   if (!Array.isArray(form.adult.library_ids)) form.adult.library_ids = []
   if (!Array.isArray(form.jackett.search_keywords)) form.jackett.search_keywords = []
+  // 后端 preferred_formats 是 string[]，前端 SourcePool 要 [{name}]，做一次归一化
+  const rawFormats = form.subtitle.preferred_formats
+  if (Array.isArray(rawFormats) && rawFormats.length && typeof rawFormats[0] === 'string') {
+    form.subtitle.preferred_formats = rawFormats.map(f => ({ name: f }))
+  } else if (!Array.isArray(rawFormats) || !rawFormats.length) {
+    form.subtitle.preferred_formats = [
+      { name: 'ass' }, { name: 'srt' }, { name: 'sup' },
+    ]
+  }
+  if (!Array.isArray(form.subtitle.sources)) {
+    // 旧 config 没 sources 字段时给个默认值，保证页面有内容
+    form.subtitle.sources = [
+      { name: 'assrt', enabled: true },
+      { name: 'opensubtitles', enabled: true },
+    ]
+  }
+  // dispatch.rules 兜底：用户 yaml 里若只配了部分 media_type，要保证全部 key 都在，
+  // 否则 mergeIntoForm 整体替换 rules dict 会让缺失的 media_type 在 UI 上消失
+  const rulesDefaults = {
+    movie: { library_id: '', location_template: '{library_root}/{title} ({year})',                  file_template: '{title} ({year})' },
+    tv:    { library_id: '', location_template: '{library_root}/{series_name}/Season {season:02d}', file_template: '({series_name})S{season:02d}E{episode:02d}' },
+    anime: { library_id: '', location_template: '{library_root}/{anime_name}',                     file_template: '({anime_name}){episode:03d}' },
+    adult: { library_id: '', location_template: '{library_root}/{code}',                            file_template: '{code}({title})' },
+  }
+  if (!form.dispatch.rules || typeof form.dispatch.rules !== 'object') {
+    form.dispatch.rules = rulesDefaults
+  } else {
+    for (const mt of Object.keys(rulesDefaults)) {
+      // 剥掉历史遗留的 move_mode（schema 已删，全局统一）；保留 file_template / location_template
+      const incoming = form.dispatch.rules[mt] || {}
+      const { move_mode, ...rest } = incoming
+      form.dispatch.rules[mt] = { ...rulesDefaults[mt], ...rest }
+    }
+  }
 }
 
 const loadConfig = async () => {
@@ -539,24 +1334,6 @@ const discardChanges = async () => {
   } catch { return }
   await loadConfig()
   ElMessage.info('已恢复到保存前的状态')
-}
-
-const moveSource = (idx, delta) => {
-  const newIdx = idx + delta
-  if (newIdx < 0 || newIdx >= form.adult.sources.length) return
-  const arr = form.adult.sources
-  ;[arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]]
-}
-
-
-const addSource = () => {
-  const used = new Set(form.adult.sources.map(s => s.name))
-  const available = allSourceKeys.find(k => !used.has(k))
-  if (!available) {
-    ElMessage.warning('已添加所有支持的数据源')
-    return
-  }
-  form.adult.sources.push({ name: available, enabled: false, base_url: '', proxy: '' })
 }
 
 // 路径映射规则增删
@@ -620,7 +1397,7 @@ const confirmSave = async () => {
 
   saving.value = true
   try {
-    // 清理 sources：去掉空 base_url / proxy 字段以保持 yaml 整洁
+    // 清理 sources：去掉空 base_url 字段以保持 yaml 整洁
     const cleanedAdult = {
       ...form.adult,
       sources: form.adult.sources
@@ -628,7 +1405,6 @@ const confirmSave = async () => {
         .map(s => {
           const out = { name: s.name, enabled: !!s.enabled }
           if (s.base_url) out.base_url = s.base_url
-          if (s.proxy) out.proxy = s.proxy
           return out
         }),
       // 保存即视为"用户已确认过"
@@ -642,7 +1418,18 @@ const confirmSave = async () => {
       )),
       default_keywords: (form.jackett.default_keywords || '').trim(),
     }
-    const payload = { ...form, adult: cleanedAdult, jackett: cleanedJackett }
+    // 清理 subtitle.sources：只保留 name + enabled，过滤无 name 项
+    // 清理 subtitle.preferred_formats：UI 用 [{name}] 形式，submit 时拍平为 ['ass','srt',...]
+    const cleanedSubtitle = {
+      ...form.subtitle,
+      sources: (form.subtitle.sources || [])
+        .filter(s => s.name)
+        .map(s => ({ name: s.name, enabled: !!s.enabled })),
+      preferred_formats: (form.subtitle.preferred_formats || [])
+        .map(f => (typeof f === 'string' ? f : f?.name))
+        .filter(Boolean),
+    }
+    const payload = { ...form, adult: cleanedAdult, jackett: cleanedJackett, subtitle: cleanedSubtitle }
     await configApi.saveFull(payload)
     ElMessage.success('配置已保存')
     await loadConfig()
@@ -653,7 +1440,236 @@ const confirmSave = async () => {
   }
 }
 
-onMounted(() => loadConfig())
+// ---- 女优库构建状态 ----
+const actressStatus = ref({})
+const actressDelay = ref(5)
+let actressPollTimer = null
+
+const refreshActressStatus = async () => {
+  try {
+    const r = await adultApi.actressBuildStatus()
+    actressStatus.value = r.data || {}
+    if (actressStatus.value.request_delay) {
+      actressDelay.value = actressStatus.value.request_delay
+    }
+  } catch (e) {
+    // 后端没起 / 没启用 adult 模块时，保持原状不报错
+  }
+}
+const startActressBuild = async () => {
+  try {
+    await adultApi.actressBuildStart(actressDelay.value)
+    ElMessage.success('女优库构建已启动，后台慢慢爬中')
+    refreshActressStatus()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '启动失败')
+  }
+}
+const stopActressBuild = async () => {
+  try {
+    await adultApi.actressBuildStop()
+    ElMessage.info('已请求停止；线程会在当前 query 完成后退出')
+    refreshActressStatus()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '停止失败')
+  }
+}
+
+// ============================================================================
+// 日志查看 tab
+// ============================================================================
+const logsState = reactive({ file: '', size_bytes: 0, count: 0, level: '' })
+const logsContent = ref('')
+const logsLines = ref(500)
+const logsViewLevel = ref('')         // 前端过滤显示的级别（不影响后端）
+const logsLevelChoice = ref('INFO')   // 后端 root logger 实际级别
+const logsLoading = ref(false)
+const logsAutoRefresh = ref(false)
+const logsViewer = ref(null)
+let logsPollTimer = null
+
+const loadLogs = async () => {
+  logsLoading.value = true
+  try {
+    const r = await logsApi.tail(logsLines.value, logsViewLevel.value)
+    logsState.file = r.data.file
+    logsState.size_bytes = r.data.size_bytes || 0
+    logsState.count = r.data.count || 0
+    logsContent.value = (r.data.lines || []).join('')
+    // 滚到底部（看最新日志）
+    nextTick(() => {
+      const el = logsViewer.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  } catch (e) {
+    ElMessage.error('日志加载失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+const refreshLogLevel = async () => {
+  try {
+    const r = await logsApi.getLevel()
+    logsState.level = r.data.root_level
+    logsLevelChoice.value = r.data.root_level
+  } catch {}
+}
+
+// ---- LLM 测试 / 切换 provider 时填默认 base_url + model ----
+const llmTesting = ref(false)
+const llmTestResult = ref(null)
+
+const _LLM_PROVIDER_DEFAULTS = {
+  qwen: {
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus',
+  },
+  deepseek: {
+    base_url: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+  },
+  openai: {
+    base_url: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+  },
+  lmstudio: {
+    // LM Studio 本地默认 OpenAI 兼容端点；model 留空让用户填实际加载的模型名
+    // （LM Studio 启动时会显示 model id，比如 'qwen2.5-7b-instruct'）
+    base_url: 'http://localhost:1234/v1',
+    model: '',
+  },
+}
+
+const onLlmProviderChange = (provider) => {
+  const defaults = _LLM_PROVIDER_DEFAULTS[provider]
+  if (!defaults) return
+  // 若用户没填或填的是别的 provider 默认值 → 自动切换
+  const allDefaults = Object.values(_LLM_PROVIDER_DEFAULTS)
+  if (!form.llm.base_url || allDefaults.some(d => d.base_url === form.llm.base_url)) {
+    form.llm.base_url = defaults.base_url
+  }
+  if (!form.llm.model || allDefaults.some(d => d.model === form.llm.model)) {
+    form.llm.model = defaults.model
+  }
+}
+
+const testLlm = async () => {
+  if (!form.llm.api_key) {
+    llmTestResult.value = { ok: false, message: '请先填 API Key' }
+    return
+  }
+  llmTesting.value = true
+  llmTestResult.value = null
+  try {
+    // 简单方案：用一个真实种子名调一次 LLM，确认通路
+    // 直接 fetch LLM 接口（OpenAI 兼容 chat/completions），10s 超时
+    const r = await fetch(form.llm.base_url.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${form.llm.api_key}`,
+      },
+      body: JSON.stringify({
+        model: form.llm.model,
+        messages: [
+          { role: 'user', content: 'reply with json {"ok":true}' },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout((form.llm.timeout_seconds || 10) * 1000),
+    })
+    if (!r.ok) {
+      const txt = await r.text()
+      llmTestResult.value = { ok: false, message: `HTTP ${r.status}: ${txt.slice(0, 200)}` }
+      return
+    }
+    const data = await r.json()
+    const content = data?.choices?.[0]?.message?.content || '(no content)'
+    llmTestResult.value = {
+      ok: true,
+      message: `✓ 连接 OK，模型 ${data.model || form.llm.model}，返回: ${String(content).slice(0, 80)}`,
+    }
+  } catch (e) {
+    llmTestResult.value = { ok: false, message: '连接失败: ' + (e.message || String(e)) }
+  } finally {
+    llmTesting.value = false
+  }
+}
+
+const onLogLevelChange = async (lvl) => {
+  try {
+    await logsApi.setLevel(lvl)
+    logsState.level = lvl
+    ElMessage.success(`日志级别已改为 ${lvl}（重启后端会失效）`)
+  } catch (e) {
+    ElMessage.error('修改失败：' + (e.response?.data?.detail || e.message))
+    refreshLogLevel()  // 同步真实状态
+  }
+}
+
+watch(logsAutoRefresh, (v) => {
+  if (logsPollTimer) {
+    clearInterval(logsPollTimer)
+    logsPollTimer = null
+  }
+  if (v) {
+    logsPollTimer = setInterval(loadLogs, 3000)
+  }
+})
+
+// 切到 logs tab 时首次加载
+watch(activeTab, (v) => {
+  if (v === 'logs') {
+    refreshLogLevel()
+    loadLogs()
+  }
+})
+
+// 字节人类化格式（与日志元信息显示用）
+const formatBytes = (b) => {
+  if (!b) return '0 B'
+  const u = ['B', 'KB', 'MB', 'GB']
+  let i = 0
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++ }
+  return `${b.toFixed(i ? 1 : 0)} ${u[i]}`
+}
+
+// ---- Jellyfin 库列表（流水线 tab 用） ----
+const jellyfinLibraries = ref([])
+const librariesLoading = ref(false)
+const loadJellyfinLibraries = async () => {
+  librariesLoading.value = true
+  try {
+    const r = await jellyfinApi.libraries(false)
+    jellyfinLibraries.value = r.data?.libraries || []
+  } catch (e) {
+    console.warn('加载 jellyfin 库列表失败', e)
+    ElMessage.warning('加载 Jellyfin 库列表失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    librariesLoading.value = false
+  }
+}
+
+// 已配 library_id 的 media_type 数 / 全部 → 显示徽章状态
+const dispatchAllConfigured = computed(() => {
+  return dispatchMediaTypes.every(mt => !!form.dispatch.rules[mt.key]?.library_id)
+})
+
+onMounted(() => {
+  loadConfig()
+  loadJellyfinLibraries()
+  refreshActressStatus()
+  // 运行中每 3 秒轮询一次；闲时 10 秒一次（保留检测重启 / 别处启动）
+  actressPollTimer = setInterval(() => {
+    refreshActressStatus()
+  }, 5000)
+})
+onBeforeUnmount(() => {
+  if (actressPollTimer) clearInterval(actressPollTimer)
+  if (logsPollTimer) clearInterval(logsPollTimer)
+})
 
 // ==== 离开页面前拦截（脏数据模式核心）====
 const onBeforeUnload = (e) => {
@@ -767,7 +1783,50 @@ onBeforeRouteLeave(async () => {
     &.opensubs { background: linear-gradient(135deg, #be1622 0%, #ff6b35 100%); }
     &.jackett { background: linear-gradient(135deg, #1f7c89 0%, #25b3c4 100%); }
     &.qbit { background: linear-gradient(135deg, #2f80ed 0%, #56ccf2 100%); }
+    &.mdblist { background: linear-gradient(135deg, #ef4444 0%, #f59e0b 100%); }
+    &.douban { background: linear-gradient(135deg, #2c8c1d 0%, #6cc24a 100%); font-size: 13px; }
+    &.wikidata { background: linear-gradient(135deg, #006699 0%, #339cd1 100%); }
+    &.subtitle-common { background: linear-gradient(135deg, #475569 0%, #94a3b8 100%); font-size: 11px; }
+    &.assrt { background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); font-size: 11px; }
+    &.logs { background: linear-gradient(135deg, #1e293b 0%, #475569 100%); font-size: 12px; }
   }
+}
+
+// 日志 tab
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 12px;
+
+  .logs-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-left: auto;
+  }
+}
+
+.logs-meta {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+}
+
+.logs-viewer {
+  height: 600px;
+  margin: 0;
+  padding: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+  white-space: pre;
+  word-wrap: normal;
 }
 
 .form-hint {
@@ -776,6 +1835,132 @@ onBeforeRouteLeave(async () => {
   color: #909399;
 
   a { color: #6366f1; }
+}
+
+// 表单项里跟在控件后面的 form-hint（任何标签 span / div / p）：
+// 跟控件之间留 12px 间距 + 与控件中线垂直居中对齐。
+// 长文本会因 el-form-item__content 是 flex-wrap 自动换到下一行。
+// 卡片顶部直接挂的 <p class="form-hint">（el-card 直属，不在 el-form-item__content 内）不受影响。
+:deep(.el-form-item__content) {
+  > .form-hint {
+    margin-top: 0;
+    margin-left: 12px;
+    align-self: center;
+    line-height: 1.4;
+  }
+}
+
+
+// 路径模板下方的默认值提示：mono 字体方便对比 + 浅色不抢眼
+.form-hint.default-hint {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+// 女优库卡片
+.actress-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 16px 0 12px;
+
+  .stat-cell {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+    background: #fafbfc;
+
+    .stat-num {
+      font-size: 22px;
+      font-weight: 600;
+      color: #334155;
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 4px;
+    }
+
+    &.ok    { background: rgba(34, 197, 94, 0.08); border-color: rgba(34, 197, 94, 0.3); .stat-num { color: #16a34a; } }
+    &.pending { background: rgba(99, 102, 241, 0.08); border-color: rgba(99, 102, 241, 0.3); .stat-num { color: #6366f1; } }
+    &.miss  { background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.3); .stat-num { color: #d97706; } }
+  }
+}
+
+.actress-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f0f9ff;
+  border-left: 3px solid #6366f1;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 10px;
+
+  .spin {
+    animation: spin 1.5s linear infinite;
+    color: #6366f1;
+  }
+  .run-counts {
+    margin-left: auto;
+    color: #94a3b8;
+    font-size: 12px;
+  }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.actress-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid #ef4444;
+  border-radius: 4px;
+  color: #b91c1c;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.actress-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+// 期望语言：3 行（label / 选项 / 说明）
+.lang-stacked {
+  // 强制 el-form-item 内容区改成纵向排列；默认是横向 flex 会把 3 个块挤一行
+  :deep(.el-form-item__content) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    line-height: 1.4;
+  }
+
+  .lang-label {
+    font-size: 14px;
+    color: #606266;
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+
+  .lang-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 4px;
+  }
 }
 
 .sub-section-title {
@@ -876,6 +2061,94 @@ onBeforeRouteLeave(async () => {
     .el-input {
       flex: 1;
     }
+  }
+}
+
+// ---- LLM tab ----
+.llm-test-result {
+  margin-left: 12px;
+  font-size: 12px;
+  &.ok { color: #10b981; }
+  &.fail { color: #ef4444; }
+}
+.badge.tools-badge {
+  background: #e0e7ff;
+  color: #4338ca;
+}
+.badge.llm-badge {
+  background: linear-gradient(135deg, #fce7f3, #ddd6fe);
+  color: #7e22ce;
+}
+.badge.dispatch-badge {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+// ---- 流水线规则卡（双列布局，每条规则一个紧凑 row） ----
+.dispatch-rule-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 10px 14px 0;
+  margin-bottom: 12px;
+  background: #f8fafc;
+
+  .dispatch-rule-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed #e2e8f0;
+
+    .mt-icon {
+      font-size: 16px;
+      &.mt-movie       { color: #3b82f6; }
+      &.mt-tv          { color: #8b5cf6; }
+      &.mt-anime       { color: #ec4899; }
+      &.mt-documentary { color: #0891b2; }
+      &.mt-adult       { color: #ef4444; }
+    }
+    .mt-label {
+      font-weight: 600;
+      color: #1e293b;
+      font-size: 13px;
+    }
+    .mt-tag {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      color: #64748b;
+      background: #e2e8f0;
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
+  }
+
+  // 紧凑 form 减少 vertical 占位
+  :deep(.el-form-item) { margin-bottom: 8px; }
+  :deep(.el-form-item__label) { line-height: 28px; }
+}
+
+.template-vars-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #475569;
+
+  strong { color: #1e293b; }
+  code {
+    padding: 1px 6px;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+    color: #0369a1;
   }
 }
 

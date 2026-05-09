@@ -11,8 +11,21 @@
           <template #content>
             <div>{{ systemInfo.operating_system }}</div>
             <div v-if="systemInfo.id" class="muted">{{ systemInfo.id }}</div>
+            <div v-if="jellyfinHost" class="muted">点击在新窗口打开 Jellyfin Web</div>
           </template>
-          <span class="server-info">
+          <a
+            v-if="jellyfinHost"
+            class="server-info link"
+            :href="jellyfinHost"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <el-icon><Connection /></el-icon>
+            Jellyfin {{ systemInfo.version }}
+            <span class="server-name">· {{ systemInfo.server_name }}</span>
+            <el-icon class="ext-icon"><Link /></el-icon>
+          </a>
+          <span v-else class="server-info">
             <el-icon><Connection /></el-icon>
             Jellyfin {{ systemInfo.version }}
             <span class="server-name">· {{ systemInfo.server_name }}</span>
@@ -50,10 +63,13 @@
           <!-- 封面底图 -->
           <div v-if="lib.cover_url" class="cover-bg" />
           <div class="card-content">
-            <!-- 顶部：库名 + 类型 -->
+            <!-- 顶部：库名 + 类型（成人库用「成人」徽章替代 电影/剧集/混合）-->
             <div class="card-header">
               <span class="lib-name">{{ lib.name }}</span>
-              <el-tag :type="typeTagType(lib.collection_type)" size="small">
+              <el-tag v-if="lib.is_adult" type="warning" size="small" effect="dark">
+                成人
+              </el-tag>
+              <el-tag v-else :type="typeTagType(lib.collection_type)" size="small">
                 {{ typeLabel(lib.collection_type) }}
               </el-tag>
             </div>
@@ -120,9 +136,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh, MagicStick, Check, Close, Loading, DataAnalysis, Warning, Right, Connection } from '@element-plus/icons-vue'
+import { Refresh, MagicStick, Check, Close, Loading, DataAnalysis, Warning, Right, Connection, Link } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { jellyfinApi } from '@/api'
+import { jellyfinApi, configApi } from '@/api'
 import RefreshLibraryDialog from '@/components/RefreshLibraryDialog.vue'
 import MediaToolbar from '@/components/MediaToolbar.vue'
 
@@ -134,6 +150,7 @@ const statsError = reactive({})  // 每个库的加载错误信息
 const loading = ref(false)
 const loadError = ref('')
 const systemInfo = ref(null)
+const jellyfinHost = ref('')  // 用于 Jellyfin Web 跳转链接
 const refreshing = ref(false)  // 当前刷新中的库 id（单库），或 true（全局）
 const showRefreshDialog = ref(false)
 const targetLibrary = ref(null)  // 弹窗目标库（null 表示全局）
@@ -154,6 +171,8 @@ const globalScope = computed(() => ({
  * 加载库列表 + 各库 stats。
  * force=true 时绕过后端的 2h 缓存，强制重算 —— 用于"刷新"按钮。
  * 默认 false：首次进入页面 / 路由切回都走缓存，避免对几千个文件全盘 rglob。
+ *
+ * stats 是 fire-and-forget 并发跑（4-5 worker），不阻塞列表渲染。
  */
 const loadAll = async (force = false) => {
   loading.value = true
@@ -172,6 +191,12 @@ const loadAll = async (force = false) => {
   try {
     const r = await jellyfinApi.systemInfo()
     systemInfo.value = r.data
+  } catch {}
+  try {
+    // 拿 Jellyfin host 用于"在新窗口打开"链接
+    const r2 = await configApi.getFull()
+    const host = r2.data?.config?.jellyfin?.host
+    if (host) jellyfinHost.value = host.replace(/\/$/, '') + '/web/'
   } catch {}
 }
 
@@ -198,6 +223,10 @@ const loadAllStatsParallel = async (libs, concurrency = 5, force = false) => {
 const loadStats = async (lib, silent = false, force = false) => {
   loadingStats[lib.id] = true
   delete statsError[lib.id]
+  // 强制刷新：清掉旧数据，让模板的 placeholder（loadingStats && !stats）自然显示
+  // 转圈，跟首次进入页面的视觉一致 —— 否则模板会走 v-else-if 显示旧数字，
+  // 用户看不出后端正在重算
+  if (force) delete stats[lib.id]
   try {
     const res = await jellyfinApi.libraryStats(lib.id, force)
     stats[lib.id] = res.data
@@ -257,7 +286,7 @@ const onRefreshConfirm = async (mode) => {
 }
 
 const goDetail = (lib) => {
-  router.push(`/jellyfin/libraries/${lib.id}`)
+  router.push(`/medialibraries/${lib.id}`)
 }
 
 /**
@@ -290,12 +319,17 @@ const formatDuration = (seconds) => {
 /**
  * 健康度统计 chip：用 items_healthy / total + 百分比展示
  * 颜色：100% 绿，>=90% 蓝，>=70% 橙，否则红
+ *
+ * 注：总览页不读 LibraryDetail 的 stats prefs。详情页隐藏 health 是用户在那一页的视图偏好，
+ * 不应该影响"媒体库总览"这个全局视图。lib 参数保留接口但不使用。
  */
-const buildHealthMetric = (jf) => {
+const buildHealthMetric = (jf, lib) => {
   const total = jf.total_items || 0
   if (!total) return null
-  const healthy = jf.items_healthy ?? total
-  const ratio = total ? healthy / total : 1
+  // items_healthy 字段缺失（fields 没要 health）→ 不显示，但不假装 100%
+  if (jf.items_healthy == null) return null
+  const healthy = jf.items_healthy
+  const ratio = healthy / total
   let color = '#10b981'
   if (ratio < 0.7) color = '#ef4444'
   else if (ratio < 0.9) color = '#f59e0b'
@@ -335,7 +369,7 @@ const displayMetrics = (lib, s) => {
   if (runtimeSec > 0) {
     out.push({ label: '时长', value: formatDuration(runtimeSec), text: true })
   }
-  const health = buildHealthMetric(jf)
+  const health = buildHealthMetric(jf, lib)
   if (health) out.push(health)
   return out
 }
@@ -375,6 +409,7 @@ onMounted(loadAll)
   color: #475569;
   white-space: nowrap;
   cursor: help;
+  text-decoration: none;
 
   .el-icon {
     color: #00a4dc;  // Jellyfin 品牌蓝
@@ -383,6 +418,22 @@ onMounted(loadAll)
 
   .server-name {
     color: #94a3b8;
+  }
+
+  &.link {
+    cursor: pointer;
+    transition: color 0.15s ease;
+
+    &:hover {
+      color: #00a4dc;
+      .server-name { color: #00a4dc; }
+    }
+
+    .ext-icon {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-left: 2px;
+    }
   }
 }
 

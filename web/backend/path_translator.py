@@ -62,3 +62,28 @@ def translate_path_with_settings(path: str) -> str:
     if not settings.path_mappings_enabled:
         return path
     return translate_path(path, settings.path_mappings_rules)
+
+
+def reverse_translate_path(path: str, mappings: List[Dict]) -> str:
+    """
+    反向翻译：本机路径 → Jellyfin 视角路径。
+    用于通知 jellyfin 时（/Library/Media/Updated）传它能识别的路径。
+
+    把 mappings 里的 from / to 翻转再走 translate_path 即可。
+    """
+    if not path or not mappings:
+        return path
+    flipped = [
+        {'from': m.get('to'), 'to': m.get('from')}
+        for m in mappings
+        if m.get('from') and m.get('to')
+    ]
+    return translate_path(path, flipped)
+
+
+def reverse_translate_path_with_settings(path: str) -> str:
+    """便捷封装：读 settings 反向转换。enabled=False 时直接原样返回。"""
+    from web.backend.config import settings
+    if not settings.path_mappings_enabled:
+        return path
+    return reverse_translate_path(path, settings.path_mappings_rules)

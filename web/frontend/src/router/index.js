@@ -3,7 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
-    redirect: '/jellyfin/libraries',
+    redirect: '/medialibraries',
   },
   // 媒体库维护
   {
@@ -33,20 +33,20 @@ const routes = [
   },
   // 媒体库（Jellyfin 库总览 + 详情）
   {
-    path: '/jellyfin/libraries',
+    path: '/medialibraries',
     name: 'JellyfinLibraries',
     component: () => import('@/views/jellyfin/Libraries.vue'),
     meta: { title: '媒体库' }
   },
   {
-    path: '/jellyfin/libraries/:id',
+    path: '/medialibraries/:id',
     name: 'JellyfinLibraryDetail',
     component: () => import('@/views/jellyfin/LibraryDetail.vue'),
     meta: { title: '库详情' }
   },
   // 内容推荐与下载
   {
-    path: '/discover/trending',
+    path: '/discover',
     name: 'Trending',
     component: () => import('@/views/discover/Trending.vue'),
     meta: { title: '热门推荐' }
@@ -58,23 +58,16 @@ const routes = [
     meta: { title: '影视详情' }
   },
   {
-    path: '/discover/search',
+    path: '/resourcesearch',
     name: 'TorrentSearch',
     component: () => import('@/views/discover/Search.vue'),
-    meta: { title: '种子搜索' }
+    meta: { title: '资源搜索' }
   },
   {
-    path: '/discover/downloads',
+    path: '/downloadpipeline',
     name: 'Downloads',
     component: () => import('@/views/discover/Downloads.vue'),
-    meta: { title: '下载管理' }
-  },
-  // 成人内容
-  {
-    path: '/adult/library',
-    name: 'AdultLibrary',
-    component: () => import('@/views/adult/Library.vue'),
-    meta: { title: '番号库', adult: true }
+    meta: { title: '下载流水线' }
   },
   // 任务管理
   {

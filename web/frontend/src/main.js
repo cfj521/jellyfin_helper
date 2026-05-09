@@ -16,6 +16,16 @@ import router from './router'
 
 import './styles/main.scss'
 
+// 全局拦截 form submit 防止页面 reload。
+// 整个项目走 SPA + axios，form 元素仅作语义容器（如 el-form 渲染出来的 <form>）。
+// 各处 dialog 里的 input 在用户按回车时会触发浏览器隐式 form submit
+// （input + 按钮放在同一 <form> 里 → 整页跳转）—— 已是用户多次反馈的"按回车刷新整页" bug。
+// 业务真需要 submit 的场景仍可在自己的 @submit.prevent="..." 回调里执行 axios，
+// 这里的 capture-phase 全局拦截只是兜底，不影响这类显式回调的执行。
+window.addEventListener('submit', (e) => {
+  e.preventDefault()
+}, true)
+
 const app = createApp(App)
 
 // 注册所有图标

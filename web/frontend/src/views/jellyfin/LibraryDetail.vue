@@ -3,7 +3,7 @@
     <!-- 顶栏：返回 + 库名 + 操作 -->
     <div class="page-header">
       <div class="header-left">
-        <el-button link @click="$router.push('/jellyfin/libraries')">
+        <el-button link @click="$router.push('/medialibraries')">
           <el-icon><ArrowLeft /></el-icon>
           返回
         </el-button>
@@ -16,9 +16,9 @@
         </el-tag>
       </div>
       <div class="header-right">
-        <el-button @click="loadAll" :loading="loading">
+        <el-button @click="forceRefresh" :loading="loading || loadingStats || subtitleStatsLoading">
           <el-icon><Refresh /></el-icon>
-          刷新数据
+          强制刷新
         </el-button>
         <el-button @click="showDupDialog = true" :disabled="!library?.locations.length">
           <el-icon><Search /></el-icon>
@@ -30,6 +30,12 @@
         </el-button>
       </div>
     </div>
+
+    <!-- 成人库：完全切到自己的视图（自带 toolbar / paths / stats / filter / table） -->
+    <AdultLibraryView v-if="library?.is_adult" :library="library" />
+
+    <!-- 普通库：以下是原有的 toolbar / paths / stats / 内容预览 -->
+    <template v-if="library && !library.is_adult">
 
     <!-- 媒体处理工具栏：作用范围 = 当前库 / 选中条目 -->
     <MediaToolbar
@@ -60,7 +66,7 @@
         </div>
       </el-card>
 
-      <!-- 统计卡片：6 项指标 -->
+      <!-- 统计卡片：基础 4 项 + 4 项可选（用户在右上齿轮里勾选，按库持久化）-->
       <el-card shadow="never" class="stats-card">
         <template #header>
           <div class="card-header">
@@ -70,18 +76,20 @@
                 · 缓存于 {{ formatCacheAge(stats._cache_age_seconds) }}前
               </span>
             </span>
-            <el-tooltip content="重新计算并刷新字幕扫描（绕过 2 小时缓存）" placement="left">
-              <el-button
-                v-if="stats || statsError"
-                link
-                size="small"
-                :loading="loadingStats || subtitleStatsLoading"
-                @click="forceRefreshStats"
-              >
-                <el-icon><Refresh /></el-icon>
-                强制刷新统计
-              </el-button>
-            </el-tooltip>
+            <el-popover trigger="click" placement="bottom-end" :width="220">
+              <template #reference>
+                <el-button text size="small" title="显示项设置">
+                  <el-icon><Setting /></el-icon>
+                </el-button>
+              </template>
+              <div class="stats-toggle-list">
+                <div class="stats-toggle-title">本库显示项</div>
+                <el-checkbox v-model="visibleStats.health">总体健康度</el-checkbox>
+                <el-checkbox v-model="visibleStats.poster">缺海报</el-checkbox>
+                <el-checkbox v-model="visibleStats.subtitle">字幕覆盖</el-checkbox>
+                <el-checkbox v-model="visibleStats.tmdb">TMDB 绑定</el-checkbox>
+              </div>
+            </el-popover>
           </div>
         </template>
 
@@ -129,7 +137,7 @@
             placeholder="按标题搜索本库..."
             clearable
             size="small"
-            style="width: 260px"
+            style="width: 220px"
             @keyup.enter="onSearchSubmit"
             @clear="onSearchSubmit"
           >
@@ -137,6 +145,48 @@
               <el-icon><Search /></el-icon>
             </template>
           </el-input>
+
+          <!-- 年份过滤：多选，change 即提交 -->
+          <el-select
+            v-model="searchYears"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            filterable
+            allow-create
+            placeholder="年份"
+            size="small"
+            style="width: 160px"
+            @change="onSearchSubmit"
+          >
+            <el-option
+              v-for="y in yearOptions"
+              :key="y"
+              :label="String(y)"
+              :value="String(y)"
+            />
+          </el-select>
+
+          <!-- 风格过滤：多选；options 来自后端拉取的库内 Genres -->
+          <el-select
+            v-model="searchGenres"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            filterable
+            placeholder="风格/类型"
+            size="small"
+            style="width: 200px"
+            @change="onSearchSubmit"
+            @visible-change="onGenrePopoverOpen"
+          >
+            <el-option
+              v-for="g in genreOptions"
+              :key="g"
+              :label="g"
+              :value="g"
+            />
+          </el-select>
 
           <!-- 右侧组：分页 + Folder 开关紧贴在一起，作为整体推到行尾 -->
           <div class="header-right-group">
@@ -165,6 +215,7 @@
                 <el-icon class="hint-icon"><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
+            <ViewModeToggle v-model="viewMode" />
           </div>
         </div>
       </template>
@@ -172,6 +223,45 @@
       <div v-if="itemsLoading" class="loading-block">
         <el-icon class="spin"><Loading /></el-icon> 加载中...
       </div>
+
+      <!-- 网格视图：电影 / 剧集卡片（只显顶层项；树状子节点在 list 模式下展开） -->
+      <div v-else-if="viewMode === 'grid'" class="grid-view">
+        <div
+          v-for="row in sortedItems"
+          :key="row.id"
+          class="grid-card"
+          :class="{ 'grid-card--problem': row.health?.level === 'error' }"
+          @click="onGridCardClick(row)"
+        >
+          <div class="grid-poster-wrap">
+            <el-image
+              v-if="row.poster_url"
+              :src="row.poster_url"
+              :alt="row.name"
+              fit="cover"
+              lazy
+              class="grid-poster"
+            >
+              <template #error>
+                <div class="grid-placeholder">{{ row.name?.slice(0, 2) || '?' }}</div>
+              </template>
+            </el-image>
+            <div v-else class="grid-placeholder">{{ row.name?.slice(0, 2) || '?' }}</div>
+            <span
+              v-if="row.health?.level && row.health.level !== 'ok'"
+              class="grid-health-dot"
+              :class="`grid-health-dot--${row.health.level}`"
+              :title="(row.health.issues || []).map(i => i.label).join('\n')"
+            />
+          </div>
+          <div class="grid-meta">
+            <div class="grid-title" :title="row.name">{{ row.name }}</div>
+            <div v-if="row.year" class="grid-year">{{ row.year }}</div>
+          </div>
+        </div>
+        <el-empty v-if="!sortedItems.length" description="此库还没有内容" />
+      </div>
+
       <el-table
         v-else
         ref="itemsTable"
@@ -185,69 +275,97 @@
         :tree-props="{ children: '_children', hasChildren: 'has_children' }"
         :indent="32"
         :row-class-name="rowClassName"
-        @selection-change="onSelectionChange"
       >
-        <el-table-column type="selection" width="50" />
-        <!-- 海报列：作为"第一个 default 列"承接 Element Plus 的 tree prefix（indent + chevron）。
-             师哥示例宽度 100；考虑到 Episode 16:9 缩略图 72 + chevron 22 + max indent 64 ≈ 158，
-             保险起见略放宽到 170 -->
-        <el-table-column label="海报" width="170">
+        <!--
+          ============ 左侧大 cell（合并 选择/展开/海报/标题）============
+          整行内容用一个 div 包起来，padding-left 按 row.level 缩进
+            level 0 (Series):  padding-left = 16
+            level 1 (Season):  padding-left = 16 + 32 = 48
+            level 2 (Episode): padding-left = 16 + 64 = 80
+          checkbox / chevron / 海报 / 标题 都在这个 div 内，整体右移
+        -->
+        <el-table-column min-width="500">
+          <template #header>
+            <div class="row-content row-content--header">
+              <el-checkbox
+                :model-value="allSelected"
+                :indeterminate="someSelected && !allSelected"
+                @change="onToggleAll"
+              />
+              <span class="hdr-spacer" />
+              <span class="hdr-label">海报</span>
+              <span class="hdr-label hdr-label--title">标题</span>
+            </div>
+          </template>
           <template #default="{ row }">
-            <a
-              v-if="row.detail_url"
-              :href="row.detail_url"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="poster-thumb"
-              @click.stop
-            >
-              <el-image
-                v-if="row.poster_url"
-                :src="row.poster_url"
-                :alt="row.name"
-                fit="cover"
-                lazy
-                :class="['poster-img', `poster-img--${(row.type || '').toLowerCase()}`]"
+            <div class="row-content" :style="{ paddingLeft: `${16 + (row.level || 0) * 32}px` }">
+              <!-- 选择框 -->
+              <el-checkbox
+                :model-value="isRowSelected(row)"
+                @change="(v) => toggleRowSelection(row, v)"
+                @click.stop
+              />
+              <!-- 展开/折叠 chevron（无子节点时占等宽空白） -->
+              <button
+                v-if="row.has_children"
+                :class="['row-chevron', { 'row-chevron--expanded': expandedSet.has(row.id) }]"
+                @click.stop="toggleRowExpand(row)"
+              />
+              <span v-else class="row-chevron-spacer" />
+              <!-- 海报缩略图 -->
+              <a
+                v-if="row.detail_url"
+                :href="row.detail_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="poster-thumb"
+                @click.stop
               >
-                <template #error>
-                  <div class="poster-placeholder">无图</div>
-                </template>
-              </el-image>
-              <div v-else :class="['poster-placeholder', `poster-img--${(row.type || '').toLowerCase()}`]">
-                无图
+                <el-image
+                  v-if="row.poster_url"
+                  :src="row.poster_url"
+                  :alt="row.name"
+                  fit="cover"
+                  lazy
+                  :class="['poster-img', `poster-img--${(row.type || '').toLowerCase()}`]"
+                >
+                  <template #error>
+                    <div class="poster-placeholder">无图</div>
+                  </template>
+                </el-image>
+                <div v-else :class="['poster-placeholder', `poster-img--${(row.type || '').toLowerCase()}`]">
+                  无图
+                </div>
+              </a>
+              <div v-else class="poster-thumb">
+                <div :class="['poster-placeholder', `poster-img--${(row.type || '').toLowerCase()}`]">
+                  无图
+                </div>
               </div>
-            </a>
-            <div v-else class="poster-thumb">
-              <div :class="['poster-placeholder', `poster-img--${(row.type || '').toLowerCase()}`]">
-                无图
-              </div>
+              <!-- 标题 -->
+              <a
+                v-if="row.detail_url"
+                :href="row.detail_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                :class="['item-link', `title--${(row.type || '').toLowerCase()}`]"
+                @click.stop
+              >{{ rowDisplayTitle(row) }}</a>
+              <span v-else :class="`title--${(row.type || '').toLowerCase()}`">{{ rowDisplayTitle(row) }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="标题" min-width="240" show-overflow-tooltip>
-          <template #default="{ row }">
-            <a
-              v-if="row.detail_url"
-              :href="row.detail_url"
-              target="_blank"
-              rel="noopener noreferrer"
-              :class="['item-link', `title--${(row.type || '').toLowerCase()}`]"
-              @click.stop
-            >{{ rowDisplayTitle(row) }}</a>
-            <span v-else :class="`title--${(row.type || '').toLowerCase()}`">{{ rowDisplayTitle(row) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="年份" width="72">
+        <el-table-column label="年份" width="72" fixed="right">
           <template #default="{ row }">
             <span v-if="row.year">{{ row.year }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <!-- 时长：Episode 显示单集时长；Series 显示总时长（聚合后才有）；Season 显示 — -->
-        <el-table-column label="时长" width="100" align="center">
+        <!-- 时长：Movie / Episode 显示单作品时长；Series 显示总时长（聚合后才有）；Season 显示 — -->
+        <el-table-column label="时长" width="100" align="center" fixed="right">
           <template #default="{ row }">
-            <span v-if="row.type === 'Episode' && row.runtime_min">
-              {{ row.runtime_min }} 分
+            <span v-if="(row.type === 'Episode' || row.type === 'Movie') && row.runtime_min">
+              {{ formatRuntimeMin(row.runtime_min) }}
             </span>
             <span v-else-if="row.type === 'Series' && row.total_runtime_min">
               {{ formatTotalRuntime(row.total_runtime_min) }}
@@ -255,7 +373,7 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="健康" width="160">
+        <el-table-column label="健康" width="140" fixed="right">
           <template #default="{ row }">
             <div class="health-cell health-cell--problem">
               <!-- 第一行：状态点 + 错误码 / 正常 -->
@@ -321,38 +439,103 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="type" label="类型" width="78">
+        <el-table-column prop="type" label="类型" width="70" fixed="right">
           <template #default="{ row }">
             <el-tag size="small" :type="typeTagType(row.type)">
               {{ typeLabel(row.type) }}
             </el-tag>
           </template>
         </el-table-column>
-        <!-- 集数：
-             Series 行：未拉聚合时显示"X 季"，聚合到位后追加"· Y 集"
-             Season 行：显示"Y 集"
-             Episode：— -->
-        <el-table-column label="集数" width="110" align="center">
+        <!-- 集数：仅对剧集 / 混合库显示（电影库无集数概念） -->
+        <el-table-column
+          v-if="library?.collection_type !== 'movies'"
+          label="集数"
+          width="100"
+          align="center"
+          fixed="right"
+        >
           <template #default="{ row }">
-            <span v-if="row.type === 'Series' && row.child_count != null">
-              {{ row.child_count }} 季<span v-if="row.episode_count != null"> · {{ row.episode_count }} 集</span>
-            </span>
+            <div v-if="row.type === 'Series' && row.child_count != null" class="count-stack">
+              <span>{{ row.child_count }} 季</span>
+              <span v-if="row.episode_count != null" class="count-sub">{{ row.episode_count }} 集</span>
+            </div>
             <span v-else-if="row.type === 'Season' && row.child_count != null">
               {{ row.child_count }} 集
             </span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="评分" width="140">
+        <!-- 字幕语言：仅 visibleStats.subtitle 开启时显示（与 stats 卡的"字幕覆盖"同开关） -->
+        <el-table-column
+          v-if="visibleStats.subtitle"
+          label="字幕"
+          width="130"
+          fixed="right"
+        >
+          <template #default="{ row }">
+            <div class="sub-cell">
+              <!-- 第一行：已有字幕语言 chip -->
+              <div class="sub-lang-row">
+                <el-tag
+                  v-for="l in (row.subtitle_langs || []).slice(0, 3)"
+                  :key="l"
+                  size="small"
+                  :type="subLangTagType(l)"
+                  effect="light"
+                  class="sub-lang-chip"
+                >{{ subLangLabel(l) }}</el-tag>
+                <el-tooltip
+                  v-if="(row.subtitle_langs?.length || 0) > 3"
+                  :content="row.subtitle_langs.slice(3).map(subLangLabel).join(' / ')"
+                  placement="top"
+                >
+                  <span class="sub-lang-more">+{{ row.subtitle_langs.length - 3 }}</span>
+                </el-tooltip>
+                <span v-if="!row.subtitle_langs?.length" class="muted">—</span>
+              </div>
+
+              <!-- 第二行：下载字幕按钮（仅 Movie / Episode） -->
+              <el-button
+                v-if="(row.type === 'Movie' || row.type === 'Episode') && row.path"
+                size="small"
+                text
+                type="primary"
+                class="sub-dl-btn"
+                @click.stop="openSubtitleDownload(row)"
+              >
+                <el-icon><Search /></el-icon>
+                下载字幕
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="风格/类型" width="130" fixed="right">
+          <template #default="{ row }">
+            <div v-if="row.genres?.length" class="genre-cell">
+              <el-tag
+                v-for="g in row.genres.slice(0, 2)"
+                :key="g"
+                size="small"
+                effect="plain"
+                class="genre-chip"
+              >{{ g }}</el-tag>
+              <el-tooltip v-if="row.genres.length > 2" :content="row.genres.slice(2).join(' / ')" placement="top">
+                <span class="genre-more">+{{ row.genres.length - 2 }}</span>
+              </el-tooltip>
+            </div>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="评分" width="120" fixed="right">
           <template #default="{ row }">
             <div class="rating-cell">
               <span v-if="row.community_rating != null" class="rating jf-rating" title="Jellyfin 社区评分">
                 <el-icon><Star /></el-icon>
                 {{ row.community_rating.toFixed(1) }}
               </span>
-              <!-- 多源评分仅对 Series 拉取（Episode/Season 没独立 TMDB ID 或意义不大）-->
+              <!-- 多源评分：Movie / Series 都拉（Episode/Season 没独立 TMDB ID）-->
               <RatingsBadges
-                v-if="row.type === 'Series' && row.tmdb_id"
+                v-if="(row.type === 'Series' || row.type === 'Movie') && row.tmdb_id"
                 compact
                 :rating="ratingFor(row)"
               />
@@ -364,22 +547,15 @@
               >
                 字幕 {{ row.subtitle_coverage.coverage_pct }}%
               </span>
-              <span v-if="row.community_rating == null && !(row.type === 'Series' && ratingFor(row))" class="muted">—</span>
+              <span
+                v-if="row.community_rating == null
+                  && !((row.type === 'Series' || row.type === 'Movie') && ratingFor(row))"
+                class="muted"
+              >—</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="演员图" width="100" align="center">
-          <template #default="{ row }">
-            <span
-              v-if="row.actors_total"
-              :class="row.actors_with_image < row.actors_total ? 'actor-incomplete' : 'actor-ok'"
-            >
-              {{ row.actors_with_image }} / {{ row.actors_total }}
-            </span>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="TMDB" width="100" align="center">
+        <el-table-column label="TMDB" width="90" align="center" fixed="right">
           <template #default="{ row }">
             <!-- Episode 没有独立 TMDB ID，直接 — -->
             <span v-if="row.type === 'Episode'" class="muted">—</span>
@@ -397,17 +573,20 @@
             <el-tag v-else type="info" size="small" effect="plain">未绑定</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="文件路径" width="180" show-overflow-tooltip>
+        <el-table-column label="文件路径" width="180" show-overflow-tooltip fixed="right">
           <template #default="{ row }">
             <div class="path-cell">
-              <div class="path-text" :title="row.path">{{ row.path || '—' }}</div>
-              <button
+              <span class="path-text mono" :title="row.path">{{ row.path || '—' }}</span>
+              <el-button
                 v-if="row.path"
-                class="row-btn row-btn--ghost copy-btn"
+                text
+                size="small"
+                class="path-copy-btn"
+                title="复制路径到剪贴板"
                 @click.stop="copyPath(row.path)"
               >
-                复制
-              </button>
+                <el-icon><DocumentCopy /></el-icon>
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -416,9 +595,36 @@
       <el-empty v-if="!itemsLoading && !items.length" description="暂无内容" />
     </el-card>
 
+    </template>
+    <!-- /普通库视图 -->
+
     <!-- 重复检测对话框 -->
-    <el-dialog v-model="showDupDialog" title="重复检测" width="720" :close-on-click-modal="false">
-      <div v-if="library?.locations.length > 1" class="dup-path-pick">
+    <el-dialog v-model="showDupDialog" title="重复检测" width="780" :close-on-click-modal="false">
+      <!-- 检测模式 -->
+      <div class="dup-mode-pick">
+        <span class="dup-pick-label">检测模式：</span>
+        <el-radio-group v-model="dupMode" size="small">
+          <el-radio label="metadata">
+            Jellyfin 元数据
+            <el-tooltip placement="top">
+              <template #content>
+                <div>按 TMDB ID / IMDB ID / 标题+年份 / 同剧同集 分组</div>
+                <div>识别"同一作品的不同清晰度版本"等真正重复</div>
+                <div>不扫盘，瞬时返回</div>
+              </template>
+              <el-icon class="info-ic"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </el-radio>
+          <el-radio label="hash">
+            文件 byte hash
+            <el-tooltip placement="top" content="按 byte 大小+首尾 64KB hash 判定，识别完全相同的两个文件；扫盘较慢">
+              <el-icon class="info-ic"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </el-radio>
+        </el-radio-group>
+      </div>
+
+      <div v-if="dupMode === 'hash' && library?.locations.length > 1" class="dup-path-pick">
         <span class="dup-pick-label">检测路径：</span>
         <el-radio-group v-model="dupPath" size="small">
           <el-radio v-for="loc in library.locations" :key="loc" :label="loc">{{ loc }}</el-radio>
@@ -426,7 +632,83 @@
         </el-radio-group>
       </div>
 
-      <div v-if="dupResult" class="dup-result">
+      <!-- metadata 模式结果 -->
+      <div v-if="dupResult && dupMode === 'metadata'" class="dup-result">
+        <div class="dup-summary">
+          <el-tag>电影 {{ dupResult.total_movies }} · 剧集 {{ dupResult.total_episodes }}</el-tag>
+          <el-tag :type="dupResult.potential_duplicates > 0 ? 'warning' : 'success'">
+            重复组: {{ dupResult.potential_duplicates }}
+            <span v-if="dupResult.movie_dup_groups || dupResult.episode_dup_groups">
+              （电影 {{ dupResult.movie_dup_groups }} · 剧集 {{ dupResult.episode_dup_groups }}）
+            </span>
+          </el-tag>
+        </div>
+
+        <el-collapse v-if="dupResult.groups?.length" class="dup-groups">
+          <el-collapse-item
+            v-for="(group, idx) in dupResult.groups"
+            :key="dupGroupKey(group, idx)"
+            :name="dupGroupKey(group, idx)"
+          >
+            <template #title>
+              <div class="dup-group-title">
+                <el-tag size="small" :type="dupTagType(group.match_type)">
+                  {{ dupMatchLabel(group.match_type) }}
+                </el-tag>
+                <div class="dup-group-name-stack">
+                  <span class="dup-group-name">{{ groupHeadline(group) }}</span>
+                  <span v-if="groupSubline(group)" class="dup-group-sub">
+                    {{ groupSubline(group) }}
+                  </span>
+                </div>
+                <span class="dup-group-count">{{ group.files.length }} 个文件</span>
+              </div>
+            </template>
+
+            <el-radio-group
+              v-model="dupKeepMap[dupGroupKey(group, idx)]"
+              class="file-list"
+            >
+              <label
+                v-for="file in group.files"
+                :key="dupFileKey(file)"
+                class="file-row"
+              >
+                <el-radio :label="dupFileKey(file)" class="file-radio">保留</el-radio>
+                <div class="file-meta">
+                  <div class="file-name">
+                    {{ file.name }}
+                    <span v-if="file.version_label && file.version_label !== file.name" class="version-label">[{{ file.version_label }}]</span>
+                  </div>
+                  <div class="file-path">{{ file.path }}</div>
+                </div>
+                <el-tag size="small" class="file-size">{{ formatSize(file.size) }}</el-tag>
+              </label>
+            </el-radio-group>
+
+            <div class="dup-group-actions">
+              <el-button
+                size="small"
+                type="danger"
+                :disabled="!canDeleteOthers(group, idx)"
+                :loading="dupDeleting[dupGroupKey(group, idx)] || false"
+                @click="deleteOthersInGroup(group, idx)"
+              >
+                <el-icon><Delete /></el-icon>
+                删除其它 {{ group.files.length - 1 }} 项（保留勾选的）
+              </el-button>
+              <span class="dup-group-hint">
+                Jellyfin DELETE 会同时移除物理文件（需 EnableContentDeletion 权限）
+              </span>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+
+        <el-empty v-else description="未发现重复条目" />
+      </div>
+
+      <!-- hash 模式结果（同样支持删除其它，文件按 path 反查 jellyfin item） -->
+      <div v-else-if="dupResult && dupMode === 'hash'" class="dup-result">
         <div class="dup-summary">
           <el-tag>视频总数: {{ dupResult.total_videos }}</el-tag>
           <el-tag :type="dupResult.potential_duplicates > 0 ? 'warning' : 'success'">
@@ -437,13 +719,56 @@
         <el-collapse v-if="dupResult.groups?.length" class="dup-groups">
           <el-collapse-item
             v-for="(group, idx) in dupResult.groups"
-            :key="idx"
-            :title="`大小相似组 (${group.size_mb} MB) — ${group.files.length} 个文件`"
+            :key="dupGroupKey(group, idx)"
+            :name="dupGroupKey(group, idx)"
           >
-            <div v-for="file in group.files" :key="file.path" class="file-row">
-              <span class="file-name">{{ file.name }}</span>
-              <span class="file-path">{{ file.path }}</span>
-              <el-tag size="small">{{ formatSize(file.size) }}</el-tag>
+            <template #title>
+              <div class="dup-group-title">
+                <el-tag size="small" :type="dupTagType(group.match_type)">
+                  {{ dupMatchLabel(group.match_type) }}
+                </el-tag>
+                <div class="dup-group-name-stack">
+                  <span class="dup-group-name">{{ groupHeadline(group) }}</span>
+                  <span v-if="groupSubline(group)" class="dup-group-sub">
+                    {{ groupSubline(group) }}
+                  </span>
+                </div>
+                <span class="dup-group-count">{{ group.files.length }} 个文件</span>
+              </div>
+            </template>
+
+            <el-radio-group
+              v-model="dupKeepMap[dupGroupKey(group, idx)]"
+              class="file-list"
+            >
+              <label
+                v-for="file in group.files"
+                :key="dupFileKey(file)"
+                class="file-row"
+              >
+                <el-radio :label="dupFileKey(file)" class="file-radio">保留</el-radio>
+                <div class="file-meta">
+                  <div class="file-name">{{ file.name }}</div>
+                  <div class="file-path">{{ file.path }}</div>
+                </div>
+                <el-tag size="small" class="file-size">{{ formatSize(file.size) }}</el-tag>
+              </label>
+            </el-radio-group>
+
+            <div class="dup-group-actions">
+              <el-button
+                size="small"
+                type="danger"
+                :disabled="!canDeleteOthers(group, idx)"
+                :loading="dupDeleting[dupGroupKey(group, idx)] || false"
+                @click="deleteOthersInGroup(group, idx)"
+              >
+                <el-icon><Delete /></el-icon>
+                删除其它 {{ group.files.length - 1 }} 项（保留勾选的）
+              </el-button>
+              <span class="dup-group-hint">
+                hash 模式：通过路径反查 Jellyfin Item 后删除（含物理文件）
+              </span>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -451,14 +776,14 @@
         <el-empty v-else description="未发现重复文件" />
       </div>
 
-      <el-empty v-else-if="!dupLoading" description="点击「开始检测」扫描重复视频" />
+      <el-empty v-else-if="!dupLoading" description="点击「开始检测」开始" />
 
       <template #footer>
         <el-button @click="showDupDialog = false">关闭</el-button>
         <el-button
           type="primary"
           :loading="dupLoading"
-          :disabled="!library?.locations.length"
+          :disabled="!library?.locations.length && dupMode === 'hash'"
           @click="findDuplicates"
         >
           {{ dupResult ? '重新检测' : '开始检测' }}
@@ -488,20 +813,31 @@
       :mode="sampleDeleteMode"
       @deleted="onSampleDeleted"
     />
+
+    <!-- 字幕下载对话框（assrt 单视频搜索 + 下载） -->
+    <SubtitleDownloadDialog
+      v-model="showSubDownloadDialog"
+      :item="subDownloadTarget"
+      @downloaded="onSubtitleDownloaded"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, Refresh, MagicStick, Loading, Check, Close, Search, Link, Star,
-  VideoCamera, VideoPlay, Headset, Folder,
+  VideoCamera, VideoPlay, Headset, Folder, Setting, Delete, DocumentCopy,
   CaretTop, CaretBottom, InfoFilled,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { jellyfinApi, mediaApi, taskApi, ratingsApi, metadataApi } from '@/api'
+import ViewModeToggle from '@/components/ViewModeToggle.vue'
+import SubtitleDownloadDialog from '@/components/SubtitleDownloadDialog.vue'
+import { useViewMode } from '@/composables/useViewMode'
 import RefreshLibraryDialog from '@/components/RefreshLibraryDialog.vue'
+import AdultLibraryView from '@/views/jellyfin/AdultLibraryView.vue'
 import MediaToolbar from '@/components/MediaToolbar.vue'
 import IdentifyDialog from '@/components/IdentifyDialog.vue'
 import SampleDeleteDialog from '@/components/SampleDeleteDialog.vue'
@@ -521,6 +857,51 @@ const stats = ref(null)
 const loadingStats = ref(false)
 const statsError = ref('')
 
+// 统计卡每个可选指标的可见性（按库持久化在 localStorage）
+const visibleStats = ref({ health: true, poster: true, subtitle: true, tmdb: true })
+
+const _statsPrefsKey = (libId) => `lib-stats-prefs:${libId}`
+
+const loadStatsPrefs = (libId) => {
+  if (!libId) return
+  try {
+    const raw = localStorage.getItem(_statsPrefsKey(libId))
+    if (raw) {
+      const saved = JSON.parse(raw)
+      visibleStats.value = {
+        health:   saved.health   !== false,
+        poster:   saved.poster   !== false,
+        subtitle: saved.subtitle !== false,
+        tmdb:     saved.tmdb     !== false,
+      }
+    } else {
+      // 没存过：恢复默认全开
+      visibleStats.value = { health: true, poster: true, subtitle: true, tmdb: true }
+    }
+  } catch (e) {
+    console.warn('读 stats 偏好失败', e)
+  }
+}
+
+// visibleStats 变化时：(1) 按库持久化  (2) 启用了之前未启用的项 → 触发对应数据拉取
+// 用浅 snapshot 自管 oldVal，因为 deep watch 在 reactive 上的 oldVal 可能与 newVal 同引用
+let _lastVisibleStats = { health: true, poster: true, subtitle: true, tmdb: true }
+watch(visibleStats, (val) => {
+  if (id.value) {
+    try { localStorage.setItem(_statsPrefsKey(id.value), JSON.stringify(val)) } catch {}
+  }
+  const newlyOn = (k) => val[k] && !_lastVisibleStats[k]
+  // health / poster / tmdb 由 stats endpoint 提供：任一新启用就重拉一次（按新 fields 命中或新建缓存）
+  if (newlyOn('health') || newlyOn('poster') || newlyOn('tmdb')) {
+    loadStats()
+  }
+  // subtitle 是单独 API（首次触发会启后台扫描，比较贵；用户启用时再拉）
+  if (newlyOn('subtitle')) {
+    loadSubtitleStats()
+  }
+  _lastVisibleStats = { ...val }
+}, { deep: true })
+
 // 缺字幕统计（懒加载 + 轮询字幕扫描任务）
 const subtitleStats = ref(null)        // { status, task_id, without_required, total_videos, ... }
 const subtitleStatsLoading = ref(false)
@@ -530,6 +911,26 @@ let subtitlePollTimer = null
 const dupResult = ref(null)
 const dupLoading = ref(false)
 const dupPath = ref('')
+// 'metadata'（推荐：基于 Jellyfin TMDB/IMDB/标题年份/同剧同集）/ 'hash'（按 byte hash 扫盘）
+const dupMode = ref('metadata')
+
+const dupMatchLabel = (mt) => ({
+  tmdb: 'TMDB 同 ID',
+  imdb: 'IMDB 同 ID',
+  title_year: '标题+年份',
+  episode: '同剧·同季·同集',
+  hash: 'byte 完全相同',
+  size_only: '大小相同',
+}[mt] || mt)
+
+const dupTagType = (mt) => ({
+  tmdb: 'success',
+  imdb: 'success',
+  title_year: 'warning',
+  episode: 'success',
+  hash: 'success',
+  size_only: 'info',
+}[mt] || '')
 
 // 内容（分页）
 const items = ref([])
@@ -537,15 +938,40 @@ const itemsTotal = ref(0)
 const itemsLoading = ref(false)
 const itemsTable = ref(null)
 const selectedItems = ref([])
+// 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
+const expandedSet = ref(new Set())
+// 已懒加载的子节点：{ [parentId]: childrenArray }
+// el-table lazy 模式下 row._children 不可靠（取决于 store 内部），自管一份用于级联选择
+const childrenMap = ref({})
 const page = ref(1)
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
 const searchInput = ref('')
 const itemsSearch = ref('')
+// 年份 / 风格 多选过滤
+const searchYears = ref([])     // string[]，例 ['2023', '2024']
+const searchGenres = ref([])    // string[]，例 ['Action', 'Comedy']
+const genreOptions = ref([])    // 库内所有 genre 名，懒加载（首次打开下拉时拉一次）
+const _genresLoaded = ref(false)
+// 年份 options：当前年回溯到 1950（足够覆盖大部分电影/剧）
+const yearOptions = computed(() => {
+  const cur = new Date().getFullYear()
+  const out = []
+  for (let y = cur; y >= 1950; y--) out.push(String(y))
+  return out
+})
 const pageSize = ref(50)
 // 忽略 Folder 开关：与 Jellyfin Web 默认行为对齐（默认关闭，即显示所有类型）
 const hideFolders = ref(false)
+
+// 视图模式（list 表格 / grid 网格），按库类型分桶持久化在 localStorage
+const viewMode = useViewMode('library-detail', 'list')
+
+// 网格卡片单击：在新窗口打开 Jellyfin 详情页
+const onGridCardClick = (row) => {
+  if (row.detail_url) window.open(row.detail_url, '_blank', 'noopener,noreferrer')
+}
 
 // 经过过滤后的列表（目前只用于"忽略 Folder"，sortedItems 在此基础上排序）
 const filteredItems = computed(() => {
@@ -585,7 +1011,6 @@ const sortOptions = [
   { field: 'type',         label: '类型' },
   { field: 'year',         label: '年份' },
   { field: 'rating',       label: '评分' },
-  { field: 'actors_done',  label: '演员图' },
   { field: 'tmdb_bound',   label: 'TMDB' },
 ]
 
@@ -662,6 +1087,114 @@ const sortedItems = computed(() => {
 
 const onSelectionChange = (rows) => {
   selectedItems.value = rows
+}
+
+// ===== 自定义选择 + 展开（替代 el-table 默认 selection 列 / 自动 chevron）=====
+// 用 row.id 维护选中集合
+const isRowSelected = (row) => selectedItems.value.some(r => r.id === row.id)
+
+/**
+ * 级联选择：Series 选中 → 自动选中其下所有 Season + Episode；取消同理。
+ * 子节点必须已经懒加载过（在 childrenMap 里）才能被级联。
+ * 未加载的子节点：在 loadChildren 完成时按当前父节点状态自动续选（见下方）。
+ */
+const _walkRowAndDescendants = (row, callback) => {
+  callback(row)
+  const subs = childrenMap.value[row.id]
+  if (Array.isArray(subs)) {
+    subs.forEach(s => _walkRowAndDescendants(s, callback))
+  }
+}
+
+const toggleRowSelection = (row, checked) => {
+  if (checked) {
+    const map = new Map(selectedItems.value.map(r => [r.id, r]))
+    _walkRowAndDescendants(row, r => map.set(r.id, r))
+    selectedItems.value = [...map.values()]
+    // 子节点未懒加载时，后台触发递归加载并续选 —— 用户勾 Series 后所有 Season/Episode 都会被选中
+    if (row.has_children && !childrenMap.value[row.id]) {
+      _cascadeLoadAndSelect(row)
+    } else if (Array.isArray(childrenMap.value[row.id])) {
+      // 一级 children 已在 map，但 children 的 children 可能没加载（只展开了一层）
+      // 对每个已加载的子节点继续递归
+      childrenMap.value[row.id].forEach(c => {
+        if (c.has_children && !childrenMap.value[c.id]) {
+          _cascadeLoadAndSelect(c)
+        }
+      })
+    }
+  } else {
+    const idsToRemove = new Set()
+    _walkRowAndDescendants(row, r => idsToRemove.add(r.id))
+    selectedItems.value = selectedItems.value.filter(r => !idsToRemove.has(r.id))
+  }
+}
+
+/**
+ * 递归懒加载 row 的所有后代并加入 selectedItems。
+ * fire-and-forget：UI 已立即把父行加进 selectedItems，这里负责把后代陆续补上。
+ * 触发场景：用户勾选 Series（或 Season）但还没展开 → children 未加载 → 直接递归拉取所有层级。
+ */
+const _cascadeLoadAndSelect = async (row) => {
+  if (!row.has_children) return
+  let children = childrenMap.value[row.id]
+  if (!Array.isArray(children)) {
+    try {
+      let r
+      if (row.type === 'Series') r = await jellyfinApi.seasonsOfSeries(row.id)
+      else if (row.type === 'Season') r = await jellyfinApi.episodesOfSeason(row.id)
+      else return  // Episode 等没有 children 的类型
+      children = r?.data?.items || []
+      childrenMap.value = { ...childrenMap.value, [row.id]: children }
+    } catch (e) {
+      console.warn('_cascadeLoadAndSelect 加载失败', row.id, e)
+      return
+    }
+  }
+  if (!children.length) return
+  // 父行被选中 → 把本层 children 也加进 selectedItems
+  if (isRowSelected(row)) {
+    const map = new Map(selectedItems.value.map(r => [r.id, r]))
+    children.forEach(c => map.set(c.id, c))
+    selectedItems.value = [...map.values()]
+  }
+  // 递归到下一层（Series → Season → Episode）
+  await Promise.all(children.map(c => _cascadeLoadAndSelect(c)))
+}
+
+// 顶部 select-all：全选只对当前可见的顶层 Series 生效（树展开后的子节点不级联）
+const allSelected = computed(() =>
+  items.value.length > 0 && items.value.every(r => isRowSelected(r))
+)
+const someSelected = computed(() =>
+  items.value.some(r => isRowSelected(r))
+)
+const onToggleAll = (checked) => {
+  if (checked) {
+    // 合并去重：保留已选的子节点 + 加入所有顶层
+    const map = new Map()
+    selectedItems.value.forEach(r => map.set(r.id, r))
+    items.value.forEach(r => map.set(r.id, r))
+    selectedItems.value = [...map.values()]
+  } else {
+    // 仅清掉顶层；保留已选的子节点（展开后选过的）
+    const topIds = new Set(items.value.map(r => r.id))
+    selectedItems.value = selectedItems.value.filter(r => !topIds.has(r.id))
+  }
+}
+
+// 展开/折叠：调 el-table 内部的 toggleRowExpansion，自管 expandedSet 用于 chevron 旋转
+const toggleRowExpand = (row) => {
+  const id = row.id
+  const willExpand = !expandedSet.value.has(id)
+  if (willExpand) expandedSet.value.add(id)
+  else            expandedSet.value.delete(id)
+  // trigger Vue reactivity for Set mutation
+  expandedSet.value = new Set(expandedSet.value)
+  // 调 el-table 内部展开（lazy load 也走这条）
+  if (itemsTable.value) {
+    itemsTable.value.toggleRowExpansion(row, willExpand)
+  }
 }
 
 // 行 class：有问题的行加色调标记
@@ -784,6 +1317,47 @@ const formatTotalRuntime = (minutes) => {
   return `${h} 时`
 }
 
+// 字幕语言代码 → 显示文本（短）+ tag 风格颜色
+const _SUB_LANG_LABEL = {
+  chs: '简', cht: '繁', eng: 'EN', jpn: '日',
+  kor: '韩', fre: '法', ger: '德', spa: '西', rus: '俄', ita: '意',
+  und: '未知',  // jellyfin 给 Language=und 时的友好显示
+}
+const _SUB_LANG_TAG_TYPE = {
+  chs: 'success',     // 简体绿
+  cht: 'success',
+  eng: 'primary',     // 英语蓝
+  jpn: 'warning',     // 日语黄
+  kor: 'info',
+  und: 'info',        // 未知 → 灰
+}
+const subLangLabel = (code) => _SUB_LANG_LABEL[code] || (code || '').toUpperCase().slice(0, 4)
+const subLangTagType = (code) => _SUB_LANG_TAG_TYPE[code] || 'info'
+
+// 字幕下载 dialog 状态
+const showSubDownloadDialog = ref(false)
+const subDownloadTarget = ref(null)
+const openSubtitleDownload = (row) => {
+  subDownloadTarget.value = row
+  showSubDownloadDialog.value = true
+}
+const onSubtitleDownloaded = (payload) => {
+  // 下载成功后刷新当前页 items（让"字幕"列重读 MediaStreams）
+  // 视频文件加新字幕后 jellyfin 需要扫一遍才会更新 MediaStreams；
+  // 这里只重拉前端缓存，等 jellyfin 自身扫描后下次进入页面就看到新语言
+  ElMessage.info('Jellyfin 重新扫描该项后字幕会显示在列表里')
+}
+
+// 单作品时长：电影 / 单集；< 60 分钟显示 "XX 分"，否则 "X 时 Y 分"
+const formatRuntimeMin = (minutes) => {
+  if (!minutes) return ''
+  const total = Math.round(minutes)
+  if (total < 60) return `${total} 分`
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return m ? `${h} 时 ${m} 分` : `${h} 时`
+}
+
 // ===== 树形表格：标题 / 类型显示帮助函数 =====
 
 /** 标题渲染：Episode 加 SxxExx 前缀（取自 Jellyfin 自带 IndexNumber 字段）*/
@@ -842,17 +1416,22 @@ const fixSingleStill = async (row) => {
  */
 const loadChildren = async (row, treeNode, resolve) => {
   try {
+    let children = []
     if (row.type === 'Series') {
       const r = await jellyfinApi.seasonsOfSeries(row.id)
-      resolve(r.data.items || [])
+      children = r.data.items || []
     } else if (row.type === 'Season') {
       const r = await jellyfinApi.episodesOfSeason(row.id)
-      const eps = r.data.items || []
-      resolve(eps)
-      // Episode 也批量拉评分（仅当含 tmdb_id 的，目前 episode 多半没有）
-      // 不主动拉，由用户在 Series 层级看多源评分即可
-    } else {
-      resolve([])
+      children = r.data.items || []
+    }
+    // 记入级联选择用的 children map
+    childrenMap.value = { ...childrenMap.value, [row.id]: children }
+    resolve(children)
+    // 级联续选：父行已选 → 把刚加载的子节点也加入选中
+    if (isRowSelected(row) && children.length) {
+      const map = new Map(selectedItems.value.map(r => [r.id, r]))
+      children.forEach(c => map.set(c.id, c))
+      selectedItems.value = [...map.values()]
     }
   } catch (e) {
     console.error('懒加载子节点失败', e)
@@ -987,27 +1566,46 @@ const metrics = computed(() => {
   // 总时长
   const runtimeFmt = formatRuntime(jf.total_runtime_seconds || 0)
 
-  return [
-    {
+  // 4 项基础指标始终显示，4 项可选指标按 visibleStats 过滤
+  const result = []
+  if (visibleStats.value.health) {
+    result.push({
       label: '总体健康度',
       value: totalItems
         ? `${healthy} / ${totalItems} (${(ratio * 100).toFixed(0)}%)`
         : '—',
       color: healthColor,
-    },
+    })
+  }
+  result.push(
     { label: resourceLabel, value: resourceValue },
     { label: '电影/剧集数', value: movieSeriesCount },
     { label: '空间占用', value: sizeFmt.value, suffix: sizeFmt.suffix },
     { label: '总时长', value: runtimeFmt.value, suffix: runtimeFmt.suffix },
-    { label: '缺海报', value: jf.without_poster || 0, warn: (jf.without_poster || 0) > 0 },
-    {
+  )
+  if (visibleStats.value.poster) {
+    result.push({ label: '缺海报', value: jf.without_poster || 0, warn: (jf.without_poster || 0) > 0 })
+  }
+  if (visibleStats.value.subtitle) {
+    result.push({
       label: '字幕覆盖',
       value: subtitleCoverage.value,
       warn: subtitleCoverage.warn,
       loading: subtitleCoverage.loading,
-    },
-    { label: 'TMDB 绑定', value: `${jf.with_tmdb_id || 0} / ${jf.total_items || 0}` },
-  ]
+    })
+  }
+  // 演员图：整库聚合（之前是表格每行一格的"演员图 X/Y"，已移除；改这里看汇总）
+  const aTotal = jf.actors_total || 0
+  const aHave  = jf.actors_with_image || 0
+  result.push({
+    label: '演员图',
+    value: aTotal ? `${aHave} / ${aTotal}` : '—',
+    warn: aTotal > 0 && aHave < aTotal,
+  })
+  if (visibleStats.value.tmdb) {
+    result.push({ label: 'TMDB 绑定', value: `${jf.with_tmdb_id || 0} / ${jf.total_items || 0}` })
+  }
+  return result
 })
 
 /**
@@ -1026,7 +1624,7 @@ const loadSubtitleStats = async (force = false) => {
     return
   }
   try {
-    const res = await jellyfinApi.librarySubtitleStats(id.value, 60, force)
+    const res = await jellyfinApi.librarySubtitleStats(id.value, force)
     subtitleStats.value = res.data
     if (res.data.status === 'running' && res.data.task_id) {
       startSubtitlePoll(res.data.task_id)
@@ -1094,10 +1692,43 @@ const typeIcon = computed(() => {
   })[t] || Folder
 })
 
+/**
+ * 首次进入页面用：走默认缓存，速度快
+ */
 const loadAll = async () => {
   await loadLibrary()
   loadStats()           // 概览统计（同步阻塞）
-  loadSubtitleStats()   // 缺字幕统计（懒加载，异步触发后台扫描）
+  // 字幕统计会触发后台 subtitle_scan 任务，很贵 —— 用户隐藏了就别跑
+  if (visibleStats.value.subtitle) {
+    loadSubtitleStats()
+  }
+  loadItems()           // 顶层 Series / Movie 列表
+}
+
+/**
+ * 页头"强制刷新"按钮：刷新本页所有数据，旁路所有缓存
+ *   - 后端 seasons/episodes/aggregates 1h 缓存（清零）
+ *   - 库信息 / 库统计 (force=true 跳过 2h 缓存)
+ *   - 字幕扫描复用窗口 (force=true 启新扫描)
+ *   - 顶层条目列表（替换 items 数组 → el-table tree state 一并重置）
+ */
+const forceRefresh = async () => {
+  // 1. 清后端 seasons/episodes/aggregates 缓存
+  try {
+    await jellyfinApi.clearChildrenCache()
+  } catch (e) {
+    console.warn('清空 children 缓存失败', e)
+  }
+  // 2. 字幕扫描状态：停掉轮询 + 清掉旧值
+  stopSubtitlePoll()
+  subtitleStats.value = null
+  // 3. 重新拉所有数据
+  await loadLibrary()
+  loadStats(true)
+  if (visibleStats.value.subtitle) {
+    loadSubtitleStats(true)
+  }
+  loadItems()
 }
 
 const loadLibrary = async () => {
@@ -1107,7 +1738,7 @@ const loadLibrary = async () => {
     library.value = (res.data.libraries || []).find(l => l.id === id.value)
     if (!library.value) {
       ElMessage.error('未找到该媒体库')
-      router.push('/jellyfin/libraries')
+      router.push('/medialibraries')
       return
     }
     // 默认选第一个路径作为重复检测目标
@@ -1121,11 +1752,18 @@ const loadLibrary = async () => {
   }
 }
 
+/**
+ * 把当前 visibleStats 中开启的可选项（health/poster/tmdb；subtitle 是单独 API）
+ * 转成后端 fields 字符串。所有都隐藏 → '' （后端跳过这三项的计算）。
+ */
+const _enabledStatsFields = () =>
+  ['health', 'poster', 'tmdb'].filter(k => visibleStats.value[k]).join(',')
+
 const loadStats = async (force = false) => {
   loadingStats.value = true
   statsError.value = ''
   try {
-    const res = await jellyfinApi.libraryStats(id.value, force)
+    const res = await jellyfinApi.libraryStats(id.value, force, _enabledStatsFields())
     stats.value = res.data
   } catch (e) {
     statsError.value = e.response?.data?.detail || e.message
@@ -1134,28 +1772,6 @@ const loadStats = async (force = false) => {
   }
 }
 
-/**
- * "强制刷新"按钮：
- *   - 清后端 seasons/episodes 缓存（让下次展开重新拉取）
- *   - 跳过库统计 + 字幕统计的缓存重算
- *   - 重新加载顶层 Series 列表（同时把 tree-table 内部已展开的子节点也清掉）
- */
-const forceRefreshStats = async () => {
-  stopSubtitlePoll()
-  subtitleStats.value = null
-  // 1. 清后端 seasons/episodes 内存缓存（30 分钟 TTL 旁路）
-  try {
-    await jellyfinApi.clearChildrenCache()
-  } catch (e) {
-    // 缓存清理失败不影响后续刷新，仅打日志
-    console.warn('清空 seasons/episodes 缓存失败', e)
-  }
-  // 2. 重载顶层 Series 列表 —— 替换 items 数组会让 el-table tree state 重置
-  loadItems()
-  // 3. 重算库 / 字幕统计
-  loadStats(true)
-  loadSubtitleStats(true)
-}
 
 /** 把"缓存秒数"格式化为友好文案（XX 秒前 / XX 分钟前 / XX 小时前）*/
 const formatCacheAge = (seconds) => {
@@ -1167,19 +1783,55 @@ const formatCacheAge = (seconds) => {
 const loadItems = async () => {
   itemsLoading.value = true
   try {
-    const res = await jellyfinApi.libraryItems(id.value, {
+    const params = {
       start_index: (page.value - 1) * pageSize.value,
       limit: pageSize.value,
       search: itemsSearch.value || undefined,
-    })
+    }
+    if (searchYears.value.length) {
+      // jellyfin /Items 接受逗号分隔的多年（OR 关系）
+      params.years = searchYears.value.join(',')
+    }
+    if (searchGenres.value.length) {
+      // jellyfin /Items 接受 | 分隔的多 genre（默认 AND，全部命中才返回）
+      params.genres = searchGenres.value.join('|')
+    }
+    const res = await jellyfinApi.libraryItems(id.value, params)
     items.value = res.data.items || []
     itemsTotal.value = res.data.total || 0
     fetchRatingsForItems()
     fetchSeriesAggregates()
+    fetchSubtitleLangsForItems()
   } catch (e) {
     ElMessage.error('加载内容失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     itemsLoading.value = false
+  }
+}
+
+/**
+ * 当前页所有 Movie / Episode 行的字幕语言批量补齐。
+ * 原因：jellyfin /Items 列表接口对 Fields=MediaStreams 经常只返回精简版（不含 streams
+ * 子字段），列表里的 subtitle_langs 因此始终为空。这里用 /Items?Ids=xxx 模式重拉一次
+ * 拿到完整 MediaStreams 再 patch 回 row.subtitle_langs。
+ * 仅对当前页的 Movie / Episode 拉（Season / Series 没字幕概念）。
+ */
+const fetchSubtitleLangsForItems = async () => {
+  if (!visibleStats.value.subtitle) return  // 字幕列没开 → 不浪费请求
+  const ids = items.value
+    .filter(x => x.id && (x.type === 'Movie' || x.type === 'Episode'))
+    .map(x => x.id)
+  if (!ids.length) return
+  try {
+    const res = await jellyfinApi.itemsSubtitleLangs(ids)
+    const map = res.data?.langs || {}
+    for (const row of items.value) {
+      if (row.id in map) {
+        row.subtitle_langs = map[row.id]
+      }
+    }
+  } catch (e) {
+    console.warn('字幕语言批量拉取失败', e)
   }
 }
 
@@ -1218,6 +1870,18 @@ const onSearchSubmit = () => {
   loadItems()
 }
 
+// 风格下拉首次展开时懒加载库 genres（避免每次进库页都请求）
+const onGenrePopoverOpen = async (visible) => {
+  if (!visible || _genresLoaded.value) return
+  try {
+    const res = await jellyfinApi.libraryGenres(id.value)
+    genreOptions.value = res.data?.genres || []
+    _genresLoaded.value = true
+  } catch (e) {
+    console.warn('拉取 genres 失败', e)
+  }
+}
+
 // 当前页有 tmdb_id 且为 Movie / Series 的条目，批量拉取多源评分
 // （Season / Episode 的 ProviderIds 即便有 TMDB ID，也不查多源评分 —— 数据不全）
 const fetchRatingsForItems = async () => {
@@ -1249,31 +1913,218 @@ const ratingFor = (row) => {
 }
 
 const findDuplicates = async () => {
-  if (!library.value?.locations.length) return
-
   dupLoading.value = true
   try {
-    if (dupPath.value === '__all__') {
-      // 多路径合并：依次检测，结果合并
-      const merged = { total_videos: 0, potential_duplicates: 0, groups: [] }
-      for (const loc of library.value.locations) {
-        try {
-          const r = await mediaApi.findDuplicates(loc)
-          merged.total_videos += r.data.total_videos || 0
-          merged.potential_duplicates += r.data.potential_duplicates || 0
-          merged.groups.push(...(r.data.groups || []))
-        } catch {}
-      }
-      dupResult.value = merged
-    } else {
-      const path = dupPath.value || library.value.locations[0]
-      const res = await mediaApi.findDuplicates(path)
+    if (dupMode.value === 'metadata') {
+      // 基于 Jellyfin 元数据（瞬时返回，无需扫盘）
+      const res = await mediaApi.findDuplicatesByMetadata(id.value)
       dupResult.value = res.data
+    } else {
+      // 旧 hash 模式：仍按 path 扫盘
+      if (!library.value?.locations.length) return
+      if (dupPath.value === '__all__') {
+        const merged = { total_videos: 0, potential_duplicates: 0, groups: [] }
+        for (const loc of library.value.locations) {
+          try {
+            const r = await mediaApi.findDuplicates(loc)
+            merged.total_videos += r.data.total_videos || 0
+            merged.potential_duplicates += r.data.potential_duplicates || 0
+            merged.groups.push(...(r.data.groups || []))
+          } catch {}
+        }
+        dupResult.value = merged
+      } else {
+        const path = dupPath.value || library.value.locations[0]
+        const res = await mediaApi.findDuplicates(path)
+        dupResult.value = res.data
+      }
     }
   } catch (e) {
     ElMessage.error('检测失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     dupLoading.value = false
+  }
+}
+
+// 切换 mode 后清空旧结果，避免显示错位
+watch(dupMode, () => {
+  dupResult.value = null
+  dupKeepMap.value = {}
+})
+
+// 切回 dialog 关闭时清空选择
+watch(showDupDialog, (v) => {
+  if (!v) dupKeepMap.value = {}
+})
+
+// ============================================================================
+// 重复检测 - "勾选保留 + 删除其他" 逻辑
+// ============================================================================
+
+// groupKey: 每个组的稳定标识（存 dupKeepMap 用）
+// metadata 模式有 group.key（"tmdb:12345"），hash 模式没有 → 用 idx 兜底
+const dupGroupKey = (group, idx) => group.key || `idx:${idx}`
+
+// fileKey: 每个文件的稳定标识；metadata 用 jellyfin_id，hash 用 path
+const dupFileKey = (file) => file.jellyfin_id || file.path
+
+// dupKeepMap: { groupKey -> 该组保留哪个 fileKey }
+// 默认进来时为空；用户首次操作前自动 init 为该组第一个（最大的，因 backend 已按 size 降序）
+const dupKeepMap = ref({})
+// dupDeleting: { groupKey -> 是否在删除中 }（按钮 loading）
+const dupDeleting = ref({})
+
+// 当 dupResult 变化时给每组初始化默认保留项 = 第一个文件（已按 size 降序，通常最大版本）
+watch(dupResult, (val) => {
+  if (!val?.groups?.length) return
+  const next = {}
+  for (let i = 0; i < val.groups.length; i++) {
+    const g = val.groups[i]
+    const key = dupGroupKey(g, i)
+    // 保留旧选择，没有就用第一项
+    next[key] = dupKeepMap.value[key] || (g.files[0] ? dupFileKey(g.files[0]) : null)
+  }
+  dupKeepMap.value = next
+})
+
+const canDeleteOthers = (group, idx) => {
+  if (!group?.files || group.files.length < 2) return false
+  return !!dupKeepMap.value[dupGroupKey(group, idx)]
+}
+
+// 组标题主行：取一个有识别度的文件名（默认第一个最大版本，去扩展名）
+// 给整组一个"看到就知道是哪部"的代号
+const groupHeadline = (group) => {
+  const first = group?.files?.[0]
+  if (first?.name) {
+    // 去 .mkv / .mp4 等扩展名（保留中间的 dot 部分）
+    return String(first.name).replace(/\.(mkv|mp4|avi|wmv|mov|flv|webm|m4v|ts|rmvb)$/i, '')
+  }
+  // 兜底：metadata 模式没 file.name 时退回 group.title；hash 模式退回 size
+  if (group?.title) return group.title
+  if (group?.size_mb) return `${group.size_mb} MB`
+  return '(未命名组)'
+}
+
+// 副标题：metadata 模式显示 "标题 (年份)"；hash 模式显示 "约 N MB"
+// 与 headline 信息互补，避免文件名 release tag 太杂时一眼看不出剧/年份
+const groupSubline = (group) => {
+  if (group?.title) {
+    // metadata 模式：用 jellyfin Item.Name + year
+    const tail = group.year ? ` (${group.year})` : ''
+    // 如果 headline 已经包含了 title，就不再重复（节省横向空间）
+    const headline = (group?.files?.[0]?.name || '').toLowerCase()
+    if (headline && headline.includes(String(group.title).toLowerCase())) {
+      return tail.trim() || ''
+    }
+    return `${group.title}${tail}`
+  }
+  if (group?.size_mb) return `约 ${group.size_mb} MB`
+  return ''
+}
+
+// 删除一组中除"保留"之外的全部文件
+// metadata 模式：直接 jellyfinApi.deleteItem(file.jellyfin_id)
+// hash 模式：先 jellyfinApi.lookupByPath(file.path) 拿到 id 再删
+const deleteOthersInGroup = async (group, idx) => {
+  const key = dupGroupKey(group, idx)
+  const keepKey = dupKeepMap.value[key]
+  if (!keepKey) {
+    ElMessage.warning('请先勾选要保留的文件')
+    return
+  }
+  const toDelete = group.files.filter(f => dupFileKey(f) !== keepKey)
+  if (!toDelete.length) {
+    ElMessage.info('没有可删除的文件（只有 1 项）')
+    return
+  }
+
+  // 让用户确认 —— 强警告：Jellyfin 的 item.Path 可能是目录而非单视频文件
+  // 删除时会调 Jellyfin DELETE，失败会落 fallback；新版 fallback 已加严格目录保护，
+  // 但仍要让用户最后过一眼具体路径以防误操作（曾发生 fallback rmtree 整个暂存目录的事故）
+  const fileList = toDelete
+    .map(f => {
+      const path = f.path || '(无路径)'
+      const looksLikeDir = !/\.(mkv|mp4|avi|wmv|mov|flv|webm|m4v|ts|rmvb)$/i.test(path)
+      const tag = looksLikeDir
+        ? '<span style="color:#dc2626;font-size:11px;font-weight:600;margin-left:6px">⚠️ 目录</span>'
+        : ''
+      return `<li><code style="font-size:12px;color:#475569;word-break:break-all">${path}</code>${tag}</li>`
+    })
+    .join('')
+  try {
+    await ElMessageBox.confirm(
+      `<div>
+        <p style="margin:0 0 8px">将删除以下 <b>${toDelete.length}</b> 个条目（含物理文件）：</p>
+        <ul style="max-height:280px;overflow:auto;margin:8px 0;padding-left:20px">${fileList}</ul>
+        <div style="background:#fef2f2;border-left:3px solid #dc2626;padding:8px 10px;margin-top:8px;font-size:12px;line-height:1.5">
+          <div style="color:#dc2626;font-weight:600">⚠️ 含路径前请仔细核对每条 path</div>
+          <div style="color:#7f1d1d;margin-top:4px">
+            带"⚠️ 目录"标记的项 path 不像单视频文件（无视频扩展名），<b>表示该 jellyfin item 的 Path 指向一个目录</b>。
+            后端会先尝试 Jellyfin 自带 DELETE，失败时 fallback 物理删除：仅当目录里只含本作品视频 + 附件、且不在「待整理 / 暂存」黑名单时才会 rmtree，否则只删该作品视频文件保留容器目录。
+          </div>
+        </div>
+        <p style="color:#dc2626;margin-top:8px;font-weight:500">此操作不可撤销，请谨慎</p>
+      </div>`,
+      '确认删除',
+      {
+        confirmButtonText: `删除 ${toDelete.length} 个`,
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+        type: 'warning',
+        dangerouslyUseHTMLString: true,
+        customClass: 'dup-delete-confirm',
+      }
+    )
+  } catch {
+    return
+  }
+
+  dupDeleting.value = { ...dupDeleting.value, [key]: true }
+  let okCount = 0
+  let failCount = 0
+  const errors = []
+
+  for (const f of toDelete) {
+    let jellyfinId = f.jellyfin_id
+    // hash 模式没 jellyfin_id，先反查
+    if (!jellyfinId && f.path) {
+      try {
+        const r = await jellyfinApi.lookupByPath(f.path)
+        if (r.data?.found) jellyfinId = r.data.item?.id
+      } catch (e) {
+        // 反查失败也继续，下一步会判失败
+      }
+    }
+    if (!jellyfinId) {
+      failCount++
+      errors.push(`${f.name || f.path}：未在 Jellyfin 找到对应 Item`)
+      continue
+    }
+    try {
+      await jellyfinApi.deleteItem(jellyfinId)
+      okCount++
+    } catch (e) {
+      failCount++
+      errors.push(`${f.name || f.path}：${e.response?.data?.detail || e.message}`)
+    }
+  }
+
+  dupDeleting.value = { ...dupDeleting.value, [key]: false }
+
+  if (okCount && !failCount) {
+    ElMessage.success(`已删除 ${okCount} 个文件`)
+  } else if (okCount && failCount) {
+    ElMessage.warning(`删除 ${okCount} 个，失败 ${failCount} 个`)
+    console.warn('部分删除失败：', errors)
+  } else {
+    ElMessage.error('删除失败：' + (errors[0] || '未知原因'))
+    console.error('删除失败：', errors)
+  }
+
+  // 重新检测刷新结果
+  if (okCount > 0) {
+    await findDuplicates()
   }
 }
 
@@ -1311,9 +2162,12 @@ const formatSize = (bytes) => {
 }
 
 onMounted(async () => {
+  loadStatsPrefs(id.value)
   await loadAll()
-  loadItems()  // 内容预览也并行
 })
+
+// 切换不同库时重新加载该库的显示偏好
+watch(() => id.value, (newId) => loadStatsPrefs(newId))
 
 onUnmounted(() => {
   stopSubtitlePoll()
@@ -1491,11 +2345,30 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 
+// 让整个页面 flex column 占满 .app-main 给的高度，items-card 自动吃剩余空间
+.page-container {
+  display: flex;
+  flex-direction: column;
+  // 占满 .app-main content 区域（parent 已经扣掉 header + padding）
+  height: 100%;
+}
+
 .items-card {
   margin-top: 16px;
-  // 关键：el-card 默认 overflow:hidden 会让内部 sticky 失效，
-  // 这里允许内容溢出，使分页器能 sticky 到视口底部
-  overflow: visible;
+  flex: 1;
+  // 关键：min-height: 0 让 flex 子元素能正确收缩；不然内容会撑高 page-container 出页面滚动条
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  // 内部 body 占满 card 剩余高度，内容溢出在 body 内部滚动（不是页面整体）
+  :deep(.el-card__body) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
 
   .card-header {
     display: flex;
@@ -1561,7 +2434,7 @@ onUnmounted(() => {
   }
 
   .item-link {
-    color: #0f6e56;       // 师哥示例：标题统一深绿色
+    color: inherit;       // 跟随表格默认文字色
     text-decoration: none;
     font-size: 14px;
     transition: color 0.15s;
@@ -1589,6 +2462,31 @@ onUnmounted(() => {
   }
   .muted { color: #94a3b8; }
 
+  // 统计卡设置 popover：checkbox 列表
+  :deep(.stats-toggle-list) {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  :deep(.stats-toggle-title) {
+    font-size: 12px;
+    color: #909399;
+    margin-bottom: 4px;
+  }
+
+  // 集数列：Series 行显示季数 + 集数两行
+  .count-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.3;
+
+    .count-sub {
+      font-size: 12px;
+      color: #64748b;
+    }
+  }
+
   // 评分：统一星标颜色，不分档
   .rating {
     display: inline-flex;
@@ -1603,75 +2501,73 @@ onUnmounted(() => {
 
   // ============ Tree-table 展开按钮（完全复刻师哥的实现）============
   // 隐藏 Element Plus 默认箭头图标
-  :deep(.el-table__expand-icon .el-icon) {
-    display: none;
+  // ============ 隐藏 Element Plus 自动注入的 chevron（我们手画在 row-content 里）============
+  :deep(.el-table__expand-icon),
+  :deep(.el-table__indent),
+  :deep(.el-table__placeholder) {
+    display: none !important;
   }
-  // 把 expand-icon 容器改造成圆形按钮（默认绿色）
-  :deep(.el-table__expand-icon) {
+  // 收掉 cell 默认 padding，我们自己在 .row-content 上控
+  :deep(.el-table__row > td:first-child .cell) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  // ============ 左侧大 cell 的内容容器：checkbox + chevron + 海报 + 标题 ============
+  :deep(.row-content) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-right: 16px;
+  }
+  :deep(.row-content--header) {
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-left: 16px;
+  }
+  :deep(.row-content .hdr-spacer) { width: 22px; }
+  :deep(.row-content .hdr-label) { font-weight: 500; color: #303133; }
+  :deep(.row-content .hdr-label--title) { margin-left: 88px; }
+
+  // chevron：22×22 绿色圆按钮，▼ 由 ::before 画
+  :deep(.row-chevron) {
+    flex-shrink: 0;
     width: 22px;
     height: 22px;
     border-radius: 50%;
+    border: none;
     background: #1d9e75;
-    color: #fff;
+    cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    position: relative;
     transition: transform 0.25s ease, background 0.2s;
+    padding: 0;
   }
-  // 用 ::before 画一个白色向下箭头（▾ 的纯 CSS 版）
-  :deep(.el-table__expand-icon::before) {
+  // 默认（折叠态）：▶ 指右 —— 用 border-left 染色画右指三角
+  :deep(.row-chevron::before) {
     content: '';
     width: 0;
     height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #fff;
-    margin-top: 2px;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 6px solid #fff;
+    margin-left: 2px;  // 视觉居中微调（三角偏左 1-2px 看着才居中）
   }
-  // 展开状态：箭头旋转 180°（变成向上）
-  :deep(.el-table__expand-icon--expanded),
-  :deep(.el-table__expand-icon.is-expanded) {
-    transform: rotate(180deg);
-  }
-  :deep(.el-table__expand-icon:hover) {
-    background: #0f6e56;
+  :deep(.row-chevron:hover) { background: #0f6e56; }
+  // 展开态：旋转 90° 顺时针 → ▼ 指下
+  :deep(.row-chevron--expanded) { transform: rotate(90deg); }
+
+  // 没子节点的占位（保持其他列对齐）
+  :deep(.row-chevron-spacer) {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    display: inline-block;
   }
 
-  // ============ 左侧彩色竖条（按层级配色，::before 绝对定位画线）============
-  :deep(.el-table__row) {
-    position: relative;
-  }
-  // 第一层：剧/电影 → 深绿
-  :deep(.el-table__row:not(.el-table__row--level-1):not(.el-table__row--level-2) > td:first-child)::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: #1d9e75;
-  }
-  // 第二层：季 → 浅绿
-  :deep(.el-table__row--level-1 > td:first-child)::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: #97c459;
-  }
-  // 第三层：集 → 琥珀
-  :deep(.el-table__row--level-2 > td:first-child)::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: #ef9f27;
-  }
 
   // 评分单元格容器：Jellyfin 社区评分 + 多源评分 + 字幕覆盖三行
   .rating-cell {
@@ -1679,6 +2575,56 @@ onUnmounted(() => {
     flex-direction: column;
     gap: 4px;
     align-items: flex-start;
+  }
+
+  // 字幕列：双行 —— 第一行 chip，第二行下载按钮
+  .sub-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+
+    .sub-lang-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      align-items: center;
+    }
+    .sub-lang-chip {
+      :deep(.el-tag) { padding: 0 6px; }
+    }
+    .sub-lang-more {
+      font-size: 12px;
+      color: #6366f1;
+      cursor: help;
+      padding: 0 4px;
+    }
+    .sub-dl-btn {
+      :deep(.el-button) {
+        padding: 2px 6px;
+        height: 22px;
+        font-size: 12px;
+      }
+    }
+  }
+
+  // 风格类型列：最多显示 3 个 chip，多余的悬停 +N 提示展开
+  .genre-cell {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 3px;
+
+    .genre-chip {
+      // 紧凑：单行可塞下多个
+      :deep(.el-tag) { padding: 0 6px; }
+    }
+    .genre-more {
+      font-size: 12px;
+      color: #6366f1;
+      cursor: help;
+      padding: 0 4px;
+    }
   }
 
   // 字幕覆盖 chip（仅 Series 行显示）
@@ -1782,6 +2728,87 @@ onUnmounted(() => {
     }
   }
 
+  // ---- 网格视图 ----
+  .grid-view {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 18px;
+    padding: 18px;
+    min-height: 200px;
+  }
+  .grid-card {
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border: 1px solid #f1f5f9;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+    }
+  }
+  .grid-poster-wrap {
+    position: relative;
+    aspect-ratio: 2 / 3;        // 电影海报标准
+    background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+  }
+  .grid-poster {
+    width: 100%;
+    height: 100%;
+    display: block;
+    // 浏览器在缩放时尽量用高质量插值，进一步降低糊感
+    :deep(img) {
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: high-quality;
+    }
+  }
+  .grid-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 24px;
+    font-weight: 600;
+    color: #64748b;
+  }
+  .grid-health-dot {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+
+    &--error   { background: #ef4444; }
+    &--warning { background: #f59e0b; }
+  }
+  .grid-meta {
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .grid-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: #1e293b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .grid-year {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
   // 健康单元格：双行布局（第一行圆点+错误码，第二行刮削按钮）
   .health-cell {
     display: inline-flex;
@@ -1863,14 +2890,16 @@ onUnmounted(() => {
     }
   }
 
-  // 路径单元格：路径文字 + 第二行复制按钮
+  // 路径单元格：与成人库 AdultLibraryView 同款 —— 同行 [path 文字] [复制图标]
   .path-cell {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 4px;
     min-width: 0;
 
     .path-text {
+      flex: 1;
+      min-width: 0;
       font-family: ui-monospace, monospace;
       font-size: 12px;
       color: #475569;
@@ -1879,8 +2908,18 @@ onUnmounted(() => {
       text-overflow: ellipsis;
     }
 
-    .copy-btn {
-      align-self: flex-start;  // 按钮不撑满，左对齐
+    .path-copy-btn {
+      flex-shrink: 0;
+      padding: 0 4px;
+      height: 22px;
+      color: #94a3b8;
+
+      &:hover {
+        color: #4f46e5;
+      }
+      .el-icon {
+        font-size: 14px;
+      }
     }
   }
 
@@ -1992,11 +3031,64 @@ onUnmounted(() => {
   }
 }
 
+.dup-mode-pick,
 .dup-path-pick {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   padding: 8px 12px;
   background: #f8fafc;
   border-radius: 4px;
+
+  .info-ic {
+    margin-left: 4px;
+    color: #94a3b8;
+    cursor: help;
+  }
+}
+
+.dup-pick-label {
+  color: #475569;
+  font-size: 13px;
+  margin-right: 8px;
+}
+
+.dup-group-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+
+  .dup-group-name-stack {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .dup-group-name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+
+  .dup-group-sub {
+    color: #94a3b8;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dup-group-count {
+    color: #94a3b8;
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 }
 
 .dup-summary {
@@ -2006,28 +3098,86 @@ onUnmounted(() => {
 }
 
 .dup-groups {
-  .file-row {
+  .file-list {
     display: flex;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  // 每个 file 行：3 列 grid（保留 radio | 文件信息 | 大小）
+  // 文件信息列允许 name + path 都换行，长名字不再挤压 path
+  .file-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 8px 4px;
+    padding: 10px 4px;
     border-bottom: 1px solid #f1f5f9;
+    cursor: pointer;
+    transition: background 0.1s ease;
+    margin: 0;
 
     &:last-child {
       border-bottom: none;
     }
 
+    &:hover {
+      background: #f8fafc;
+    }
+
+    .file-radio {
+      // el-radio 内部默认 margin-right: 30px，挤窄；缩到 0
+      margin-right: 0;
+    }
+
+    .file-meta {
+      min-width: 0;     // 允许被 grid 列正确收缩；不加这个长字会撑爆 grid
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
     .file-name {
       font-weight: 500;
-      min-width: 200px;
+      font-size: 13px;
+      color: #1e293b;
+      word-break: break-word;
+      overflow-wrap: anywhere;       // 长 .release.tag 串也能在任意位置断
+      line-height: 1.4;
     }
 
     .file-path {
-      flex: 1;
       color: #94a3b8;
       font-size: 12px;
       word-break: break-all;
+      line-height: 1.4;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
+
+    .file-size {
+      flex-shrink: 0;
+    }
+
+    .version-label {
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: normal;
+      margin-left: 4px;
+    }
+  }
+}
+
+.dup-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 4px 4px;
+  border-top: 1px solid #f1f5f9;
+  margin-top: 4px;
+
+  .dup-group-hint {
+    color: #94a3b8;
+    font-size: 12px;
   }
 }
 

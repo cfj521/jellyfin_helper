@@ -170,7 +170,7 @@ def _resolve_targets(req: AudioScanRequest) -> Dict:
 # ---------- 端点 ----------
 
 @router.get("/check")
-async def check_tools():
+def check_tools():
     """前端用来判断 ffprobe / mkvpropedit 是否可用。"""
     from tools.audio_manager.scanner import _get_ffprobe
     return {
@@ -180,7 +180,7 @@ async def check_tools():
 
 
 @router.post("/default-track", response_model=TaskStartResponse)
-async def default_track_action(
+def default_track_action(
     req: AudioScanRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -220,6 +220,206 @@ async def default_track_action(
     )
 
 
+def run_default_track_inline(
+    item_paths: Optional[List[str]] = None,
+    paths: Optional[List[str]] = None,
+    recursive: bool = True,
+    preferred_langs: Optional[List[str]] = None,
+    skip_single_track: bool = True,
+    apply: bool = False,
+    refresh_library_ids: Optional[List[str]] = None,
+    progress_cb: Optional[callable] = None,
+) -> Dict:
+    """
+    同步执行音轨扫描 +（可选）修复默认轨。**不写 task / 不写 db**。
+
+    供 dispatch pipeline 等模块直接 import 使用。
+
+    输入二选一（或都给）：
+      item_paths: 视频文件路径列表（应为本地可访问路径，调用方负责映射）
+      paths    : 目录路径列表
+
+    apply=False 仅扫描返回建议；apply=True 调 mkvpropedit 写入。
+    apply=True 但 mkvpropedit 不可用 → result['error'] 返回提示，candidates 仍含建议。
+
+    返回:
+    {
+      "scan": {total, skipped, already_ok, candidates},
+      "apply": {executed, success, failed},
+      "jellyfin_refreshed": [lib_ids...],
+      "candidates": [...],          # 推荐改默认轨的视频明细
+      "applied_details": [...],     # apply=True 时的逐文件结果
+      "skipped_sample": [...],      # 跳过的示例（前 100 条）
+      "error": Optional[str],
+    }
+    """
+    from web.backend.api.jellyfin import trigger_refresh
+
+    if preferred_langs is None:
+        preferred_langs = settings.preferred_audio_langs
+    if refresh_library_ids is None:
+        refresh_library_ids = []
+
+    def _emit(pct: int, msg: str):
+        if progress_cb:
+            try:
+                progress_cb(pct, msg)
+            except Exception:
+                logger.exception("progress_cb 抛错，已忽略")
+
+    # apply=True 时检查 mkvpropedit 可用性
+    error_msg: Optional[str] = None
+    if apply and not get_mkvpropedit():
+        error_msg = "mkvpropedit 不可用（未安装 mkvtoolnix），仅返回建议不实际修改"
+        logger.warning(error_msg)
+        apply = False  # 退化为预览模式
+
+    scanner = AudioTrackScanner(
+        preferred_langs=preferred_langs,
+        skip_single_track=skip_single_track,
+        concurrency=5,
+    )
+
+    # ---- Step 1: 扫描 ----
+    _emit(5, "开始扫描音轨...")
+
+    results: List[Dict] = []
+    if item_paths:
+        videos = [Path(p) for p in item_paths if Path(p).exists()]
+        if videos:
+            results.extend(scanner.scan_videos(videos))
+
+    if paths:
+        for idx, p in enumerate(paths):
+            pct = 5 + int(45 * (idx + 1) / max(len(paths), 1))
+            _emit(pct, f"扫描 [{idx+1}/{len(paths)}] {p}")
+            results.extend(scanner.scan_directory(Path(p), recursive=recursive))
+
+    # ---- 汇总 ----
+    total = len(results)
+    skipped = sum(1 for r in results if r.get('skipped'))
+    already_ok = sum(
+        1 for r in results
+        if not r.get('skipped') and not r.get('should_change')
+    )
+    candidates = [r for r in results if r.get('should_change')]
+
+    _emit(55, f"扫描完成：{total} 个文件，{len(candidates)} 个需要改默认音轨")
+
+    # ---- Step 2: 应用修改 ----
+    applied = []
+    apply_success = 0
+    apply_failed = 0
+    if apply and candidates:
+        for idx, item in enumerate(candidates):
+            pct = 55 + int(40 * (idx + 1) / max(len(candidates), 1))
+            video_path = Path(item['path'])
+            _emit(pct, f"修改 [{idx+1}/{len(candidates)}] {video_path.name}")
+            try:
+                res = set_default_audio_track(
+                    video_path,
+                    target_track_id=item['target_track'],
+                    total_tracks=len(item['tracks']),
+                )
+            except Exception as e:
+                logger.exception(f"音轨写入异常: {video_path}")
+                res = {'success': False, 'error': str(e), 'cmd': '', 'stdout': '', 'stderr': ''}
+
+            applied.append({
+                'path': str(video_path),
+                'name': video_path.name,
+                'target_track': item['target_track'],
+                'target_lang': item['target_lang'],
+                'success': res.get('success', False),
+                'error': res.get('error'),
+            })
+            if res.get('success'):
+                apply_success += 1
+            else:
+                apply_failed += 1
+
+    # ---- Step 3: 通知 Jellyfin（精准 path 通知，整库扫兜底）----
+    refreshed: List[str] = []
+    if apply and apply_success > 0:
+        _emit(96, "通知 Jellyfin 刷新...")
+        # 收集成功修改的文件路径（jellyfin 视角）
+        modified_paths = []
+        try:
+            from web.backend.path_translator import reverse_translate_path_with_settings
+            for item in applied:
+                if item.get('success') and item.get('path'):
+                    modified_paths.append(
+                        reverse_translate_path_with_settings(item['path']) or item['path']
+                    )
+        except Exception:
+            modified_paths = [it['path'] for it in applied if it.get('success') and it.get('path')]
+
+        # ① 精准通知：mkvpropedit 改的是元数据，UpdateType=Modified
+        notified_paths = False
+        if modified_paths:
+            try:
+                from common.jellyfin_client import JellyfinClient
+                jf = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
+                if jf.notify_media_updated(modified_paths, update_type='Modified'):
+                    notified_paths = True
+                    refreshed = ['(media_updated)']
+            except Exception as e:
+                logger.warning(f"notify_media_updated 失败: {e}")
+
+        # ② 兜底：精准通知失败才走整库扫
+        if not notified_paths and refresh_library_ids:
+            for lid in refresh_library_ids:
+                try:
+                    if trigger_refresh(lid):
+                        refreshed.append(lid)
+                except Exception as e:
+                    logger.warning(f"刷新库 {lid} 失败: {e}")
+
+    return {
+        "scan": {
+            "total": total,
+            "skipped": skipped,
+            "already_ok": already_ok,
+            "candidates": len(candidates),
+        },
+        "apply": {
+            "executed": apply,
+            "success": apply_success,
+            "failed": apply_failed,
+        },
+        "jellyfin_refreshed": refreshed,
+        "candidates": [
+            {
+                'path': c['path'],
+                'name': c['name'],
+                'current_default_track': c.get('current_default_track'),
+                'current_default_lang': c.get('current_default_lang'),
+                'target_track': c.get('target_track'),
+                'target_lang': c.get('target_lang'),
+                'tracks': [
+                    {
+                        'mkv_track_id': t.get('mkv_track_id'),
+                        'language': t.get('language'),
+                        'title': t.get('title'),
+                        'lang_code': t.get('lang_code'),
+                        'is_default': t.get('is_default'),
+                        'channels': t.get('channels'),
+                        'codec': t.get('codec'),
+                    }
+                    for t in c.get('tracks', [])
+                ],
+            }
+            for c in candidates[:200]
+        ],
+        "applied_details": applied[:200],
+        "skipped_sample": [
+            {'path': r['path'], 'name': r['name'], 'reason': r.get('skip_reason')}
+            for r in results if r.get('skipped')
+        ][:100],
+        "error": error_msg,
+    }
+
+
 def run_default_track_task(
     task_id: int,
     target: Dict,
@@ -229,138 +429,34 @@ def run_default_track_task(
     apply: bool,
     refresh_library_ids: Optional[List[str]] = None,
 ):
-    """后台任务：扫描视频音轨 → （可选）调 mkvpropedit 改默认轨 → 刷新受影响的库。"""
+    """后台 task wrapper：调 inline + 写 task 进度 / complete_task。"""
     from web.backend.database import SessionLocal
-    from web.backend.api.jellyfin import trigger_refresh
 
-    db = SessionLocal()
+    def _progress(pct: int, msg: str):
+        with SessionLocal() as db:
+            update_task_progress(db, task_id, pct, msg)
+
     try:
-        scanner = AudioTrackScanner(
+        # 把 target dict 拆成 inline 接受的两路输入
+        if target['mode'] == 'items':
+            inline_kwargs = {'item_paths': [str(p) for p in target['items']]}
+        else:
+            inline_kwargs = {'paths': target['paths']}
+
+        result = run_default_track_inline(
+            **inline_kwargs,
+            recursive=recursive,
             preferred_langs=preferred_langs,
             skip_single_track=skip_single_track,
-            concurrency=5,
+            apply=apply,
+            refresh_library_ids=refresh_library_ids,
+            progress_cb=_progress,
         )
 
-        # ---- Step 1: 扫描 ----
-        update_task_progress(db, task_id, 5, "开始扫描音轨...")
-
-        results: List[Dict] = []
-        if target['mode'] == 'items':
-            videos = target['items']
-            results = scanner.scan_videos(videos)
-        else:
-            paths = target['paths']
-            for idx, p in enumerate(paths):
-                pct = 5 + int(45 * (idx + 1) / len(paths))  # 扫描占 5%-50%
-                update_task_progress(db, task_id, pct, f"扫描 [{idx+1}/{len(paths)}] {p}")
-                results.extend(scanner.scan_directory(Path(p), recursive=recursive))
-
-        # ---- 汇总 ----
-        total = len(results)
-        skipped = sum(1 for r in results if r.get('skipped'))
-        already_ok = sum(
-            1 for r in results
-            if not r.get('skipped') and not r.get('should_change')
-        )
-        candidates = [r for r in results if r.get('should_change')]
-
-        update_task_progress(
-            db, task_id, 55,
-            f"扫描完成：{total} 个文件，{len(candidates)} 个需要改默认音轨",
-        )
-
-        # ---- Step 2: 应用修改 ----
-        applied = []
-        apply_success = 0
-        apply_failed = 0
-        if apply and candidates:
-            for idx, item in enumerate(candidates):
-                pct = 55 + int(40 * (idx + 1) / len(candidates))  # 应用占 55%-95%
-                video_path = Path(item['path'])
-                update_task_progress(
-                    db, task_id, pct,
-                    f"修改 [{idx+1}/{len(candidates)}] {video_path.name}",
-                )
-                try:
-                    res = set_default_audio_track(
-                        video_path,
-                        target_track_id=item['target_track'],
-                        total_tracks=len(item['tracks']),
-                    )
-                except Exception as e:
-                    logger.exception(f"音轨写入异常: {video_path}")
-                    res = {'success': False, 'error': str(e), 'cmd': '', 'stdout': '', 'stderr': ''}
-
-                applied.append({
-                    'path': str(video_path),
-                    'name': video_path.name,
-                    'target_track': item['target_track'],
-                    'target_lang': item['target_lang'],
-                    'success': res.get('success', False),
-                    'error': res.get('error'),
-                })
-                if res.get('success'):
-                    apply_success += 1
-                else:
-                    apply_failed += 1
-
-        # ---- Step 3: 刷新 Jellyfin（仅在实际写入成功后触发）----
-        refreshed: List[str] = []
-        if apply and apply_success > 0 and refresh_library_ids:
-            update_task_progress(db, task_id, 96, "通知 Jellyfin 刷新...")
-            for lid in refresh_library_ids:
-                try:
-                    if trigger_refresh(lid):
-                        refreshed.append(lid)
-                except Exception as e:
-                    logger.warning(f"刷新库 {lid} 失败: {e}")
-
-        complete_task(db, task_id, {
-            "scan": {
-                "total": total,
-                "skipped": skipped,
-                "already_ok": already_ok,
-                "candidates": len(candidates),
-            },
-            "apply": {
-                "executed": apply,
-                "success": apply_success,
-                "failed": apply_failed,
-            },
-            "jellyfin_refreshed": refreshed,
-            "candidates": [
-                {
-                    'path': c['path'],
-                    'name': c['name'],
-                    'current_default_track': c.get('current_default_track'),
-                    'current_default_lang': c.get('current_default_lang'),
-                    'target_track': c.get('target_track'),
-                    'target_lang': c.get('target_lang'),
-                    'tracks': [
-                        {
-                            'mkv_track_id': t.get('mkv_track_id'),
-                            'language': t.get('language'),
-                            'title': t.get('title'),
-                            'lang_code': t.get('lang_code'),
-                            'is_default': t.get('is_default'),
-                            'channels': t.get('channels'),
-                            'codec': t.get('codec'),
-                        }
-                        for t in c.get('tracks', [])
-                    ],
-                }
-                for c in candidates[:200]
-            ],
-            "applied_details": applied[:200],
-            # 简化的"跳过"明细，不全保留（可能很多）
-            "skipped_sample": [
-                {'path': r['path'], 'name': r['name'], 'reason': r.get('skip_reason')}
-                for r in results if r.get('skipped')
-            ][:100],
-        })
+        with SessionLocal() as db:
+            complete_task(db, task_id, result)
 
     except Exception as e:
         logger.exception("音轨任务失败")
-        complete_task(db, task_id, {"error": str(e)}, success=False)
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            complete_task(db, task_id, {"error": str(e)}, success=False)

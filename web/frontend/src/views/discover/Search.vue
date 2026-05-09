@@ -2,6 +2,19 @@
   <div class="page-container">
     <div class="page-header">
       <h2>种子搜索 (Jackett)</h2>
+      <div class="header-actions">
+        <a
+          v-if="jackettUrl"
+          class="ext-link"
+          :href="jackettUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="在新窗口打开 Jackett 后台"
+        >
+          <el-icon><Link /></el-icon>
+          打开 Jackett
+        </a>
+      </div>
     </div>
 
     <el-card shadow="never" class="form-card">
@@ -44,14 +57,31 @@
       </div>
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="results-card">
       <template #header>
         <div class="card-header">
-          <span>结果 ({{ results.length }} 条)</span>
+          <span class="results-count">结果 {{ results.length }} 条</span>
+          <el-pagination
+            v-if="results.length > pageSize"
+            v-model:current-page="currentPage"
+            :page-size="pageSize"
+            :page-sizes="[20, 50, 100, 200]"
+            :total="results.length"
+            layout="total, sizes, prev, pager, next, jumper"
+            background
+            small
+            class="results-pagination"
+            @size-change="onPageSizeChange"
+          />
         </div>
       </template>
 
-      <el-table :data="sortedResults" v-loading="loading" max-height="600">
+      <el-table
+        :data="paginatedResults"
+        v-loading="loading"
+        height="100%"
+        class="results-table"
+      >
         <el-table-column prop="title" label="标题" min-width="300" show-overflow-tooltip />
         <el-table-column prop="indexer" label="来源" width="140" show-overflow-tooltip />
         <el-table-column label="大小" width="100" sortable :sort-method="(a, b) => a.size - b.size">
@@ -70,7 +100,6 @@
               type="primary"
               :disabled="!row.magnet && !row.link"
               @click="pushDownload(row)"
-              :loading="row.pushing"
             >
               下载
             </el-button>
@@ -87,10 +116,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+// 给组件起 name，让 App.vue 的 <keep-alive :include="['TorrentSearch']"> 能命中
+defineOptions({ name: 'TorrentSearch' })
+
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { useRoute } from 'vue-router'
-import { Search } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search, Link } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { discoverApi, configApi } from '@/api'
 
 const route = useRoute()
@@ -99,6 +131,7 @@ const results = ref([])
 const loading = ref(false)
 const keywords = ref([])
 const defaultKeywords = ref('')
+const jackettUrl = ref('')  // 用于"打开 Jackett 后台"链接
 
 const loadConfig = async () => {
   try {
@@ -106,6 +139,9 @@ const loadConfig = async () => {
     const j = r.data?.config?.jackett || {}
     keywords.value = j.search_keywords || []
     defaultKeywords.value = j.default_keywords || ''
+    if (j.host) {
+      jackettUrl.value = String(j.host).replace(/\/$/, '') + '/UI/Dashboard'
+    }
   } catch {
     keywords.value = []
     defaultKeywords.value = ''
@@ -134,17 +170,33 @@ const sortedResults = computed(() =>
   [...results.value].sort((a, b) => (b.seeders || 0) - (a.seeders || 0))
 )
 
+// 分页（前端本地分页 —— 后端一次性返回 limit 条，由用户翻页查看）
+const currentPage = ref(1)
+const pageSize = ref(50)
+
+const paginatedResults = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return sortedResults.value.slice(start, start + pageSize.value)
+})
+
+const onPageSizeChange = (size) => {
+  pageSize.value = size
+  currentPage.value = 1
+}
+
 const search = async () => {
   if (!form.value.query.trim()) {
     ElMessage.warning('请输入搜索关键词')
     return
   }
   loading.value = true
+  // 重新搜索后回到第一页
+  currentPage.value = 1
   try {
     const res = await discoverApi.search({
       query: form.value.query,
       category: form.value.category,
-      limit: 100,
+      limit: 200,
     })
     results.value = res.data.results || []
     if (!results.value.length) {
@@ -157,29 +209,31 @@ const search = async () => {
   }
 }
 
+// ---- 下载：把种子 push 到分析队列 ----
+// 后端流程：
+//   1. qB add_torrent(stop_condition='MetadataReceived') → 只下 metadata 就暂停
+//   2. dispatch_map(phase='analyzing') 占位
+//   3. analyzer 事件驱动 → 拿 metadata + 识别 + 算路径
+//   4. 高置信 → phase='dispatch_queued' + qB resume → downloader-watcher 接管
+//      低置信 → phase='analyzing' status='needs_review' + qB 保持暂停 → 用户在下载流水线页审核
+//
+// 用户在搜索时选的 category（非 all）当 user_hint 透传，命中后 confidence=1.0 直接自动入。
 const pushDownload = async (row) => {
-  try {
-    await ElMessageBox.confirm(
-      `推送 ${row.title} 到 qBittorrent 下载？`,
-      '确认下载',
-      { confirmButtonText: '确定', cancelButtonText: '取消' }
-    )
-  } catch {
-    return
-  }
-  row.pushing = true
   try {
     await discoverApi.push({
       title: row.title,
       magnet: row.magnet || undefined,
       torrent_url: !row.magnet ? row.link : undefined,
       source: 'jackett',
+      // 搜索分类不是"全部"时，作为 user_hint 让 identify 直接命中 → 高置信自动入流水线
+      user_hint_media_type:
+        form.value.category && form.value.category !== 'all'
+          ? form.value.category
+          : undefined,
     })
-    ElMessage.success('已推送到 qBittorrent')
+    ElMessage.success(`${row.title}：已加入分析队列，识别后自动入流水线`)
   } catch (e) {
-    console.error('推送失败', e)
-  } finally {
-    row.pushing = false
+    ElMessage.error('推送失败：' + (e.response?.data?.detail || e.message))
   }
 }
 
@@ -196,35 +250,125 @@ const formatSize = (bytes) => {
 
 const formatDate = (s) => (s ? s.replace('T', ' ').slice(0, 16) : '-')
 
+// 根据 route.query 决定是否触发新搜索：
+//   - 有 q（从其他页面跳来 / 主动带参数刷新）→ 覆盖 form 并搜索
+//   - 无 q → 不动 form（让 keep-alive 保留的旧搜索结果继续显示）
+//
+// 跟踪上一次处理过的 q，避免同一个 query 在 keep-alive 激活时被重复触发搜索
+let lastHandledQuery = null
+
+const applyRouteQuery = () => {
+  const q = route.query.q ? String(route.query.q).trim() : ''
+  const t = route.query.type ? String(route.query.type) : ''
+  // 唯一性 key：q + type（区分同 q 不同 type 的情况）
+  const key = q ? `${q}|${t}` : null
+  if (!key || key === lastHandledQuery) return
+  lastHandledQuery = key
+
+  let finalQ = q
+  if (defaultKeywords.value && !finalQ.toLowerCase().includes(defaultKeywords.value.toLowerCase())) {
+    finalQ = (finalQ + ' ' + defaultKeywords.value).trim()
+  }
+  form.value.query = finalQ
+  if (t) form.value.category = t
+  search()
+}
+
 onMounted(async () => {
+  // 首次挂载：先 loadConfig 再决定是否搜索 / 预填
   await loadConfig()
   if (route.query.q) {
-    // 从其他页面跳转过来：query 中已有内容，按 default_keywords 补足
-    let q = String(route.query.q).trim()
-    if (defaultKeywords.value && !q.toLowerCase().includes(defaultKeywords.value.toLowerCase())) {
-      q = (q + ' ' + defaultKeywords.value).trim()
-    }
-    form.value.query = q
-    if (route.query.type) {
-      form.value.category = String(route.query.type)
-    }
-    search()
-  } else if (defaultKeywords.value) {
-    // 直接进搜索页：预填默认关键字（用户可继续输入主关键词）
+    applyRouteQuery()
+  } else if (defaultKeywords.value && !form.value.query) {
+    // 直接进搜索页且没有保留状态：预填默认关键字（用户可继续输入主关键词）
     form.value.query = defaultKeywords.value
   }
+})
+
+// keep-alive 激活：从其他页面切回来时触发。
+// 只有 route.query.q 跟上次处理过的不一样才会重新搜索；否则保留上次的状态。
+onActivated(() => {
+  if (route.query.q) applyRouteQuery()
 })
 </script>
 
 <style lang="scss" scoped>
+.page-header .header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ext-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: #475569;
+  text-decoration: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #fff;
+  transition: all 0.15s ease;
+
+  &:hover {
+    color: #00a4dc;
+    border-color: #00a4dc;
+  }
+
+  .el-icon {
+    font-size: 14px;
+  }
+}
+
 .form-card {
   margin-bottom: 20px;
+}
+
+// 整页 flex 布局：表单卡固定高度，结果卡占满剩余
+.page-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;     // 父容器（el-main padding 后的可用高度）
+  min-height: 0;    // 关键：让 flex child 可被压缩 + 内部 scroll
+}
+
+.results-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+
+  // el-card 内部结构 → body 拉满 + table 内部滚动
+  :deep(.el-card__body) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 0;          // 让 table 边到边
+  }
+}
+
+.results-table {
+  flex: 1;
+  min-height: 0;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+
+  .results-count {
+    color: #475569;
+    font-weight: 500;
+  }
+
+  .results-pagination {
+    margin-left: auto;   // 靠右对齐
+  }
 }
 
 .presets-bar {

@@ -43,7 +43,7 @@ class ScanMediaRequest(BaseModel):
 
 
 @router.get("/browse")
-async def browse_directory(path: str = ""):
+def browse_directory(path: str = ""):
     """浏览目录"""
     if not path:
         # 返回可用的驱动器或根目录
@@ -93,7 +93,7 @@ async def browse_directory(path: str = ""):
 
 
 @router.post("/scan")
-async def scan_media(
+def scan_media(
     request: ScanMediaRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
@@ -238,7 +238,7 @@ def _quick_hash(path: Path, chunk_size: int = 65536) -> Optional[str]:
 
 
 @router.get("/duplicates")
-async def find_duplicates(
+def find_duplicates(
     path: str,
     use_hash: bool = True,
     db: Session = Depends(get_db),
@@ -345,8 +345,204 @@ async def find_duplicates(
     }
 
 
+@router.get("/duplicates-by-metadata")
+def find_duplicates_by_metadata(
+    library_id: Optional[str] = None,
+):
+    """
+    基于 Jellyfin 元数据检测重复（语义重复，相对 /duplicates 的字节级重复）。
+
+    分组规则（按优先级，命中即停）：
+      Movie:
+        1. ProviderIds.Tmdb 相同 → match_type='tmdb'   （最强信号）
+        2. ProviderIds.Imdb 相同 → match_type='imdb'
+        3. normalize(Name) + ProductionYear 相同 → match_type='title_year'
+      Episode:
+        SeriesId + ParentIndexNumber + IndexNumber 相同 → match_type='episode'
+        （即 同剧·同季·同集 出现多次）
+
+    比起字节级 hash：能识别"同一作品的不同清晰度版本"等真正语义重复，
+    且不需要扫盘，对几千项目的库瞬时返回。
+    """
+    from web.backend.config import settings
+    from common.jellyfin_client import JellyfinClient
+
+    if not settings.jellyfin_api_key:
+        raise HTTPException(status_code=400, detail="未配置 Jellyfin API Key")
+
+    client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
+    fields = "ProviderIds,ProductionYear,Path,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber"
+
+    def _fetch(types: str) -> list:
+        params = {
+            'Recursive': 'true',
+            'IncludeItemTypes': types,
+            'Fields': fields,
+            'Limit': 5000,
+        }
+        if library_id:
+            params['ParentId'] = library_id
+        try:
+            r = client._request('GET', '/Items', params=params)
+            return (r or {}).get('Items', []) or []
+        except Exception:
+            return []
+
+    movies = _fetch('Movie')
+    episodes = _fetch('Episode')
+
+    def _file_size(item: dict) -> int:
+        # MediaSources[0].Size 通常就是真实文件 byte
+        ms = item.get('MediaSources') or []
+        if ms and isinstance(ms, list):
+            sz = ms[0].get('Size')
+            if isinstance(sz, int):
+                return sz
+        return 0
+
+    def _slim(item: dict, version_label: str = '') -> dict:
+        return {
+            "jellyfin_id": item.get('Id'),
+            "name": item.get('Name'),
+            "year": item.get('ProductionYear'),
+            "path": item.get('Path'),
+            "size": _file_size(item),
+            "version_label": version_label,
+        }
+
+    def _normalize_title(s: str) -> str:
+        if not s:
+            return ''
+        out = []
+        for ch in s.lower():
+            if ch.isalnum() or ('一' <= ch <= '鿿') or ('぀' <= ch <= 'ヿ'):
+                out.append(ch)
+        return ''.join(out)
+
+    # ---- Movie 分组 ----
+    by_tmdb = defaultdict(list)
+    by_imdb = defaultdict(list)
+    by_title_year = defaultdict(list)
+    used_ids: set = set()  # 防止同一 movie 被多次归入不同组
+
+    for m in movies:
+        pids = m.get('ProviderIds') or {}
+        tmdb = pids.get('Tmdb')
+        if tmdb:
+            by_tmdb[str(tmdb)].append(m)
+            continue
+        imdb = pids.get('Imdb')
+        if imdb:
+            by_imdb[str(imdb)].append(m)
+            continue
+        nt = _normalize_title(m.get('Name') or '')
+        yr = m.get('ProductionYear')
+        if nt:
+            by_title_year[f"{nt}|{yr or ''}"].append(m)
+
+    movie_groups = []
+    for tmdb_id, items in by_tmdb.items():
+        if len(items) < 2:
+            continue
+        for it in items:
+            used_ids.add(it.get('Id'))
+        movie_groups.append({
+            "match_type": "tmdb",
+            "key": f"tmdb:{tmdb_id}",
+            "title": items[0].get('Name'),
+            "year": items[0].get('ProductionYear'),
+            "files": sorted(
+                (_slim(it) for it in items),
+                key=lambda x: -(x.get('size') or 0),
+            ),
+        })
+    for imdb_id, items in by_imdb.items():
+        if len(items) < 2:
+            continue
+        items = [it for it in items if it.get('Id') not in used_ids]
+        if len(items) < 2:
+            continue
+        for it in items:
+            used_ids.add(it.get('Id'))
+        movie_groups.append({
+            "match_type": "imdb",
+            "key": f"imdb:{imdb_id}",
+            "title": items[0].get('Name'),
+            "year": items[0].get('ProductionYear'),
+            "files": sorted(
+                (_slim(it) for it in items),
+                key=lambda x: -(x.get('size') or 0),
+            ),
+        })
+    for k, items in by_title_year.items():
+        if len(items) < 2:
+            continue
+        items = [it for it in items if it.get('Id') not in used_ids]
+        if len(items) < 2:
+            continue
+        movie_groups.append({
+            "match_type": "title_year",
+            "key": f"title:{k}",
+            "title": items[0].get('Name'),
+            "year": items[0].get('ProductionYear'),
+            "files": sorted(
+                (_slim(it) for it in items),
+                key=lambda x: -(x.get('size') or 0),
+            ),
+        })
+
+    # ---- Episode 分组：同 SeriesId + S + E ----
+    by_episode = defaultdict(list)
+    for ep in episodes:
+        sid = ep.get('SeriesId')
+        s = ep.get('ParentIndexNumber')
+        e = ep.get('IndexNumber')
+        if sid is None or s is None or e is None:
+            continue
+        by_episode[f"{sid}|S{s:02d}E{e:02d}"].append(ep)
+
+    episode_groups = []
+    for k, items in by_episode.items():
+        if len(items) < 2:
+            continue
+        first = items[0]
+        episode_groups.append({
+            "match_type": "episode",
+            "key": k,
+            "title": (
+                f"{first.get('SeriesName') or '?'} - "
+                f"S{first.get('ParentIndexNumber'):02d}E{first.get('IndexNumber'):02d}"
+            ),
+            "year": None,
+            "files": sorted(
+                (_slim(it, version_label=it.get('Name') or '') for it in items),
+                key=lambda x: -(x.get('size') or 0),
+            ),
+        })
+
+    all_groups = movie_groups + episode_groups
+    # 按浪费空间排序：组内"非最大文件"的总大小 = 可释放空间
+    def _waste(g):
+        files = g['files']
+        if len(files) < 2:
+            return 0
+        sizes = sorted((f.get('size') or 0 for f in files), reverse=True)
+        return sum(sizes[1:])
+    all_groups.sort(key=_waste, reverse=True)
+
+    return {
+        "total_items": len(movies) + len(episodes),
+        "total_movies": len(movies),
+        "total_episodes": len(episodes),
+        "potential_duplicates": len(all_groups),
+        "movie_dup_groups": len(movie_groups),
+        "episode_dup_groups": len(episode_groups),
+        "groups": all_groups[:200],
+    }
+
+
 @router.get("/storage")
-async def analyze_storage(path: str):
+def analyze_storage(path: str):
     """分析存储空间"""
     path = _resolve_local_path(path)
     scan_path = Path(path)

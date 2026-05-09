@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # 常见：zh-CN / zh-TW / en-US / ja-JP / ko-KR
     tmdb_language: str = _yaml_config.get('tmdb', {}).get('language', 'zh-CN')
 
+    # 缓存 TTL（分钟）—— 除路径索引（硬编码 30 秒）外，全部可配
+    # 注意：改值后需要重启后端才生效（settings 模块级一次性加载）
+    cache_tmdb_minutes: int = _yaml_config.get('cache', {}).get('tmdb_minutes', 120)
+    cache_library_stats_minutes: int = _yaml_config.get('cache', {}).get('library_stats_minutes', 120)
+    cache_tree_children_minutes: int = _yaml_config.get('cache', {}).get('tree_children_minutes', 120)
+    cache_subtitle_scan_minutes: int = _yaml_config.get('cache', {}).get('subtitle_scan_minutes', 1440)
+
     # Wikidata 配置（演员图兜底来源；公共知识库无需 API Key，但要求礼貌的 User-Agent）
     wikidata_enabled: bool = _yaml_config.get('wikidata', {}).get('enabled', True)
     wikidata_user_agent: str = _yaml_config.get('wikidata', {}).get(
@@ -134,7 +141,26 @@ class Settings(BaseSettings):
     opensubtitles_api_key: str = _yaml_config.get('subtitle', {}).get('opensubtitles_api_key', '')
     opensubtitles_username: Optional[str] = _yaml_config.get('subtitle', {}).get('opensubtitles_username')
     opensubtitles_password: Optional[str] = _yaml_config.get('subtitle', {}).get('opensubtitles_password')
+    opensubtitles_request_delay: float = _yaml_config.get('subtitle', {}).get('opensubtitles_request_delay', 2.0)
     preferred_langs: List[str] = _yaml_config.get('subtitle', {}).get('preferred_langs', ['chs', 'eng'])
+
+    # 射手字幕 assrt.net（中文字幕主力源；API 限频 20/min）
+    assrt_api_token: str = _yaml_config.get('subtitle', {}).get('assrt_api_token', '')
+    assrt_request_delay: float = _yaml_config.get('subtitle', {}).get('assrt_request_delay', 3.0)
+
+    # 字幕格式偏好（按顺序优先；同一语言下只下载排名最高的那一种）
+    # 'ass' / 'ssa' 视为同一类（ASS 是 SSA v4+），'srt' 是兜底通用格式，'sup' 是蓝光图形字幕
+    # 用户在包里同时拿到 chs.ass + chs.srt 时，按此顺序只保留 chs.ass
+    preferred_subtitle_formats: List[str] = _yaml_config.get('subtitle', {}).get(
+        'preferred_formats', ['ass', 'srt', 'sup']
+    )
+
+    # 字幕下载源优先级：按顺序尝试，第一个命中即返回
+    # List[Dict]: [{name: 'assrt'|'opensubtitles', enabled: bool}, ...]
+    subtitle_sources: List[dict] = _yaml_config.get('subtitle', {}).get('sources') or [
+        {'name': 'assrt', 'enabled': True},
+        {'name': 'opensubtitles', 'enabled': True},
+    ]
 
     # 期望的默认音轨语言（按优先级排序，命中第一个就会被选为默认音轨）
     # 归一化代码：chs / cht / eng / jpn / kor
@@ -162,6 +188,30 @@ class Settings(BaseSettings):
     qbittorrent_password: str = _yaml_config.get('qbittorrent', {}).get('password', '***REMOVED***')
     qbittorrent_download_path: str = _yaml_config.get('qbittorrent', {}).get('download_path', '/downloads')
 
+    # qBittorrent 配额 + 做种策略（嵌套 pydantic models，见 web/backend/config_models.py）
+    # yaml 段：qbittorrent.quota / qbittorrent.seeding
+    @property
+    def qbittorrent_quota(self):
+        from web.backend.config_models import QuotaConfig
+        return QuotaConfig(**(_yaml_config.get('qbittorrent', {}).get('quota') or {}))
+
+    @property
+    def qbittorrent_seeding(self):
+        from web.backend.config_models import SeedingConfig
+        return SeedingConfig(**(_yaml_config.get('qbittorrent', {}).get('seeding') or {}))
+
+    # 入库流水线（dispatch 段）
+    @property
+    def dispatch(self):
+        from web.backend.config_models import DispatchConfig
+        return DispatchConfig(**(_yaml_config.get('dispatch') or {}))
+
+    # LLM 兜底识别（llm 段）
+    @property
+    def llm(self):
+        from web.backend.config_models import LLMConfig
+        return LLMConfig(**(_yaml_config.get('llm') or {}))
+
     # 成人内容配置
     adult_enabled: bool = _yaml_config.get('adult', {}).get('enabled', False)
     # 旧字段：单一目录（向后兼容，不推荐用）
@@ -174,14 +224,23 @@ class Settings(BaseSettings):
     adult_auto_detect: bool = _yaml_config.get('adult', {}).get('auto_detect', True)
     # 自动监视：开启后通过 Jellyfin WebSocket 实时监听库变化，发现新视频自动入库 + 刮削
     adult_auto_scrape: bool = _yaml_config.get('adult', {}).get('auto_scrape', False)
-    adult_scraper_delay: float = _yaml_config.get('adult', {}).get('scraper_delay', 30.0)
-    adult_proxy: str = _yaml_config.get('adult', {}).get('proxy', '') or ''
-    # 刮削源配置（List[Dict]），不填就用默认 javbus + javdb
-    adult_sources: List[dict] = _yaml_config.get('adult', {}).get('sources') or [
-        {'name': 'javbus', 'enabled': True},
-        {'name': 'javdb', 'enabled': True},
-        {'name': 'avmoo', 'enabled': False},
-        {'name': 'javlibrary', 'enabled': False},
+    adult_scraper_delay: float = _yaml_config.get('adult', {}).get('scraper_delay', 3.0)
+    # 刮削源配置（List[Dict]）。按顺序回退，第一个命中即返回。
+    # missav 放最后：覆盖广（含 FC2 + 中文标题），但需 CF 绕过较慢，作为最终兜底
+    # 过滤掉已下线源（如 avmoo）—— 老 config.yaml 可能还残留，避免 ScraperManager 每次启动都 warn
+    adult_sources: List[dict] = [
+        s for s in (
+            _yaml_config.get('adult', {}).get('sources') or [
+                {'name': 'javbus', 'enabled': True},
+                {'name': 'javdb', 'enabled': True},
+                {'name': 'javlibrary', 'enabled': False},
+                {'name': 'avbase', 'enabled': True},
+                {'name': 'missav', 'enabled': True},
+            ]
+        )
+        if isinstance(s, dict) and s.get('name') in {
+            'javbus', 'javdb', 'javlibrary', 'avbase', 'missav',
+        }
     ]
 
     class Config:
@@ -211,6 +270,12 @@ class Settings(BaseSettings):
                 "request_delay": self.tmdb_request_delay,
                 "language": self.tmdb_language,
             },
+            "cache": {
+                "tmdb_minutes": self.cache_tmdb_minutes,
+                "library_stats_minutes": self.cache_library_stats_minutes,
+                "tree_children_minutes": self.cache_tree_children_minutes,
+                "subtitle_scan_minutes": self.cache_subtitle_scan_minutes,
+            },
             "wikidata": {
                 "enabled": self.wikidata_enabled,
                 "user_agent": self.wikidata_user_agent,
@@ -233,7 +298,12 @@ class Settings(BaseSettings):
                 "opensubtitles_api_key": self.opensubtitles_api_key,
                 "opensubtitles_username": self.opensubtitles_username,
                 "opensubtitles_password": self.opensubtitles_password,
+                "opensubtitles_request_delay": self.opensubtitles_request_delay,
                 "preferred_langs": self.preferred_langs,
+                "preferred_formats": self.preferred_subtitle_formats,
+                "assrt_api_token": self.assrt_api_token,
+                "assrt_request_delay": self.assrt_request_delay,
+                "sources": self.subtitle_sources,
             },
             "audio": {
                 "preferred_langs": self.preferred_audio_langs,
@@ -262,7 +332,6 @@ class Settings(BaseSettings):
                 "auto_detect": self.adult_auto_detect,
                 "auto_scrape": self.adult_auto_scrape,
                 "scraper_delay": self.adult_scraper_delay,
-                "proxy": self.adult_proxy,
                 "sources": self.adult_sources,
             },
         }
