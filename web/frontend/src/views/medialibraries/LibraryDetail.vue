@@ -234,9 +234,11 @@
           @click="onGridCardClick(row)"
         >
           <div class="grid-poster-wrap">
+            <!-- 网格视图用 16:9：优先 backdrop（Movie/Series 横版背景图）/ thumb（Episode 剧照）；
+                 没有则用 Primary 海报（2:3）裁剪填充——避免空缺，但视觉上会糊一点 -->
             <el-image
-              v-if="row.poster_url"
-              :src="row.poster_url"
+              v-if="row.backdrop_url || row.poster_url"
+              :src="row.backdrop_url || row.poster_url"
               :alt="row.name"
               fit="cover"
               lazy
@@ -599,7 +601,7 @@
     <!-- /普通库视图 -->
 
     <!-- 重复检测对话框 -->
-    <el-dialog v-model="showDupDialog" title="重复检测" width="780" :close-on-click-modal="false">
+    <el-dialog v-model="showDupDialog" title="重复检测" width="780" :close-on-click-modal="false" :close-on-press-escape="false">
       <!-- 检测模式 -->
       <div class="dup-mode-pick">
         <span class="dup-pick-label">检测模式：</span>
@@ -2354,7 +2356,7 @@ onUnmounted(() => {
 }
 
 .items-card {
-  margin-top: 16px;
+  margin-top: 0;
   flex: 1;
   // 关键：min-height: 0 让 flex 子元素能正确收缩；不然内容会撑高 page-container 出页面滚动条
   min-height: 0;
@@ -2729,14 +2731,25 @@ onUnmounted(() => {
   }
 
   // ---- 网格视图 ----
+  // 16:9 横版卡片：宽度固定 280px、海报高度固定 158px（≈ 280 * 9/16）。
+  // 不依赖 aspect-ratio（在 flex column / grid stretch 场景偶尔被外层布局规则覆盖），
+  // 直接写死 width/height 最稳；grid-template-columns 用 auto-fill + 固定值（不要 1fr，
+  // 否则多余空间会均摊给已有列 → 卡片宽度跟容器宽度动态变）。
+  $grid-card-w: 280px;
+  $grid-poster-h: 158px;
+
   .grid-view {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fill, $grid-card-w);
+    grid-auto-rows: max-content;  // 行高跟随内容，不被 flex 父级拉伸
+    justify-content: start;       // 卡片左对齐，剩余空间留白
+    align-content: start;         // 不被父级垂直拉伸
     gap: 18px;
     padding: 18px;
     min-height: 200px;
   }
   .grid-card {
+    width: $grid-card-w;
     display: flex;
     flex-direction: column;
     background: #fff;
@@ -2753,7 +2766,9 @@ onUnmounted(() => {
   }
   .grid-poster-wrap {
     position: relative;
-    aspect-ratio: 2 / 3;        // 电影海报标准
+    width: 100%;
+    height: $grid-poster-h;     // 固定高，不依赖 aspect-ratio
+    flex: 0 0 $grid-poster-h;   // 防止被 flex column 父级压缩 / 拉伸
     background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
   }
   .grid-poster {

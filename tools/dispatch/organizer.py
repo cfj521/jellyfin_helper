@@ -63,6 +63,14 @@ def _is_junk(path: Path) -> bool:
 def _classify_files(src_root: Path) -> Tuple[List[Path], List[Path], List[Path]]:
     """递归分类：videos / subtitles / junk。"""
     videos, subs, junk = [], [], []
+    # 防御：拒绝把盘符根 / Linux 根目录当种子包扫——配错路径映射时可能解析成 X:\ 这种危险输入，
+    # 一旦放行就会递归整个盘，撞上 qB 锁定的日志文件等导致 PermissionError 失败循环
+    resolved = src_root.resolve()
+    if resolved == Path(resolved.anchor) or str(resolved) in ('/', ''):
+        raise RuntimeError(
+            f"src_root 解析成盘符/系统根目录: {src_root!r} (resolved={resolved!r}); "
+            f"请检查 path_mappings 配置或 qB content_path 是否异常"
+        )
     if src_root.is_file():
         items = [src_root]
     else:

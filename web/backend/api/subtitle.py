@@ -1814,11 +1814,14 @@ def _annotation_to_dict(a: VideoAnnotation) -> dict:
 
 
 def _normalize_path(p: str) -> str:
-    """统一路径格式：替换反斜杠为正斜杠，去尾部斜杠，全小写。
-    用于 file_path 比对（数据库存什么样查什么样要一致）。"""
+    """规范化 file_path：统一存 Jellyfin view（reverse-translate 任何 backend-view 入参），
+    再做 forward slash + 去尾斜杠 + 小写。约定：DB 一律存 Jellyfin view。
+    """
     if not p:
         return ''
-    return p.replace('\\', '/').rstrip('/').lower()
+    from web.backend.path_translator import reverse_translate_path_with_settings
+    canonical = reverse_translate_path_with_settings(p) or p
+    return canonical.replace('\\', '/').rstrip('/').lower()
 
 
 @router.post("/annotations/query")

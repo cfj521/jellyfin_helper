@@ -1077,10 +1077,13 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .adult-lib-view {
-  // 占满 .app-main 给的高度，items-card 自动吃剩余空间，避免外层 scrollbar
+  // 本视图嵌在 LibraryDetail 的 .page-container（flex column）里，跟 page-header 并列。
+  // 用 flex: 1 + min-height: 0 吃 header 之外的剩余空间；
+  // 之前用 height: 100% 是相对父容器全高（含 header），会把总内容撑出视口 → 外层出滚动条。
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 
   // ---- toolbar（与普通库 MediaToolbar 视觉一致） ----
   .media-toolbar {
@@ -1322,16 +1325,24 @@ onMounted(() => {
     }
   }
 
-  // ---- 网格视图 ----
+  // ---- 网格视图（跟普通库 LibraryDetail 对齐：固定卡片宽 + 写死海报高，
+  // 不依赖 aspect-ratio + 1fr 那一套，避免高度随分页器/容器变） ----
+  $grid-card-w: 280px;
+  $grid-poster-h: 158px;
+
   .grid-view {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, $grid-card-w);
+    grid-auto-rows: max-content;  // 行高跟随内容，不被 flex 父级拉伸
+    justify-content: start;       // 卡片左对齐，剩余空间留白
+    align-content: start;
     gap: 18px;
     padding: 18px;
     min-height: 200px;
   }
 
   .grid-card {
+    width: $grid-card-w;
     display: flex;
     flex-direction: column;
     background: #fff;
@@ -1352,12 +1363,14 @@ onMounted(() => {
 
   .grid-poster {
     position: relative;
-    aspect-ratio: 16 / 9;
+    width: 100%;
+    height: $grid-poster-h;       // 固定高，不依赖 aspect-ratio
+    flex: 0 0 $grid-poster-h;     // 不被 flex column 父级压缩 / 拉伸
     background: #f1f5f9;
 
     :deep(.adult-poster) {
       width: 100%;
-      aspect-ratio: 16 / 9;
+      height: 100%;
       border-radius: 0;
     }
     // 浏览器缩放用高质量插值；对原图本身分辨率不够的情况也会更好看一点

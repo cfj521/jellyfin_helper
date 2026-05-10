@@ -218,6 +218,15 @@ def confirm_dispatch(request: ConfirmRequest):
     if request.move_mode:
         qb.add_tags(h, [f'mode:{request.move_mode}'])
 
+    # 前端送回的 target_path 是 backend view（如 Z:/videos/...），
+    # DB 约定存 Jellyfin view（如 /library/videos/...），所以入库前 reverse-translate。
+    # 不命中映射规则的路径会原样返回，所以同机部署不受影响。
+    from web.backend.path_translator import reverse_translate_path_with_settings
+    target_path_for_db = (
+        reverse_translate_path_with_settings(request.target_path)
+        if request.target_path else request.target_path
+    )
+
     # 写 dispatch_map
     with SessionLocal() as db:
         row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
@@ -232,7 +241,7 @@ def confirm_dispatch(request: ConfirmRequest):
         row.tmdb_id = request.tmdb_id
         row.imdb_id = request.imdb_id
         row.target_library_id = request.target_library_id
-        row.target_path = request.target_path
+        row.target_path = target_path_for_db
         row.move_mode = request.move_mode or 'copy'
         # 用户在 AddTorrentDialog 确认 → phase=dispatch_queued，让 downloader-watcher 接管
         from tools.dispatch.phases import PHASE_DISPATCH_QUEUED, STATUS_RUNNING
@@ -342,15 +351,9 @@ def _resolve_target(identified: Dict) -> Dict:
         except Exception as e:
             logger.warning(f"resolve_target: get_library_by_id 失败: {e}")
 
-    # ⭐ jellyfin 视角路径 → 后端本地路径（按 settings.path_mappings_rules）
-    if library_root:
-        try:
-            from web.backend.path_translator import translate_path_with_settings
-            translated = translate_path_with_settings(library_root)
-            if translated:
-                library_root = translated
-        except Exception as e:
-            logger.warning(f"path_translator 失败: {e}")
+    # ⚠️ library_root 保持 Jellyfin 视角不翻译——DB 里 target_path 存"Jellyfin 视角的目标路径"，
+    # 由消费方（pipeline._step_copy）自己 translate_path_with_settings 转本机；
+    # 前端展示也由 API 层翻译。这样 DB 内容跟 Jellyfin 一致，不绑定具体宿主机的盘符。
 
     # 渲染 location_template
     target_path = ''
@@ -439,10 +442,12 @@ def _check_duplicates(identified: Dict, files: List[Dict]) -> Dict:
         if tmdb_id:
             results = _search_by_tmdb(tmdb_id, 'Movie')
             if results:
+                from web.backend.path_translator import translate_path_with_settings
                 out['is_duplicate'] = True
                 out['type'] = 'movie'
                 out['existing'] = [
-                    {'name': r.get('Name'), 'path': r.get('Path')} for r in results[:5]
+                    {'name': r.get('Name'), 'path': translate_path_with_settings(r.get('Path'))}
+                    for r in results[:5]
                 ]
     elif media_type in ('tv', 'anime'):
         import re
@@ -701,6 +706,85 @@ def rss_rule_set(rule_name: str, rule: RssRuleDef):
     return {'ok': True}
 
 
+class LLMRegexRequest(BaseModel):
+    """LLM 辅助生成 RSS 规则的必含 / 必不含正则。"""
+    description: str    # 用户自然语言描述意图，如 "1080p 蓝光整季的电视剧，排单集 / 重制"
+    sample_titles: Optional[List[str]] = None  # 可选：贴几条 feed 标题给 LLM 参考
+
+
+@router.post('/rss/llm-regex')
+def rss_llm_regex(request: LLMRegexRequest):
+    """
+    用 LLM 把"自然语言意图 → 必含 / 必不含正则"。
+    返回 { must_contain, must_not_contain, use_regex, explanation }。
+    use_regex 由 LLM 自决：简单关键词组合给 false（让 qB 走默认 AND 语义），
+    需要回溯 / 量词时给 true。
+    """
+    desc = (request.description or '').strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail='description 不能为空')
+
+    from common.llm_client import get_default_client
+    if not (settings.llm and settings.llm.api_key):
+        raise HTTPException(
+            status_code=400,
+            detail='LLM 未配置。请先去设置 → LLM 配置 api_key + base_url',
+        )
+
+    sys_prompt = (
+        '你是 qBittorrent RSS 自动下载规则的专家，专门把用户的自然语言描述转换成 '
+        'qB 规则的「必含」和「必不含」字段。\n\n'
+        'qB 规则字段语义：\n'
+        '- mustContain：标题必须命中（默认词与词之间是 AND，多关键词空格分隔）\n'
+        '- mustNotContain：标题命中即排除（同样 AND 语义）\n'
+        '- useRegex=false 时按「空格分词 AND」解析；true 时整段当 Python 风格正则（PCRE 子集）\n\n'
+        '**输出 JSON 严格如下**（不要 markdown 围栏）：\n'
+        '{\n'
+        '  "must_contain": "...",\n'
+        '  "must_not_contain": "...",\n'
+        '  "use_regex": true | false,\n'
+        '  "explanation": "1-2 句解释你的选择"\n'
+        '}\n\n'
+        '决策原则：\n'
+        '- 简单关键词组合（如「1080p WEB-DL 简体」）→ use_regex=false，空格分词\n'
+        '- 需要量词 / 选择 / 锚点（如 \\d{2}E\\d{2}、(720p|HDTV)、^.*\\.S\\d+\\.）→ use_regex=true\n'
+        '- mustContain 和 mustNotContain 的 use_regex 是**同一开关**：要正则就两边都正则\n'
+        '- 集数过滤建议**留空**（qB 有独立的 episodeFilter 字段处理 SxxExx，比正则简洁）\n'
+        '- 不要写 ^ $ 边界（qB 规则匹配的是子串）\n'
+        '- 字段写空字符串表示「不限」\n\n'
+        '常见模板举例：\n'
+        '- 「蓝光 1080p 简体」→ must_contain=「1080p BluRay 简体」/ must_not_contain=「」/ use_regex=false\n'
+        '- 「整季排单集」→ must_contain=「\\.S\\d{2}\\.」/ must_not_contain=「S\\d{2}E\\d{2}」/ use_regex=true\n'
+        '- 「排低画质和重制」→ must_not_contain=「(720p|480p|HDTV|REPACK|PROPER|CAM|TS)」/ use_regex=true\n'
+    )
+
+    user_msg = f"用户意图：{desc}"
+    if request.sample_titles:
+        sample = '\n'.join(f"  - {t}" for t in request.sample_titles[:10])
+        user_msg += f"\n\nfeed 中已有的样本标题（参考）：\n{sample}"
+    user_msg += "\n\n按上述 JSON 格式输出，只输出 JSON。"
+
+    try:
+        client = get_default_client()
+        # 关掉 reasoning：生成正则是结构化短任务，思考链会让响应翻倍变慢且大概率超时
+        result = client.chat_json(
+            sys_prompt, user_msg,
+            temperature=0.2,
+            disable_reasoning=True,
+        )
+    except Exception as e:
+        logger.exception("LLM 生成 RSS 规则失败")
+        raise HTTPException(status_code=502, detail=f'LLM 调用失败: {e}')
+
+    # 字段标准化
+    return {
+        'must_contain': str(result.get('must_contain') or '').strip(),
+        'must_not_contain': str(result.get('must_not_contain') or '').strip(),
+        'use_regex': bool(result.get('use_regex')),
+        'explanation': str(result.get('explanation') or '').strip(),
+    }
+
+
 class RssRuleRenameRequest(BaseModel):
     new_name: str
 
@@ -883,8 +967,10 @@ def confirm_needs_review(
 
     # target_library_id / target_path：用户没填就走规则重算（基于新 media_type）
     if request.target_library_id and request.target_path:
+        # 同样：前端送的 backend view → reverse-translate 成 Jellyfin view 再入库
+        from web.backend.path_translator import reverse_translate_path_with_settings
         row.target_library_id = request.target_library_id
-        row.target_path = request.target_path
+        row.target_path = reverse_translate_path_with_settings(request.target_path) or request.target_path
     else:
         identified = {
             'media_type': request.media_type,
@@ -1074,3 +1160,48 @@ def scan_now():
     except Exception as e:
         logger.exception("手动扫描失败")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post('/dispatch-map/{torrent_hash}/retry')
+def retry_dispatch_row(torrent_hash: str, db: Session = Depends(get_db)):
+    """
+    重试一个 sweeper 已放弃的 dispatch_map 行。
+
+    用户排查完底层问题（路径映射 / 磁盘 / qB 配置）后，从 UI 点"重试"：
+      - 清 phase_timings.sweeper_gave_up + sweeper_attempts.<phase> 计数
+      - 把 phase 重置回 _recover_target_phase（链式段→copying，后处理→subtitle_fetching）
+      - phase_status=running，让对应 worker 立即接走
+    """
+    from tools.dispatch.phases import (
+        STATUS_RUNNING, PHASE_CLEANED, PHASE_DISMISSED, PHASE_ALL_JOBS_DONE,
+    )
+    from tools.dispatch.sweeper import _recover_target_phase, _fire_all_triggers
+
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+
+    if row.phase in (PHASE_CLEANED, PHASE_DISMISSED, PHASE_ALL_JOBS_DONE):
+        raise HTTPException(status_code=400, detail=f'当前 phase 已是终态（{row.phase}），不可重试')
+
+    new_phase = _recover_target_phase(row.phase) or row.phase
+    old_phase = row.phase
+
+    # 清重试计数和放弃标记
+    timings = dict(row.phase_timings or {})
+    timings.pop('sweeper_gave_up', None)
+    attempts_map = dict(timings.get('sweeper_attempts') or {})
+    attempts_map.pop(old_phase, None)
+    attempts_map.pop(new_phase, None)
+    timings['sweeper_attempts'] = attempts_map
+
+    row.phase = new_phase
+    row.phase_status = STATUS_RUNNING
+    row.phase_timings = timings
+    row.status_message = f'用户重试：{old_phase} → {new_phase}/running'
+    db.commit()
+
+    _fire_all_triggers()
+    logger.info(f"retry: {h[:16]}.. {old_phase} → {new_phase}（用户从 UI 重试）")
+    return {'ok': True, 'torrent_hash': h, 'old_phase': old_phase, 'new_phase': new_phase}

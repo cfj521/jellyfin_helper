@@ -214,9 +214,9 @@ export const jellyfinApi = {
         ...(fields !== null ? { fields } : {}),
       },
     }),
-  // 懒加载缺字幕统计：复用 settings.cache_subtitle_scan_minutes 窗口内的 subtitle_scan 任务，
+  // 懒加载缺字幕统计：复用 settings.cache_library_days 窗口内的 subtitle_scan 任务，
   // 没有就启新的；force=true 时跳过最近任务复用，直接启新扫描
-  // 后端 max_age_minutes 走 config.yaml.cache.subtitle_scan_minutes，前端不再硬编码
+  // 后端 max_age_minutes 走 config.yaml.cache.library_days * 1440，前端不再硬编码
   librarySubtitleStats: (id, force = false) =>
     api.get(`/api/medialibraries/libraries/${id}/subtitle-stats`, {
       params: { force_refresh: force },
@@ -365,6 +365,7 @@ export const discoverApi = {
   reannounce: (hash) => api.post(`/api/downloadpipeline/downloads/${hash}/reannounce`),
   forceStart: (hash, force = true) =>
     api.post(`/api/downloadpipeline/downloads/${hash}/force-start`, { force }),
+  retryDispatchRow: (hash) => api.post(`/api/dispatch/dispatch-map/${hash}/retry`),
   // 全局传输状态 + 限速控制
   transferInfo: () => api.get('/api/downloadpipeline/transfer-info'),
   setSpeedLimit: (payload) => api.post('/api/downloadpipeline/transfer-info/speed-limit', payload),
@@ -448,6 +449,8 @@ export const dispatchApi = {
   rssSettingsGet: () => api.get('/api/dispatch/rss/settings'),
   rssSettingsSet: (payload) => api.post('/api/dispatch/rss/settings', payload),
   rssRuleSet: (name, def) => api.post(`/api/dispatch/rss/rules/${encodeURIComponent(name)}`, def),
+  rssLlmRegex: (description, sample_titles) =>
+    api.post('/api/dispatch/rss/llm-regex', { description, sample_titles }, { timeout: 60000 }),
   rssRuleRename: (name, newName) =>
     api.post(`/api/dispatch/rss/rules/${encodeURIComponent(name)}/rename`, { new_name: newName }),
   rssRuleDelete: (name) => api.delete(`/api/dispatch/rss/rules/${encodeURIComponent(name)}`),
@@ -460,6 +463,7 @@ export const dispatchApi = {
     }),
   restoreDismissed: (hash) => api.post(`/api/dispatch/needs-review/${hash}/restore`),
   adoptScanNow: () => api.post('/api/dispatch/adopt/scan-now'),
+  retryDispatchRow: (hash) => api.post(`/api/dispatch/dispatch-map/${hash}/retry`),
 }
 
 export default api

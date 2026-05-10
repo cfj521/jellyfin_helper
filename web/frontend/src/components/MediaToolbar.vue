@@ -51,6 +51,7 @@
       :title="confirmDialog.btn?.label || '确认'"
       width="500px"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
       append-to-body
     >
       <div class="confirm-scope">{{ scopeLabel }}</div>
@@ -85,6 +86,7 @@
       title="选择默认音轨语言"
       width="500px"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
     >
       <div class="audio-dialog-tip">
         将把范围内所有视频的默认音轨切换为下列语言（按可用性优先匹配）：
@@ -119,6 +121,7 @@
       title="一键修复所有问题"
       width="560px"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
     >
       <div class="runall-scope">{{ scopeLabel }}</div>
       <div class="runall-tip">

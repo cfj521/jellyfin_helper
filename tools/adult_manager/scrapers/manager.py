@@ -2,7 +2,10 @@
 刮削器管理：多源回退
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Union
+
+import requests
 
 from common.label_cleaner import clean_label_list as _clean_label_list
 
@@ -14,6 +17,24 @@ from .avbase import AvBaseScraper
 from .missav import MissAvScraper
 
 logger = logging.getLogger(__name__)
+
+
+def _probe_cover_size(url: str, proxy: Optional[str], timeout: int = 6) -> int:
+    """HEAD 一下 URL 拿 Content-Length，作为图片清晰度的 proxy 指标。
+    探测失败返回 0（让上层用源优先级兜底）。"""
+    if not url:
+        return 0
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        # allow_redirects=True：很多图床会 302 到真正的图片 CDN
+        r = requests.head(url, allow_redirects=True, timeout=timeout, proxies=proxies)
+        if r.status_code != 200:
+            return 0
+        cl = r.headers.get('Content-Length')
+        return int(cl) if cl and cl.isdigit() else 0
+    except Exception as e:
+        logger.debug(f"HEAD 探测失败 {url}: {e}")
+        return 0
 
 
 # 支持的源 → 实现类
@@ -198,21 +219,44 @@ class ScraperManager:
         original_title, _ = first_nonempty(lambda r: r.original_title)
         merged.original_title = original_title
 
-        # cover_url 独立优先级：avbase（DMM 高清）/ missav / javdb / javlibrary 优先，
-        # javbus 排最后 —— javbus 给的 cover URL 实测前端加载失败率高
-        # （防盗链 / Cloudflare / 海外不稳），跟其它字段共用 sources 顺序会选到坏 URL。
+        # cover_url 选清晰度最高的：并行 HEAD 各源 cover_url，比 Content-Length 取最大。
+        # 探测失败的源（HEAD 超时 / 4xx / 没返回 Content-Length）按下面的源优先级兜底：
+        # avbase（DMM 高清）/ missav / javdb / javlibrary > javbus（防盗链 / 海外不稳）
         cover_preferred_order = ['avbase', 'missav', 'javdb', 'javlibrary', 'javbus']
+        candidates: List[Tuple[str, str]] = []  # [(source_name, url), ...]
+        for sname, r in per_source.items():
+            if r.cover_url:
+                candidates.append((sname, r.cover_url))
+
         cover = None
-        for pname in cover_preferred_order:
-            if pname not in per_source:
-                continue
-            v = per_source[pname].cover_url
-            if v:
-                cover = v
-                break
-        # 上面的优先级表里没列到的源（用户加了自定义源）兜底用 first_nonempty
-        if not cover:
-            cover, _ = first_nonempty(lambda r: r.cover_url)
+        if candidates:
+            sizes: Dict[str, int] = {}
+            with ThreadPoolExecutor(max_workers=min(5, len(candidates))) as ex:
+                futures = {ex.submit(_probe_cover_size, url, self.proxy): (sname, url)
+                           for sname, url in candidates}
+                for fut in as_completed(futures):
+                    sname, url = futures[fut]
+                    try:
+                        sizes[sname] = fut.result()
+                    except Exception:
+                        sizes[sname] = 0
+
+            # 1) 有 size 数据的：按 size desc 排，size 一样按源优先级
+            def _rank(item):
+                sname, url = item
+                size = sizes.get(sname, 0)
+                pri = (cover_preferred_order.index(sname)
+                       if sname in cover_preferred_order
+                       else len(cover_preferred_order))
+                return (-size, pri)  # size 大优先；同 size 走源优先级
+
+            best = sorted(candidates, key=_rank)[0]
+            cover = best[1]
+            best_size = sizes.get(best[0], 0)
+            logger.info(
+                f"{code} cover 选 {best[0]} ({best_size/1024:.0f}KB) "
+                f"候选={[(s, sizes.get(s, 0)//1024) for s, _ in candidates]}"
+            )
         merged.cover_url = cover
 
         release, _ = first_nonempty(lambda r: r.release_date)

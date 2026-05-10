@@ -400,12 +400,14 @@ def find_duplicates_by_metadata(
                 return sz
         return 0
 
+    from web.backend.path_translator import translate_path_with_settings
+
     def _slim(item: dict, version_label: str = '') -> dict:
         return {
             "jellyfin_id": item.get('Id'),
             "name": item.get('Name'),
             "year": item.get('ProductionYear'),
-            "path": item.get('Path'),
+            "path": translate_path_with_settings(item.get('Path')) if item.get('Path') else None,
             "size": _file_size(item),
             "version_label": version_label,
         }

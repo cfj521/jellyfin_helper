@@ -83,16 +83,28 @@ def sweep_once() -> Dict:
             .all()
         )
         for row in failed_rows:
-            # 检查重试次数：phase_timings 里记 sweeper_attempts.<phase> 计数
+            # 检查重试次数：phase_timings 里记 sweeper_attempts.<phase> 计数 + gave_up 终态标记
             timings = dict(row.phase_timings or {})
             attempts_map = dict(timings.get('sweeper_attempts') or {})
             attempts = int(attempts_map.get(row.phase, 0))
+            gave_up = bool(timings.get('sweeper_gave_up'))
+
+            # 已经放弃过 → 静默跳过（不再 spam 日志）
+            if gave_up:
+                continue
 
             if attempts >= MAX_RECOVERY_ATTEMPTS:
-                # 已重试 N 次仍失败 → 放弃恢复，留 status=failed 等人工介入
+                # 第一次达到上限：打 WARNING + 写 gave_up 标记，下次起跳过
                 logger.warning(
                     f"sweeper: {row.torrent_hash[:16]}.. 在 phase={row.phase} 已重试 "
                     f"{attempts} 次仍失败，放弃自动恢复（需人工处理：检查 path_mappings / qB 路径配置 / 磁盘）"
+                )
+                timings['sweeper_gave_up'] = True
+                row.phase_timings = timings
+                # 同时把 status_message 写明确，UI 上能直观看到
+                row.status_message = (
+                    f'sweeper 已放弃：{row.phase} 重试 {attempts} 次仍失败，'
+                    f'需人工修复后从 UI 重新提交'
                 )
                 continue
 

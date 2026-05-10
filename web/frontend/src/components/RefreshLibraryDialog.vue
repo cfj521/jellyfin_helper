@@ -4,6 +4,7 @@
     :title="title"
     width="540px"
     :close-on-click-modal="false"
+    :close-on-press-escape="false"
   >
     <div class="dialog-body">
       <p class="lead">

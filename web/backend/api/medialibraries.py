@@ -44,9 +44,9 @@ from datetime import datetime as _dt, timedelta as _td
 
 _LIB_STATS_CACHE: Dict[str, Dict] = {}  # library_id → {'data': ..., 'cached_at': datetime}
 _LIB_STATS_LOCK = _CacheLock()
-# TTL 从 settings.cache_library_stats_minutes（分钟）读取；改值后需重启后端
+# TTL 从 settings.cache_library_days（天）读取；改值后需重启后端
 def _lib_stats_ttl():
-    return _td(minutes=max(1, settings.cache_library_stats_minutes))
+    return _td(days=max(1, settings.cache_library_days))
 
 
 def _stats_cache_key(library_id: str, fields: Optional[set] = None) -> str:
@@ -131,12 +131,14 @@ def list_libraries(check_paths: bool = True):
         raise HTTPException(status_code=502, detail=f"无法连接 Jellyfin: {e}")
 
     if check_paths:
+        from web.backend.path_translator import translate_path_with_settings
         for lib in libraries:
             lib['locations_status'] = [
-                {"path": p, "accessible": _path_exists_locally(p)}
+                {"path": translate_path_with_settings(p), "accessible": _path_exists_locally(p)}
                 for p in lib['locations']
             ]
             lib['all_accessible'] = all(s['accessible'] for s in lib['locations_status'])
+            lib['locations'] = [translate_path_with_settings(p) for p in lib['locations']]
 
     # 库封面图：用 PrimaryImageItemId（Jellyfin 库自身的代表图）
     # 没有 image tag 时 Jellyfin 会随机选一个 item 的海报作为库封面，但 URL 不带 tag 也能拉
@@ -213,7 +215,7 @@ def get_library_items(
         limit=limit,
         item_types=item_type,
         fields=(
-            "Path,ProductionYear,ImageTags,ProviderIds,People,"
+            "Path,ProductionYear,ImageTags,BackdropImageTags,ProviderIds,People,"
             "CommunityRating,OfficialRating,RunTimeTicks,MediaSources,MediaStreams,ChildCount,Overview,"
             "OriginalTitle,Genres"
         ),
@@ -309,9 +311,9 @@ import threading
 import time
 from common.jellyfin_client import JellyfinClient as _JfClientType  # alias for typing
 
-# TTL：从 settings.cache_tree_children_minutes 读，模块加载时一次性算成秒
+# TTL：从 settings.cache_library_days 读，模块加载时一次性算成秒
 # 改值需要重启后端（_TTLCache 实例上的 ttl 是 init 时定的，不会跟 settings 同步）
-_CHILDREN_CACHE_TTL = max(1, settings.cache_tree_children_minutes) * 60
+_CHILDREN_CACHE_TTL = max(1, settings.cache_library_days) * 86400
 
 
 class _TTLCache:
@@ -468,10 +470,14 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
     """
     from web.backend.api._item_health import compute_health, extract_suggested_title_year
     from common.label_cleaner import clean_label_list
+    from web.backend.path_translator import translate_path_with_settings
 
     item_id = i.get('Id')
     item_type = i.get('Type')
-    image_tag = (i.get('ImageTags') or {}).get('Primary')
+    image_tags = i.get('ImageTags') or {}
+    image_tag = image_tags.get('Primary')
+    thumb_tag = image_tags.get('Thumb')
+    backdrop_tags = i.get('BackdropImageTags') or []
     # Episode 的缩略图是 Type='Primary' 但语义上是"thumb"
     # 列表视图 56x80 缩略图 + 网格视图卡片 ~315px 高都用同一个 URL；
     # fillHeight=600 兼顾两种场景：缩略图 CSS 缩小一样清晰，网格卡片不糊
@@ -479,6 +485,20 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
         f"{host}/Items/{item_id}/Images/Primary?fillHeight=600&tag={image_tag}&quality=90"
         if (host and image_tag) else None
     )
+    # 16:9 横版图：网格视图用。优先级 Backdrop[0] > Thumb；都没有时 None，前端 fallback 到 poster_url。
+    # fillWidth=600 让 16:9 卡片 ~338x190 时清晰；quality 一致。
+    if host and backdrop_tags:
+        backdrop_url = (
+            f"{host}/Items/{item_id}/Images/Backdrop/0"
+            f"?fillWidth=600&tag={backdrop_tags[0]}&quality=90"
+        )
+    elif host and thumb_tag:
+        backdrop_url = (
+            f"{host}/Items/{item_id}/Images/Thumb"
+            f"?fillWidth=600&tag={thumb_tag}&quality=90"
+        )
+    else:
+        backdrop_url = None
     detail_url = f"{host}/web/index.html#!/details?id={item_id}" if host else None
 
     # 演员统计：仅 Series/Movie 层级才有意义
@@ -506,11 +526,13 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
         "type": item_type,
         "level": level,
         "year": i.get('ProductionYear'),
-        "path": i.get('Path'),
+        "path": translate_path_with_settings(i.get('Path')) if i.get('Path') else None,
         "tmdb_id": (i.get('ProviderIds') or {}).get('Tmdb'),
         "imdb_id": (i.get('ProviderIds') or {}).get('Imdb'),
         "has_image": bool(image_tag),
+        "has_backdrop": bool(backdrop_tags or thumb_tag),
         "poster_url": poster_url,
+        "backdrop_url": backdrop_url,
         "detail_url": detail_url,
         "edit_url": detail_url,
         "actors_total": actors_total,
@@ -1534,7 +1556,7 @@ def library_stats(
 def library_subtitle_stats(
     library_id: str,
     background_tasks: BackgroundTasks,
-    max_age_minutes: int = -1,  # -1 = 用 settings.cache_subtitle_scan_minutes
+    max_age_minutes: int = -1,  # -1 = 用 settings.cache_library_days
     force_refresh: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -1564,8 +1586,8 @@ def library_subtitle_stats(
     if not target:
         raise HTTPException(status_code=404, detail="库不存在")
 
-    # max_age_minutes < 0 视为"使用配置默认值"
-    effective_max_age = max_age_minutes if max_age_minutes >= 0 else settings.cache_subtitle_scan_minutes
+    # max_age_minutes < 0 视为"使用配置默认值"（library_days 转分钟）
+    effective_max_age = max_age_minutes if max_age_minutes >= 0 else settings.cache_library_days * 1440
     cutoff = datetime.utcnow() - timedelta(minutes=effective_max_age)
 
     def _task_covers_lib(task: Task) -> bool:

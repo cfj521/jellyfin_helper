@@ -190,6 +190,16 @@
             <span v-else class="muted">-</span>
           </template>
         </el-table-column>
+        <el-table-column label="保存路径" width="260" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.content_path" class="path-text" :title="row.content_path">
+              {{ row.content_path }}
+            </span>
+            <span v-else class="status-error" title="qB 未返回 content_path（种子可能还没拿到 metadata）">
+              缺 content_path
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column label="目标路径" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.dispatch?.target_path" class="path-text" :title="row.dispatch.target_path">
@@ -247,6 +257,11 @@
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-if="row.dispatch?.phase_status === 'failed'"
+                    command="retry_dispatch"
+                    style="color: #409eff"
+                  >重试此阶段</el-dropdown-item>
                   <el-dropdown-item command="force_start">强制启动</el-dropdown-item>
                   <el-dropdown-item command="recheck">重新校验</el-dropdown-item>
                   <el-dropdown-item command="reannounce">重新汇报</el-dropdown-item>
@@ -269,6 +284,7 @@
       title="人工审核：自动认领的低置信种子"
       width="640"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
     >
       <div v-if="reviewTarget" class="review-modal">
         <!-- 顶部：种子基本信息（只读） -->
@@ -609,11 +625,45 @@
     </el-dialog>
 
     <!-- RSS 规则编辑 dialog（新建 / 编辑共用）-->
+    <!-- align-center：垂直居中（默认是 top:15vh 顶部对齐）；
+         class rule-edit-dialog：让 body 内部滚动，不超出视口（避免 dialog 整个被推出去出现外层滚动条） -->
     <el-dialog
       v-model="showRuleDialog"
       :title="ruleForm._isNew ? '新建规则' : `编辑规则：${ruleForm._origName}`"
       width="640"
+      align-center
+      class="rule-edit-dialog"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
     >
+      <!-- AI 辅助横幅：用自然语言描述意图 → 自动生成必含 / 必不含 / 是否正则 -->
+      <div class="llm-helper">
+        <div class="llm-helper-row">
+          <el-input
+            v-model="llmDescription"
+            placeholder="用自然语言描述：例如 整季蓝光 1080p 简中，排单集和重制"
+            size="small"
+            clearable
+            @keyup.enter="onLlmGenerate"
+          >
+            <template #prefix>
+              <el-icon><MagicStick /></el-icon>
+            </template>
+          </el-input>
+          <el-button
+            size="small"
+            type="primary"
+            :loading="llmLoading"
+            :disabled="!llmDescription.trim()"
+            @click="onLlmGenerate"
+          >AI 生成</el-button>
+        </div>
+        <div v-if="llmExplanation" class="llm-helper-explain">
+          <el-icon><InfoFilled /></el-icon>
+          <span>{{ llmExplanation }}</span>
+        </div>
+      </div>
+
       <el-form label-width="110px" size="small">
         <el-form-item label="规则名" required>
           <div class="name-row">
@@ -723,7 +773,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
-import { Refresh, Link, ArrowDown, Brush, Setting, Moon, Plus, Warning, Close, Download } from '@element-plus/icons-vue'
+import { Refresh, Link, ArrowDown, Brush, Setting, Moon, Plus, Warning, Close, Download, MagicStick, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { discoverApi, configApi, dispatchApi } from '@/api'
 import AddTorrentDialog from '@/components/AddTorrentDialog.vue'
@@ -861,7 +911,45 @@ const resetRuleForm = (existing = null) => {
 
 const openRuleEditor = (existing = null) => {
   resetRuleForm(existing)
+  // 重置 LLM 辅助状态（每次打开都是干净的）
+  llmDescription.value = ''
+  llmExplanation.value = ''
   showRuleDialog.value = true
+}
+
+// ===== LLM 辅助生成正则 =====
+const llmDescription = ref('')
+const llmLoading = ref(false)
+const llmExplanation = ref('')
+
+const onLlmGenerate = async () => {
+  const desc = llmDescription.value.trim()
+  if (!desc) return
+  llmLoading.value = true
+  try {
+    // 把已订阅 feed 里前几条标题作为样本（让 LLM 看着真实的命名风格写规则）
+    const samples = []
+    for (const k of Object.keys(rssFeeds.value || {})) {
+      const arts = rssFeeds.value[k]?.articles || []
+      for (const a of arts.slice(0, 4)) {
+        if (a.title) samples.push(a.title)
+        if (samples.length >= 12) break
+      }
+      if (samples.length >= 12) break
+    }
+    const r = await dispatchApi.rssLlmRegex(desc, samples.length ? samples : null)
+    const data = r.data || {}
+    ruleForm.mustContain = data.must_contain || ''
+    ruleForm.mustNotContain = data.must_not_contain || ''
+    ruleForm.useRegex = !!data.use_regex
+    llmExplanation.value = data.explanation || ''
+    ElMessage.success('已生成规则，请检查后保存')
+  } catch (e) {
+    // axios response interceptor 已经 toast 过 error.response.data.detail，这里不再重复弹
+    console.error('LLM 规则生成失败:', e)
+  } finally {
+    llmLoading.value = false
+  }
 }
 
 const submitRule = async () => {
@@ -1316,6 +1404,9 @@ const onRowCommand = async (cmd, row) => {
     } else if (cmd === 'reannounce') {
       await discoverApi.reannounce(row.hash)
       ElMessage.success('已发起重新汇报')
+    } else if (cmd === 'retry_dispatch') {
+      const r = await discoverApi.retryDispatchRow(row.hash)
+      ElMessage.success(`已重试：${r.data?.old_phase || ''} → ${r.data?.new_phase || ''}`)
     } else if (cmd === 'delete' || cmd === 'delete_files') {
       const deleteFiles = cmd === 'delete_files'
       try {
@@ -1331,6 +1422,7 @@ const onRowCommand = async (cmd, row) => {
     await load()
   } catch (e) {
     console.error(e)
+    ElMessage.error(`操作失败：${e?.message || e}`)
   }
 }
 
@@ -2011,5 +2103,51 @@ onUnmounted(() => {
   font-size: 12px;
   color: #475569;
   flex-shrink: 0;
+}
+
+/* 规则编辑 dialog：垂直居中 + body 内部滚动（防内容超过视口外层出滚动条） */
+.rule-edit-dialog {
+  display: flex;
+  flex-direction: column;
+  /* align-center 之外再加最大高度限制，body 超出在内部滚 */
+  max-height: calc(100vh - 80px);
+}
+.rule-edit-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* AI 辅助横幅 */
+.el-dialog .llm-helper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+  border: 1px solid #ddd6fe;
+  border-radius: 6px;
+}
+.el-dialog .llm-helper-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.el-dialog .llm-helper-row .el-input {
+  flex: 1;
+}
+.el-dialog .llm-helper-explain {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b21a8;
+  line-height: 1.45;
+
+  .el-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
 }
 </style>

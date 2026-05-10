@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _local_path(jf_path) -> Path:
+    """DB 里的 file_path 是 Jellyfin view，磁盘 op 之前 forward-translate 到本机视角。
+    入参可以是 str 或 Path；同机部署时 translator 不命中规则会原样返回。"""
+    from web.backend.path_translator import translate_path_with_settings
+    s = str(jf_path) if jf_path else ''
+    return Path(translate_path_with_settings(s) or s)
+
+
 class ScrapeRequest(BaseModel):
     only_unscraped: bool = True
     limit: Optional[int] = None
@@ -56,9 +64,11 @@ class IdentifyRequest(BaseModel):
 # "无码" 判断关键字：在 title / file_path 任一命中即视为无码
 _UNCENSORED_KEYWORDS = [
     'uncensored', 'uncen', 'no-mosaic', 'nomosaic',
-    '无码', '無碼', '无修正', '無修正',
+    '无码', '無碼', '无修正', '無修正', '未経審査', '未經審查',
     'leaked', '流出', '破解', '洩露', '泄露',
     'ノーモザ',
+    # 知名无码厂牌 / 番号前缀（命中即视为无码）
+    'fc2', 'fc2-ppv', 'fc2ppv', '1pondo', 'caribbean', 'caribbeancom', 'caribean',
 ]
 
 
@@ -96,27 +106,31 @@ def _library_path_filter(library_id: str):
     把 library_id → SQLAlchemy 过滤条件（OR 形式），匹配 file_path 在该库下。
     返回 None 表示库无路径（外层应直接返回空结果）。
 
-    AdultItem.file_path 在 Windows 上存的是反斜杠（Z:\videos\...），
-    而 Jellyfin path translator 返回的是正斜杠（Z:/videos/...），
-    同一路径需生成两种 separator 变体并 OR 起来匹配。
-
-    **关键坑**：PostgreSQL 的 ILIKE 默认把 \ 当转义符，
-    'Z:\videos\adult%' 会被处理成 'Z:videosadult%' 全部失配。
-    用 escape='|'（路径里不可能出现的字符）禁用反斜杠转义。
+    DB 约定：AdultItem.file_path 存 Jellyfin view（如 /library/videos/adult/...）。
+    所以前缀匹配用 Jellyfin 视角的 locations 直接拿（_get_library_paths_raw）。
+    历史数据可能含反斜杠 / Windows 盘符 → 同时 OR 一次本机视角的备份匹配，
+    迁移期能兼容；新数据全是 Jellyfin view 即可。
     """
     from web.backend.services.adult_watcher import watcher
+    from web.backend.path_translator import translate_path_with_settings
     from sqlalchemy import or_
-    paths = watcher._get_library_paths(library_id)
-    if not paths:
+    raw_paths = watcher._get_library_paths_raw(library_id)
+    if not raw_paths:
         return None
     conds = []
-    for p in paths:
+    for p in raw_paths:
+        # Jellyfin view（DB canonical）
         norm = str(p).rstrip('/').rstrip('\\')
-        fwd = norm.replace('\\', '/')
-        bwd = norm.replace('/', '\\')
-        conds.append(AdultItem.file_path.ilike(f'{fwd}%', escape='|'))
-        if bwd != fwd:
-            conds.append(AdultItem.file_path.ilike(f'{bwd}%', escape='|'))
+        conds.append(AdultItem.file_path.ilike(f'{norm}%', escape='|'))
+        # 兼容历史数据：本机视角两种 separator
+        local = translate_path_with_settings(p) or p
+        if local and local != p:
+            l_norm = str(local).rstrip('/').rstrip('\\')
+            fwd = l_norm.replace('\\', '/')
+            bwd = l_norm.replace('/', '\\')
+            conds.append(AdultItem.file_path.ilike(f'{fwd}%', escape='|'))
+            if bwd != fwd:
+                conds.append(AdultItem.file_path.ilike(f'{bwd}%', escape='|'))
     return or_(*conds)
 
 
@@ -306,14 +320,15 @@ def _list_items_from_jellyfin(
     total = len(all_items)
     page = all_items[offset:offset + limit]
 
-    # 批量反查 AdultItem：先拿当前页所有路径的本机变体，一次查 DB
+    # 批量反查 AdultItem：DB 约定存 Jellyfin view，直接按 jf_path 查；
+    # 同时把本机变体也加进 IN 列表，兼容尚未重扫的历史数据
     candidate_paths = set()
     for it in page:
         jf_path = it.get('Path')
         if not jf_path:
             continue
+        candidate_paths.add(jf_path)  # 主键（Jellyfin view）
         local = translate_path_with_settings(jf_path) or jf_path
-        # 三种变体都加进 IN 列表
         for v in (local, local.replace('/', '\\'), local.replace('\\', '/')):
             if v:
                 candidate_paths.add(v)
@@ -352,9 +367,11 @@ def _list_items_from_jellyfin(
         jf_id = it.get('Id')
         jf_path = it.get('Path')
         local = translate_path_with_settings(jf_path) if jf_path else None
-        # 试三种 key 找 cross-ref
+        # 优先按 jf_path（DB 现在存的格式）找 cross-ref，再退到本机变体兼容历史
         ai = None
-        if local:
+        if jf_path:
+            ai = adult_by_path.get(jf_path)
+        if not ai and local:
             ai = (adult_by_path.get(local)
                   or adult_by_path.get(local.replace('/', '\\'))
                   or adult_by_path.get(local.replace('\\', '/')))
@@ -375,11 +392,13 @@ def _list_items_from_jellyfin(
         if jf_id and host and api_key:
             image_url = f"{host}/Items/{jf_id}/Images/Primary?quality=90&api_key={api_key}"
 
-        # 跟 _to_dict 对齐的本地实存判定（封面 / NFO）
+        # ai_poster / ai_nfo 来自 DB（Jellyfin view），磁盘存在性判定要本机视角
         ai_poster = ai['poster_path'] if ai else None
         ai_nfo = ai['nfo_path'] if ai else None
-        cover_local_ok = bool(ai_poster) and Path(ai_poster).exists()
-        nfo_local_ok = bool(ai_nfo) and Path(ai_nfo).exists()
+        ai_poster_local = translate_path_with_settings(ai_poster) if ai_poster else None
+        ai_nfo_local = translate_path_with_settings(ai_nfo) if ai_nfo else None
+        cover_local_ok = bool(ai_poster_local) and Path(ai_poster_local).exists()
+        nfo_local_ok = bool(ai_nfo_local) and Path(ai_nfo_local).exists()
 
         row = {
             # 行 id：有 cross-ref 时给 AdultItem.id（让单行操作可用）；否则 None
@@ -401,9 +420,9 @@ def _list_items_from_jellyfin(
             "has_metadata": bool(ai and ai.get('title')),
             "recognized": bool(ai and ai.get('code')),
             "file_name": Path(jf_path).name if jf_path else None,
-            "file_path": local or jf_path,
-            "nfo_path": ai_nfo,
-            "poster_path": ai_poster,
+            "file_path": local or jf_path,        # 本机视角给前端展示
+            "nfo_path": ai_nfo_local,
+            "poster_path": ai_poster_local,
             "cover_local_ok": cover_local_ok,
             "nfo_local_ok": nfo_local_ok,
             "actors": actors_list,
@@ -547,10 +566,12 @@ def update_item(item_id: int, payload: ManualUpdate, db: Session = Depends(get_d
             # 下载替换：DB 记 cover_url（外站 URL 索引）+ poster_path（本地文件）
             if item.file_path:
                 try:
-                    cover_path = _download_cover(new_url, Path(item.file_path))
+                    cover_path = _download_cover(new_url, _local_path(item.file_path))
                     if cover_path:
                         item.cover_url = new_url
-                        item.poster_path = str(cover_path)
+                        # poster_path 也按 DB 约定存 Jellyfin view
+                        from web.backend.path_translator import reverse_translate_path_with_settings
+                        item.poster_path = reverse_translate_path_with_settings(str(cover_path)) or str(cover_path)
                     else:
                         # 下载失败：DB 仍然记 URL，但不更新 poster_path
                         item.cover_url = new_url
@@ -565,7 +586,7 @@ def update_item(item_id: int, payload: ManualUpdate, db: Session = Depends(get_d
             # 空字符串 → 清除本地封面 + DB
             if item.poster_path:
                 try:
-                    p = Path(item.poster_path)
+                    p = _local_path(item.poster_path)
                     if p.exists():
                         p.unlink()
                 except OSError as e:
@@ -597,7 +618,7 @@ def upload_cover(item_id: int, file: UploadFile = File(...)):
             raise HTTPException(status_code=404, detail="条目不存在")
         if not item.file_path:
             raise HTTPException(status_code=400, detail="条目没有关联视频文件，无法保存封面")
-        video_path = Path(item.file_path)
+        video_path = _local_path(item.file_path)
 
         try:
             content = file.file.read()
@@ -615,7 +636,9 @@ def upload_cover(item_id: int, file: UploadFile = File(...)):
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"写入失败: {e}")
 
-        item.poster_path = str(target)
+        # poster_path 也按 DB 约定存 Jellyfin view
+        from web.backend.path_translator import reverse_translate_path_with_settings
+        item.poster_path = reverse_translate_path_with_settings(str(target)) or str(target)
         # cover_url 不动（用户可能继续保留外站源链）
         db.commit()
         db.refresh(item)
@@ -656,14 +679,14 @@ def delete_item(
     if delete_files:
         targets = []
         if item.file_path:
-            targets.append(Path(item.file_path))
+            targets.append(_local_path(item.file_path))
         if item.nfo_path:
-            targets.append(Path(item.nfo_path))
+            targets.append(_local_path(item.nfo_path))
         if item.poster_path:
-            targets.append(Path(item.poster_path))
+            targets.append(_local_path(item.poster_path))
         # 也尝试找 fanart / 同名 nfo
         if item.file_path:
-            stem_path = Path(item.file_path).with_suffix('')
+            stem_path = _local_path(item.file_path).with_suffix('')
             for ext in ['-fanart.jpg', '-poster.jpg', '.nfo']:
                 p = Path(str(stem_path) + ext)
                 if p.exists() and p not in targets:
@@ -979,9 +1002,11 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                         pass
                     else:
                         try:
-                            cover_path = _download_cover(d['cover_url'], Path(file_path))
+                            cover_path = _download_cover(d['cover_url'], _local_path(file_path))
                             if cover_path:
-                                new_poster_path = str(cover_path)
+                                # poster_path 按 DB 约定存 Jellyfin view
+                                from web.backend.path_translator import reverse_translate_path_with_settings as _rev_tr
+                                new_poster_path = _rev_tr(str(cover_path)) or str(cover_path)
                         except Exception as e:
                             logger.warning(f"封面下载失败 {code}: {e}")
 
@@ -992,8 +1017,9 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                         pass
                     else:
                         try:
-                            nfo_path = do_write_nfo(Path(file_path), d)
-                            new_nfo_path = str(nfo_path)
+                            nfo_path = do_write_nfo(_local_path(file_path), d)
+                            from web.backend.path_translator import reverse_translate_path_with_settings as _rev_tr
+                            new_nfo_path = _rev_tr(str(nfo_path)) or str(nfo_path)
                         except Exception as e:
                             logger.warning(f"NFO 写入失败 {code}: {e}")
 
@@ -1074,6 +1100,7 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                     update_task_progress(db, task_id, 99, "通知 Jellyfin 刷新...")
 
                 # 收集成功刮削的 item 视频路径（jellyfin 视角）
+                # DB 现在直接存 Jellyfin view，无需 reverse_translate
                 paths_for_jf = []
                 with SessionLocal() as db:
                     success_codes = [d['code'] for d in details if d.get('status') == 'success']
@@ -1083,12 +1110,9 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                             .filter(AdultItem.code.in_(success_codes))
                             .all()
                         )
-                        from web.backend.path_translator import reverse_translate_path_with_settings
                         for it in items_in_db:
                             if it.file_path:
-                                paths_for_jf.append(
-                                    reverse_translate_path_with_settings(it.file_path) or it.file_path
-                                )
+                                paths_for_jf.append(it.file_path)
 
                 jf = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
                 if paths_for_jf and jf.notify_media_updated(paths_for_jf, update_type='Modified'):
@@ -1244,7 +1268,7 @@ def get_item_poster(item_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="条目不存在")
     if not item.poster_path:
         raise HTTPException(status_code=404, detail="本地没有海报")
-    p = Path(item.poster_path)
+    p = _local_path(item.poster_path)
     if not p.exists():
         raise HTTPException(status_code=404, detail="海报文件不存在")
     return FileResponse(p, media_type='image/jpeg')
@@ -1263,8 +1287,9 @@ def regenerate_nfo(item_id: int, db: Session = Depends(get_db)):
 
     data = _to_dict(item, full=True)
     try:
-        nfo_path = do_write_nfo(Path(item.file_path), data)
-        item.nfo_path = str(nfo_path)
+        nfo_path = do_write_nfo(_local_path(item.file_path), data)
+        from web.backend.path_translator import reverse_translate_path_with_settings
+        item.nfo_path = reverse_translate_path_with_settings(str(nfo_path)) or str(nfo_path)
         db.commit()
         return {"ok": True, "nfo_path": str(nfo_path)}
     except Exception as e:
@@ -1274,15 +1299,20 @@ def regenerate_nfo(item_id: int, db: Session = Depends(get_db)):
 # ---------- 工具 ----------
 
 def _to_dict(item: AdultItem, full: bool = False) -> dict:
-    # 列表里也带 file_path 的 basename，方便前端展示未识别项
+    # DB 里 file_path / poster_path / nfo_path 都存 Jellyfin view，
+    # 前端展示用本机视角；磁盘存在性判定也得用本机视角
+    from web.backend.path_translator import translate_path_with_settings as _tr
     file_name = Path(item.file_path).name if item.file_path else None
+    file_path_local = _tr(item.file_path) if item.file_path else None
+    poster_path_local = _tr(item.poster_path) if item.poster_path else None
+    nfo_path_local = _tr(item.nfo_path) if item.nfo_path else None
 
     # ⭐ 封面 / NFO 的真实存在性（跟 stats 计算 missing_cover/missing_nfo 同款逻辑）。
     # 之前前端只看 poster_path/cover_url 字段非空就判"有封面"，
     # 但字段有 URL 不等于本地下载成功 → 显示空白却被认为完整。
     # 这两个 bool 字段是权威判定，前端 HealthCell / 列表都应该用。
-    cover_local_ok = bool(item.poster_path) and Path(item.poster_path).exists()
-    nfo_local_ok = bool(item.nfo_path) and Path(item.nfo_path).exists()
+    cover_local_ok = bool(poster_path_local) and Path(poster_path_local).exists()
+    nfo_local_ok = bool(nfo_path_local) and Path(nfo_path_local).exists()
 
     out = {
         "id": item.id,
@@ -1297,9 +1327,9 @@ def _to_dict(item: AdultItem, full: bool = False) -> dict:
         "has_metadata": bool(item.title),
         "recognized": item.code is not None,
         "file_name": file_name,
-        "file_path": item.file_path,
-        "nfo_path": item.nfo_path,
-        "poster_path": item.poster_path,
+        "file_path": file_path_local,
+        "nfo_path": nfo_path_local,
+        "poster_path": poster_path_local,
         "cover_local_ok": cover_local_ok,   # 本地封面文件实存（权威）
         "nfo_local_ok": nfo_local_ok,       # 本地 NFO 文件实存
         "actors": json.loads(item.actors) if item.actors else [],
@@ -1554,14 +1584,17 @@ def adult_library_stats(
     cooling_count = 0
 
     now = datetime.utcnow()
+    from web.backend.path_translator import translate_path_with_settings as _stat_tr
     for i in items:
         if i.code:
             recognized += 1
         if i.title and i.source not in (None, 'pending', 'not_found'):
             scraped += 1
-            # 单独计算 cover/nfo 本地实存
-            cover_ok = bool(i.poster_path) and Path(i.poster_path).exists()
-            nfo_ok = bool(i.nfo_path) and Path(i.nfo_path).exists()
+            # poster_path / nfo_path 是 Jellyfin view，磁盘存在性判定要本机视角
+            poster_local = _stat_tr(i.poster_path) if i.poster_path else None
+            nfo_local = _stat_tr(i.nfo_path) if i.nfo_path else None
+            cover_ok = bool(poster_local) and Path(poster_local).exists()
+            nfo_ok = bool(nfo_local) and Path(nfo_local).exists()
             # 缺封面 = 有 cover_url（源给了图）但本地 poster 不可用
             if i.cover_url and not cover_ok:
                 missing_cover += 1
@@ -1909,7 +1942,7 @@ def adult_identify_apply(
     new_poster_path = None
     if req.cover_url and file_path:
         try:
-            cover_path = _download_cover(req.cover_url, Path(file_path))
+            cover_path = _download_cover(req.cover_url, _local_path(file_path))
             if cover_path:
                 new_poster_path = str(cover_path)
         except Exception as e:
@@ -1926,7 +1959,7 @@ def adult_identify_apply(
                 'rating': req.rating, 'cover_url': req.cover_url,
                 'source': req.source,
             }
-            nfo_path = do_write_nfo(Path(file_path), nfo_data)
+            nfo_path = do_write_nfo(_local_path(file_path), nfo_data)
             new_nfo_path = str(nfo_path)
         except Exception as e:
             logger.warning(f"NFO 写入失败 {req.code}: {e}")
@@ -2003,7 +2036,7 @@ def rescrape_one_item(item_id: int):
     new_poster_path = None
     if d.get('cover_url') and file_path:
         try:
-            cover_path = _download_cover(d['cover_url'], Path(file_path))
+            cover_path = _download_cover(d['cover_url'], _local_path(file_path))
             if cover_path:
                 new_poster_path = str(cover_path)
         except Exception as e:
@@ -2012,7 +2045,7 @@ def rescrape_one_item(item_id: int):
     new_nfo_path = None
     if file_path:
         try:
-            nfo_path = do_write_nfo(Path(file_path), d)
+            nfo_path = do_write_nfo(_local_path(file_path), d)
             new_nfo_path = str(nfo_path)
         except Exception as e:
             logger.warning(f"NFO 写入失败 {code}: {e}")
@@ -2068,7 +2101,7 @@ def repair_covers(
         if not it.cover_url:
             continue  # 没刮过元数据，没 cover_url，跳过
         # 已记录 poster_path 且文件存在 → OK
-        if it.poster_path and Path(it.poster_path).exists():
+        if it.poster_path and _local_path(it.poster_path).exists():
             continue
         candidates.append(it.id)
 
@@ -2123,12 +2156,13 @@ def _run_repair_covers(task_id: int, item_ids: List[int]):
             continue
 
         try:
-            cover_path = _download_cover(cover_url, Path(file_path))
+            cover_path = _download_cover(cover_url, _local_path(file_path))
             if cover_path:
                 with SessionLocal() as db:
                     it = db.query(AdultItem).filter(AdultItem.id == item_id).first()
                     if it:
-                        it.poster_path = str(cover_path)
+                        from web.backend.path_translator import reverse_translate_path_with_settings
+                        it.poster_path = reverse_translate_path_with_settings(str(cover_path)) or str(cover_path)
                         db.commit()
                 success += 1
                 details.append({"code": code, "status": "success"})

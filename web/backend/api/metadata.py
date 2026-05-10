@@ -1136,7 +1136,17 @@ def _filter_items_by_scope(
     from common.jellyfin_client import JellyfinClient
 
     if item_paths:
-        norms = {_normalize_path_for_match(p) for p in item_paths if p}
+        # 前端送的是 backend view（如 Z:/...），DB 里 MediaItem.file_path 是 Jellyfin view，
+        # 双向都进 norms 集合保证两边都能命中（同机部署时 reverse 会原样返回，无影响）
+        from web.backend.path_translator import reverse_translate_path_with_settings
+        norms = set()
+        for p in item_paths:
+            if not p:
+                continue
+            norms.add(_normalize_path_for_match(p))
+            jf = reverse_translate_path_with_settings(p)
+            if jf and jf != p:
+                norms.add(_normalize_path_for_match(jf))
         norms = {n for n in norms if n}
         if not norms:
             return query.filter(MediaItem.id == -1)  # 空集

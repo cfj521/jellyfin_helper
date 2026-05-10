@@ -5,7 +5,7 @@ Spike 实测：qwen-plus 在 30 个真实种子样本上 100% 准确，¥0.0007/
 LM Studio 走 http://localhost:1234/v1 本地端点，api_key 可填任意非空占位值
 （如 'lm-studio'），实际不校验。
 
-本模块只做 chat completions 调用 + JSON 输出强制 + 缓存 + daily quota 限制。
+本模块只做 chat completions 调用 + JSON 输出强制 + 缓存。
 """
 from __future__ import annotations
 
@@ -50,10 +50,6 @@ SYSTEM_PROMPT = """You are a media classification expert for torrent release nam
 只输出 JSON，不要解释，不要 markdown 围栏。"""
 
 
-class LLMQuotaExceeded(Exception):
-    pass
-
-
 class LLMClient:
     """
     OpenAI-compatible chat completions 客户端 + JSON mode + 缓存 + 配额。
@@ -84,17 +80,11 @@ class LLMClient:
             cached['cached'] = True
             return cached
 
-        # 2. daily quota 检查
-        if self._daily_count() >= self.cfg.daily_call_limit:
-            raise LLMQuotaExceeded(
-                f"LLM 每日调用上限已达 {self.cfg.daily_call_limit}，明日重试或调高配额"
-            )
-
-        # 3. 真调
+        # 2. 真调
         result = self._call_with_retry(torrent_name, files or [])
         result['cached'] = False
 
-        # 4. 落缓存
+        # 3. 落缓存
         self._cache_put(fp, result)
 
         return result
@@ -155,21 +145,6 @@ class LLMClient:
                 db.commit()
         except Exception as e:
             logger.warning(f"LLM cache 写入异常: {e}")
-
-    # ---- 配额 ----
-
-    def _daily_count(self) -> int:
-        """今日已调用次数。从 LLMClassifyCache 的 created_at 统计（粗略上限控制）。"""
-        try:
-            with SessionLocal() as db:
-                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-                return (
-                    db.query(LLMClassifyCache)
-                    .filter(LLMClassifyCache.created_at >= today_start)
-                    .count()
-                )
-        except Exception:
-            return 0
 
     # ---- LLM 调用 ----
 
@@ -243,6 +218,63 @@ class LLMClient:
                   'confidence', 'tmdb_search_hint', 'reasoning'):
             result.setdefault(k, None)
         return result
+
+
+    # ---- 通用 chat（非种子分类场景：RSS 正则辅助、文本工具等）----
+
+    def chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        timeout: Optional[int] = None,
+        disable_reasoning: bool = False,
+    ) -> Dict:
+        """
+        通用 OpenAI-compatible chat → JSON 响应。
+        不走 classify_torrent 的缓存（每次调用 prompt 不同，缓存价值低）。
+
+        disable_reasoning=True 时关掉模型的"思考链"（reasoning / thinking 模式），
+        简单结构化任务（如生成正则）开了反而慢且贵：
+          - DashScope Qwen3 系列：传 enable_thinking=false（OpenAI 兼容模式接受 extra body）
+          - DeepSeek：reasoning_effort='none' 或选 deepseek-chat 而非 deepseek-reasoner
+          - OpenAI：本参数无影响（GPT 系列没有 thinking 开关）
+        给非 Qwen / 非 DeepSeek 的 provider 传这些字段会被服务端 ignore，无副作用。
+
+        失败时抛 RuntimeError；JSON 解析失败抛 ValueError。
+        """
+        if not self.cfg.api_key:
+            raise ValueError("LLM api_key 未配置")
+
+        payload = {
+            'model': self.cfg.model,
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            'response_format': {'type': 'json_object'},
+            'temperature': temperature,
+        }
+        if disable_reasoning:
+            # Qwen3 OpenAI 兼容模式参数（DashScope 实测有效）
+            payload['enable_thinking'] = False
+            # DeepSeek-R1 / OpenAI o-series 通用参数
+            payload['reasoning_effort'] = 'none'
+
+        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
+        r = requests.post(
+            url,
+            json=payload,
+            headers={
+                'Authorization': f'Bearer {self.cfg.api_key}',
+                'Content-Type': 'application/json',
+            },
+            timeout=timeout or self.cfg.timeout_seconds,
+        )
+        r.raise_for_status()
+        data = r.json()
+        content = data['choices'][0]['message']['content']
+        return json.loads(content)
 
 
 # 单例

@@ -103,12 +103,12 @@ class Settings(BaseSettings):
     # 常见：zh-CN / zh-TW / en-US / ja-JP / ko-KR
     tmdb_language: str = _yaml_config.get('tmdb', {}).get('language', 'zh-CN')
 
-    # 缓存 TTL（分钟）—— 除路径索引（硬编码 30 秒）外，全部可配
+    # 缓存 TTL —— 除路径索引（硬编码 30 秒）外，全部可配
     # 注意：改值后需要重启后端才生效（settings 模块级一次性加载）
     cache_tmdb_minutes: int = _yaml_config.get('cache', {}).get('tmdb_minutes', 120)
-    cache_library_stats_minutes: int = _yaml_config.get('cache', {}).get('library_stats_minutes', 120)
-    cache_tree_children_minutes: int = _yaml_config.get('cache', {}).get('tree_children_minutes', 120)
-    cache_subtitle_scan_minutes: int = _yaml_config.get('cache', {}).get('subtitle_scan_minutes', 1440)
+    # 库信息缓存（天）：合并了原本的 library_stats / tree_children / subtitle_scan 三项 TTL，
+    # 一律按"库内容低频变动"语义同源管理。默认 7 天，整库手动刷新或重启后端可强制失效。
+    cache_library_days: int = _yaml_config.get('cache', {}).get('library_days', 7)
 
     # Wikidata 配置（演员图兜底来源；公共知识库无需 API Key，但要求礼貌的 User-Agent）
     wikidata_enabled: bool = _yaml_config.get('wikidata', {}).get('enabled', True)
@@ -272,9 +272,7 @@ class Settings(BaseSettings):
             },
             "cache": {
                 "tmdb_minutes": self.cache_tmdb_minutes,
-                "library_stats_minutes": self.cache_library_stats_minutes,
-                "tree_children_minutes": self.cache_tree_children_minutes,
-                "subtitle_scan_minutes": self.cache_subtitle_scan_minutes,
+                "library_days": self.cache_library_days,
             },
             "wikidata": {
                 "enabled": self.wikidata_enabled,
