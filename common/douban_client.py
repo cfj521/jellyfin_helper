@@ -18,7 +18,7 @@
 import logging
 import re
 import time
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 SEARCH_URL = "https://www.douban.com/search"
 SUBJECT_SEARCH_URL = "https://search.douban.com/movie/subject_search"
 SUBJECT_DETAIL_URL = "https://movie.douban.com/subject/{id}/"
+# 片单页：每页 25 条，?start=N 翻页
+DOULIST_URL = "https://www.douban.com/doulist/{doulist_id}/"
 
 
 class DoubanRating:
@@ -194,6 +196,114 @@ class DoubanClient:
             title=title,
             year=year,
         )
+
+    # ---------- 片单（doulist）爬取 ----------
+
+    def fetch_doulist(self, doulist_id: str, start: int = 0, limit: int = 25) -> List[Dict]:
+        """
+        拉一个豆瓣片单的一页（25 条/页）。返回简要 dict 列表：
+          [{douban_id, title, year, rating, votes, poster_url, overview, director, genres}, ...]
+
+        start: 偏移（0/25/50/...），分页用
+        limit: 上限（豆瓣每页 25 条；穿页要多次调用）
+
+        豆瓣 doulist 页面结构：
+          <div class="doulist-item"> 每项
+            <div class="title"><a href=".../subject/12345/">标题</a></div>
+            <div class="rating"><span class="rating_nums">8.5</span><span>(1234人评价)</span></div>
+            <div class="abstract">导演: ... 主演: ... 类型: ... 年份: ...</div>
+            <a class="post" href="..."><img src="..." /></a>
+
+        豆瓣对未登录访问限速严，建议 delay >= 5s + cache_ttl_days 设大点。
+        """
+        if not doulist_id:
+            return []
+        url = DOULIST_URL.format(doulist_id=doulist_id)
+        html = self._get(url, params={'start': max(0, int(start))})
+        if not html:
+            return []
+        try:
+            soup = BeautifulSoup(html, 'lxml')
+        except Exception:
+            soup = BeautifulSoup(html, 'html.parser')
+
+        items: List[Dict] = []
+        for card in soup.select('div.doulist-item')[:limit]:
+            entry = self._parse_doulist_card(card)
+            if entry:
+                items.append(entry)
+        return items
+
+    def _parse_doulist_card(self, card) -> Optional[Dict]:
+        # 标题 + douban_id
+        title_el = card.select_one('.title a')
+        if not title_el:
+            return None
+        title = title_el.get_text(strip=True)
+        href = title_el.get('href') or ''
+        m = re.search(r'subject/(\d+)/?', href)
+        if not m:
+            return None
+        douban_id = m.group(1)
+
+        # 海报
+        poster_url = None
+        poster_el = card.select_one('.post img')
+        if poster_el:
+            poster_url = poster_el.get('src')
+
+        # 评分 + 人数
+        rating: Optional[float] = None
+        votes: Optional[int] = None
+        rating_el = card.select_one('.rating .rating_nums')
+        if rating_el:
+            try:
+                rating = float(rating_el.get_text(strip=True))
+            except ValueError:
+                pass
+        votes_el = card.select_one('.rating span:not(.allstar):not(.rating_nums)')
+        if votes_el:
+            vt = votes_el.get_text(strip=True)
+            vm = re.search(r'(\d+)', vt)
+            if vm:
+                try:
+                    votes = int(vm.group(1))
+                except ValueError:
+                    pass
+
+        # abstract 段：导演 / 主演 / 类型 / 年份 揉一起
+        abstract = card.select_one('.abstract')
+        director = None
+        genres: List[str] = []
+        year: Optional[int] = None
+        if abstract:
+            text = abstract.get_text('\n', strip=True)
+            # 导演: xxx
+            md = re.search(r'导演[:：]\s*([^\n]+)', text)
+            if md:
+                director = md.group(1).strip()
+            # 类型: xx / yy
+            mg = re.search(r'类型[:：]\s*([^\n]+)', text)
+            if mg:
+                genres = [g.strip() for g in re.split(r'[/,，、]', mg.group(1)) if g.strip()]
+            # 年份: 2024 (中国)
+            my = re.search(r'年份[:：]\s*(\d{4})', text)
+            if my:
+                try:
+                    year = int(my.group(1))
+                except ValueError:
+                    pass
+
+        return {
+            'douban_id': douban_id,
+            'title': title,
+            'year': year,
+            'rating': rating,
+            'votes': votes,
+            'poster_url': poster_url,
+            'director': director,
+            'genres': genres,
+        }
 
     # ---------- 一站式 ----------
 

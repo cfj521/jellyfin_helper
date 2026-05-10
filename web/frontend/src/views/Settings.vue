@@ -34,6 +34,25 @@
           </div>
         </template>
 
+        <!-- 服务端口（监听端口，前端页面 / API 都走这里） -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><Aim /></el-icon>
+              <span>服务端口</span>
+              <el-tag size="small" type="info" effect="plain">改动需重启服务</el-tag>
+            </div>
+          </template>
+          <el-form :model="form.server" label-width="120px">
+            <el-form-item label="监听端口">
+              <el-input-number v-model="form.server.backend_port" :min="1024" :max="65535" controls-position="right" />
+              <div class="form-hint">
+                FastAPI + 前端 SPA 共用此端口（生产模式）。常见占用：Jellyfin <code>8096</code> / qB <code>8080</code> / Jackett <code>9117</code> / Sonarr <code>8989</code> —— <b>避开它们</b>。建议 <code>8099</code> 或 <code>8088</code> 之外的 808x 段
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
         <el-card shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
@@ -75,6 +94,12 @@
                 </span>
                 {{ apiKeyCheckResult.message }}
               </div>
+            </el-form-item>
+            <el-form-item label="库信息缓存(天)">
+              <el-input-number v-model="form.cache.library_days" :min="1" :max="90" controls-position="right" />
+              <span class="form-hint" style="margin-left: 8px">
+                视频数 / 总占用 / 总时长 / 缺海报 / 剧集树形 / 缺字幕统计 共用
+              </span>
             </el-form-item>
           </el-form>
 
@@ -230,6 +255,10 @@
                 <strong>仅用于演员图 / 海报的批量修复</strong>，避免被 TMDB 风控拒绝。
                 推荐 / 流行列表不受此约束。被拒绝时按 30 / 60 / 90s 累加退避，自动重试 3 次。
               </div>
+            </el-form-item>
+            <el-form-item label="缓存 TTL(分钟)">
+              <el-input-number v-model="form.cache.tmdb_minutes" :min="1" :max="10080" :step="30" controls-position="right" />
+              <span class="form-hint" style="margin-left: 8px">热门 / 流行 / 详情列表的响应缓存</span>
             </el-form-item>
           </el-form>
         </el-card>
@@ -414,55 +443,132 @@
             <el-form-item label="密码">
               <el-input v-model="form.qbittorrent.password" type="password" show-password />
             </el-form-item>
-            <el-form-item label="下载路径">
-              <el-input v-model="form.qbittorrent.download_path" placeholder="/downloads" />
-            </el-form-item>
+            <!-- 下载路径已移到「下载流水线」tab → 配额 / 下载根目录，避免与那边重复 -->
           </el-form>
         </el-card>
-      </el-tab-pane>
 
-      <!-- ============ 缓存 TTL ============ -->
-      <el-tab-pane name="cache">
-        <template #label>
-          <div class="tab-label">
-            <el-icon><Timer /></el-icon>
-            <span>缓存 TTL</span>
-          </div>
-        </template>
-
+        <!-- Trakt：实时观看活动信号 -->
         <el-card shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
-              <el-icon><Timer /></el-icon>
-              <span>缓存有效期</span>
+              <span class="badge trakt">Trakt</span>
+              <span>实时观看活动（互补 TMDB 元数据流行度）</span>
+              <el-tag size="small" :type="form.trakt.enabled && form.trakt.client_id ? 'success' : 'info'" effect="plain">
+                {{ form.trakt.enabled && form.trakt.client_id ? '已配置' : (form.trakt.enabled ? '缺 Client ID' : '未启用') }}
+              </el-tag>
             </div>
           </template>
-          <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
-            修改后<b>必须重启后端</b>才生效（设置在模块加载时一次性读取）。<br/>
-            路径反查索引固定 30 秒不可改；其余缓存都在这里。
-          </el-alert>
-          <el-form label-width="200px">
-            <el-form-item label="TMDB API 缓存(分钟)">
-              <el-input-number v-model="form.cache.tmdb_minutes" :min="1" :max="10080" />
-              <span class="form-hint">热门 / 详情 / 搜索结果</span>
+          <el-form :model="form.trakt" label-width="120px">
+            <el-form-item label="启用">
+              <el-switch v-model="form.trakt.enabled" />
+              <div class="form-hint">
+                关闭后"热门推荐 → Trakt" tab 不可用
+              </div>
             </el-form-item>
-            <el-form-item label="库信息缓存(天)">
-              <el-input-number v-model="form.cache.library_days" :min="1" :max="90" />
-              <span class="form-hint">视频数 / 总占用 / 总时长 / 缺海报 / 剧集树形子节点 / 缺字幕统计 —— 共用此 TTL</span>
+            <el-form-item label="Client ID">
+              <el-input v-model="form.trakt.client_id" type="password" show-password placeholder="64 位十六进制" />
+              <div class="form-hint">
+                <a href="https://trakt.tv/oauth/applications" target="_blank">在 trakt.tv/oauth/applications 创建 application</a>
+                — 公开 endpoint 无需 OAuth，只用 Client ID
+              </div>
             </el-form-item>
-            <el-form-item label="MDB List 评分(天)">
-              <el-input-number v-model="form.mdblist.cache_ttl_days" :min="1" :max="365" />
-              <span class="form-hint">DB 字段过期判定（IMDB / RT / Metacritic 等）</span>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number v-model="form.trakt.request_delay" :min="0" :max="60" :step="0.5" />
+              <div class="form-hint">两次 API 请求之间的最小间隔；Trakt 限速宽松，1s 通常足够</div>
             </el-form-item>
-            <el-form-item label="豆瓣评分(天)">
-              <el-input-number v-model="form.douban.cache_ttl_days" :min="1" :max="365" />
-              <span class="form-hint">DB 字段过期判定</span>
+            <el-form-item label="超时(秒)">
+              <el-input-number v-model="form.trakt.timeout_seconds" :min="5" :max="120" :step="5" />
+            </el-form-item>
+            <el-form-item label="缓存 TTL(分钟)">
+              <el-input-number v-model="form.trakt.cache_minutes" :min="1" :max="1440" :step="10" />
+              <div class="form-hint">实时观看活动信号建议短一点（默认 60 min）</div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- AniList：番剧专用，无需 key -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge anilist">A</span>
+              <span>AniList 番剧推荐</span>
+              <el-tag size="small" :type="form.anilist.enabled ? 'success' : 'info'" effect="plain">
+                {{ form.anilist.enabled ? '已启用' : '未启用' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form :model="form.anilist" label-width="120px">
+            <el-form-item label="启用">
+              <el-switch v-model="form.anilist.enabled" />
+              <div class="form-hint">
+                公开 GraphQL，<b>不需要账号 / API key</b>。番剧元数据 / 排行优势：原生日文标题、季度划分、社区评分
+              </div>
+            </el-form-item>
+            <el-form-item label="请求延迟(秒)">
+              <el-input-number v-model="form.anilist.request_delay" :min="0" :max="60" :step="0.5" />
+              <div class="form-hint">AniList 限速 90 req/min，1s 间隔安全</div>
+            </el-form-item>
+            <el-form-item label="超时(秒)">
+              <el-input-number v-model="form.anilist.timeout_seconds" :min="5" :max="120" :step="5" />
+            </el-form-item>
+            <el-form-item label="缓存 TTL(分钟)">
+              <el-input-number v-model="form.anilist.cache_minutes" :min="1" :max="10080" :step="30" />
+              <div class="form-hint">番剧排行变化慢（默认 240 min ≈ 4 小时）</div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <!-- 豆瓣片单：白名单 + 长缓存 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge douban">豆</span>
+              <span>豆瓣片单（doulist HTML 爬取）</span>
+              <el-tag size="small" :type="form.douban_lists.enabled ? 'success' : 'info'" effect="plain">
+                {{ form.douban_lists.enabled ? '已启用' : '未启用' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form :model="form.douban_lists" label-width="120px">
+            <el-form-item label="启用">
+              <el-switch v-model="form.douban_lists.enabled" />
+              <div class="form-hint">
+                复用上方"豆瓣评分"的限速 / User-Agent；空结果不写缓存（避免反爬期把空命中钉死）
+              </div>
+            </el-form-item>
+            <el-form-item label="缓存 TTL(天)">
+              <el-input-number v-model="form.douban_lists.cache_days" :min="1" :max="30" />
+              <div class="form-hint">豆瓣反爬严 + 片单内容变化慢（如 Top 250），建议 ≥3 天</div>
+            </el-form-item>
+            <el-form-item label="片单白名单">
+              <div class="doulist-rows">
+                <div v-for="(item, idx) in form.douban_lists.lists" :key="idx" class="doulist-row">
+                  <el-input v-model="item.name" placeholder="显示名（如 高分韩剧）" style="width: 200px" />
+                  <el-input v-model="item.doulist_id" placeholder="doulist_id（数字）" style="width: 160px" />
+                  <el-select v-model="item.media_type" style="width: 100px">
+                    <el-option label="电影" value="movie" />
+                    <el-option label="剧集" value="tv" />
+                  </el-select>
+                  <el-button text type="danger" :icon="Delete" @click="form.douban_lists.lists.splice(idx, 1)" />
+                </div>
+                <el-button :icon="Plus" @click="form.douban_lists.lists.push({ name: '', doulist_id: '', media_type: 'movie' })">
+                  添加片单
+                </el-button>
+              </div>
+              <div class="form-hint">
+                doulist_id 来自 <code>douban.com/doulist/&lt;ID&gt;/</code> 中的数字部分
+              </div>
             </el-form-item>
           </el-form>
         </el-card>
       </el-tab-pane>
 
       <!-- ============ 字幕下载 ============ -->
+      <!-- 缓存 TTL tab 已下线：各项搬到对应的服务卡片里
+           ┌ TMDB API 缓存 → 第三方服务 / TMDB 卡片
+           ├ 库信息缓存    → 基础配置 / Jellyfin 服务器卡片
+           ├ MDB List      → 第三方服务 / MDB List 卡片（原本就有，删去重复）
+           └ 豆瓣评分      → 第三方服务 / 豆瓣评分卡片（原本就有，删去重复） -->
       <el-tab-pane name="subtitle">
         <template #label>
           <div class="tab-label">
@@ -1040,7 +1146,7 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } 
 import { onBeforeRouteLeave } from 'vue-router'
 import {
   Refresh, Check, Connection, Link, Lock,
-  Files, Plus, Delete, ArrowUp, ArrowDown, Right, Timer,
+  Files, Plus, Delete, ArrowUp, ArrowDown, Right,
   Document, User, Loading, VideoPlay, VideoPause, Warning,
   Aim, Download,
 } from '@element-plus/icons-vue'
@@ -1149,6 +1255,7 @@ const DISPATCH_DEFAULT_FILE = {
 }
 
 const blank = () => ({
+  server: { backend_port: 8099, frontend_port: 5173 },
   jellyfin: { host: '', api_key: '' },
   tmdb: { api_key: '', request_delay: 30, language: 'zh-CN' },
   subtitle: {
@@ -1213,6 +1320,32 @@ const blank = () => ({
   },
   mdblist: { enabled: true, api_key: '', request_delay: 1.0, cache_ttl_days: 30 },
   douban: { enabled: true, request_delay: 5.0, cache_ttl_days: 30 },
+  // 第三方推荐源（互补 TMDB）
+  trakt: {
+    enabled: false,
+    client_id: '',
+    base_url: 'https://api.trakt.tv',
+    request_delay: 1.0,
+    timeout_seconds: 15,
+    cache_minutes: 60,
+  },
+  anilist: {
+    enabled: true,
+    base_url: 'https://graphql.anilist.co',
+    request_delay: 1.0,
+    timeout_seconds: 15,
+    cache_minutes: 240,
+  },
+  douban_lists: {
+    enabled: true,
+    cache_days: 3,
+    lists: [
+      { name: '豆瓣 Top 250', doulist_id: '240962',  media_type: 'movie' },
+      { name: '高分华语电影', doulist_id: '1518184', media_type: 'movie' },
+      { name: '高分日剧',     doulist_id: '1631879', media_type: 'tv' },
+      { name: '高分韩剧',     doulist_id: '1648104', media_type: 'tv' },
+    ],
+  },
   wikidata: {
     enabled: true,
     user_agent: 'JellyfinTools/1.0',
@@ -1758,6 +1891,19 @@ onBeforeRouteLeave(async () => {
     font-weight: 600;
   }
 
+  // 豆瓣片单白名单：每行 3 列输入 + 删除按钮
+  .doulist-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .doulist-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  }
+
   // 服务徽章
   .badge {
     display: inline-flex;
@@ -1778,6 +1924,8 @@ onBeforeRouteLeave(async () => {
     &.mdblist { background: linear-gradient(135deg, #ef4444 0%, #f59e0b 100%); }
     &.douban { background: linear-gradient(135deg, #2c8c1d 0%, #6cc24a 100%); font-size: 13px; }
     &.wikidata { background: linear-gradient(135deg, #006699 0%, #339cd1 100%); }
+    &.trakt { background: linear-gradient(135deg, #ed1c24 0%, #ff6b6b 100%); font-size: 11px; }
+    &.anilist { background: linear-gradient(135deg, #02a9ff 0%, #74d3ff 100%); }
     &.subtitle-common { background: linear-gradient(135deg, #475569 0%, #94a3b8 100%); font-size: 11px; }
     &.assrt { background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); font-size: 11px; }
     &.logs { background: linear-gradient(135deg, #1e293b 0%, #475569 100%); font-size: 12px; }

@@ -44,6 +44,27 @@
             <span>设置</span>
           </el-menu-item>
         </el-menu>
+
+        <!-- DEBUG 信息：仅在子页面写入 debugInfo 时显示（事后可删整段） -->
+        <div v-if="debugInfo.enabled" class="debug-panel">
+          <div class="debug-title">DEBUG · {{ debugInfo.source || '?' }}</div>
+          <div class="debug-row">
+            <span class="debug-key">列</span>
+            <span class="debug-val">{{ debugInfo.cols }}</span>
+          </div>
+          <div class="debug-row">
+            <span class="debug-key">滚动行</span>
+            <span class="debug-val">{{ debugInfo.scrollRow }} / {{ debugInfo.totalRows }}</span>
+          </div>
+          <div class="debug-row">
+            <span class="debug-key">items</span>
+            <span class="debug-val">{{ debugInfo.items }}</span>
+          </div>
+          <div class="debug-row">
+            <span class="debug-key">wanted</span>
+            <span class="debug-val">{{ debugInfo.wanted }}</span>
+          </div>
+        </div>
       </el-aside>
 
       <!-- 主内容区（无 header，主内容直接占满）-->
@@ -65,6 +86,7 @@
 
 <script setup>
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
+import { debugInfo } from '@/composables/useDebugInfo'
 </script>
 
 <style lang="scss">
@@ -210,6 +232,40 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
       right: 16px;
       height: 1px;
       background: $sidebar-bg-hover;
+    }
+  }
+}
+
+// ============ DEBUG 面板（侧边栏底部，事后删整段）============
+.debug-panel {
+  margin: 12px;
+  padding: 10px 12px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 6px;
+  color: #fee;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  line-height: 1.5;
+
+  .debug-title {
+    color: #fca5a5;
+    font-weight: 700;
+    font-size: 11px;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+  .debug-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    .debug-key {
+      color: #fca5a5;
+    }
+    .debug-val {
+      color: #fff;
+      font-weight: 600;
     }
   }
 }

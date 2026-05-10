@@ -178,36 +178,9 @@ def test_wikidata_build_query_chinese():
 
 
 # ============================================================
-# _TTLCache 缓存行为
+# 旧 _TTLCache 内存缓存类已下线（替换为 web.backend.cache_store 的 DB 持久化版）
+# 对应单测删除：cache_store 测试需要 DB session mock，不在这一档测试范围内。
 # ============================================================
-
-def test_ttl_cache_get_set_invalidate():
-    from web.backend.api.medialibraries import _TTLCache
-
-    c = _TTLCache(ttl=60)
-    assert c.get('k') is None
-    c.set('k', 'v')
-    assert c.get('k') == 'v'
-    c.invalidate('k')
-    assert c.get('k') is None
-    # invalidate(None) 清空
-    c.set('a', 1)
-    c.set('b', 2)
-    c.invalidate()
-    assert c.get('a') is None
-    assert c.get('b') is None
-
-
-def test_ttl_cache_expiration():
-    """TTL 到期后 get 返回 None 并把条目从底层 dict 删掉。"""
-    from web.backend.api.medialibraries import _TTLCache
-
-    c = _TTLCache(ttl=0)  # 立即过期
-    c.set('k', 'v')
-    time.sleep(0.001)
-    assert c.get('k') is None
-    # 内部 store 应该被 lazy 清理
-    assert 'k' not in c._store
 
 
 # ============================================================

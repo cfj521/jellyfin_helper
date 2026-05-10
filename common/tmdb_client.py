@@ -175,14 +175,16 @@ class TMDBClient:
 
     # ---------- 热门内容 ----------
 
-    def trending(self, media_type: str = 'all', time_window: str = 'week', region: Optional[str] = None) -> List[Dict]:
+    def trending(self, media_type: str = 'all', time_window: str = 'week',
+                 page: int = 1, region: Optional[str] = None) -> List[Dict]:
         """
         获取热门内容。
 
         media_type: all | movie | tv | person
         time_window: day | week
+        page: 分页（TMDB 一页 20 条）
         """
-        params = {}
+        params = {'page': page}
         if region:
             params['region'] = region
         data = self._request(f'/trending/{media_type}/{time_window}', params)

@@ -212,6 +212,22 @@ class Settings(BaseSettings):
         from web.backend.config_models import LLMConfig
         return LLMConfig(**(_yaml_config.get('llm') or {}))
 
+    # 第三方推荐源（trakt / anilist / douban_lists 段）
+    @property
+    def trakt(self):
+        from web.backend.config_models import TraktConfig
+        return TraktConfig(**(_yaml_config.get('trakt') or {}))
+
+    @property
+    def anilist(self):
+        from web.backend.config_models import AniListConfig
+        return AniListConfig(**(_yaml_config.get('anilist') or {}))
+
+    @property
+    def douban_lists(self):
+        from web.backend.config_models import DoubanListsConfig
+        return DoubanListsConfig(**(_yaml_config.get('douban_lists') or {}))
+
     # 成人内容配置
     adult_enabled: bool = _yaml_config.get('adult', {}).get('enabled', False)
     # 旧字段：单一目录（向后兼容，不推荐用）
