@@ -352,7 +352,16 @@ class DispatchPipeline:
                 files_count = copy_result['files_copied']
         except Exception as e:
             logger.exception(f"copy/organize 失败 {h[:16]}..")
-            _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=str(e))
+            # 跨种子文件冲突（D7 PROPER/REPACK）单独标 needs_review，提示用户手动决策
+            from tools.dispatch.copier import CrossTorrentCollisionError
+            if isinstance(e, CrossTorrentCollisionError):
+                _set_phase(
+                    h, PHASE_COPYING, 'needs_review',
+                    message='目标位置已存在另一种子的旧文件 — 请决策是否覆盖（参见 error_log）',
+                    error=str(e),
+                )
+            else:
+                _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=str(e))
             return False
 
         elapsed = time.time() - t0
