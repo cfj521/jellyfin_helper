@@ -101,19 +101,24 @@ class DispatchPipeline:
     def _claim_next_pending(self) -> Optional[Dict]:
         """
         从 dispatch_map 取下一条要跑的种子。优先级：
-          ① phase ∈ {copying, organizing, jellyfin_recognizing} + status=running
+          ① phase ∈ {copying, organizing} + status=running
              （重启前在链式段中跑了一半被中断的 → 恢复，幂等重跑）
           ② phase=download_done + status=running（新种子，下载已完成）
+
+        ⚠️ 不要把 jellyfin_recognizing 当成本 worker 该恢复的——那是 jellyfin-watcher 的活。
+        pipeline 跑完 copying/organizing 调 _step_jellyfin_send 把 phase 切到
+        jellyfin_recognizing/running 是"正常释放给 watcher"，不是崩溃。如果把它纳入恢复，
+        pipeline 会无限把自己刚切过去的状态又拉回 copying，形成死循环。
 
         copy 中断恢复利用 copier.py 的 resume：目标已写部分会续传，size 一致则秒过。
         """
         from sqlalchemy import or_, and_
         with SessionLocal() as db:
-            # 优先：链式段进程重启前 status=running 的（崩溃恢复）
+            # 优先：链式段进程重启前 status=running 的（崩溃恢复）—— 只看 copying / organizing
             row = (
                 db.query(DownloadDispatchMap)
                 .filter(DownloadDispatchMap.phase.in_([
-                    PHASE_COPYING, PHASE_ORGANIZING, PHASE_JELLYFIN_RECOGNIZING,
+                    PHASE_COPYING, PHASE_ORGANIZING,
                 ]))
                 .filter(DownloadDispatchMap.phase_status == STATUS_RUNNING)
                 .order_by(DownloadDispatchMap.created_at)
@@ -215,18 +220,24 @@ class DispatchPipeline:
         h = row['torrent_hash']
         t0 = time.time()
 
-        # 源路径：从 qB 拿种子 content_path
+        # 源路径：从 qB 拿种子 content_path（要走 /info endpoint，不能用 /properties）。
+        # /properties 不返回 content_path，会 fallback 到 save_path（=下载根），
+        # 翻译后变成盘符根，导致 organizer rglob 整盘扫——历史 bug 就是这么来的。
         try:
             qb = self._get_qb()
             qb.login()
-            info = qb.get_torrent_info(h) or {}
+            info = qb.get_torrent_meta(h) or {}
         except Exception as e:
-            _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=f'拿不到 qB info: {e}')
+            _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=f'拿不到 qB meta: {e}')
             return False
 
-        src = info.get('content_path') or info.get('save_path')
+        src = info.get('content_path')
         if not src:
-            _set_phase(h, PHASE_COPYING, STATUS_FAILED, error='qB 未返回 content_path')
+            _set_phase(
+                h, PHASE_COPYING, STATUS_FAILED,
+                error=f'qB /info 未返回 content_path（save_path={info.get("save_path")!r}），'
+                      f'种子可能还没拿到 metadata',
+            )
             return False
 
         target = row.get('target_path') or row.get('target_root')
@@ -269,6 +280,20 @@ class DispatchPipeline:
                 ),
             )
             return False
+
+        # 防御：src_path 解析后是盘符 / 系统根目录 → 拒绝（path_mappings 配错时常见 fallback）
+        # organizer 自身有同款防御，这里再卡一层让错误信息更早 / 更清楚
+        try:
+            resolved = src_path.resolve()
+            if resolved == Path(resolved.anchor) or str(resolved) in ('/', ''):
+                _set_phase(
+                    h, PHASE_COPYING, STATUS_FAILED,
+                    error=f'src_path 解析为盘符/根目录: {src_path}（resolved={resolved}）。'
+                          f'通常是 path_mappings 把种子父目录直接翻译成了盘符。',
+                )
+                return False
+        except Exception:
+            pass
 
         # 进度回调（控频写库）
         last_emit = [0.0]

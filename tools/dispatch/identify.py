@@ -297,7 +297,7 @@ def identify_media(
 
     # ⑥ LLM 兜底
     try:
-        from common.llm_client import get_default_client, LLMQuotaExceeded
+        from common.llm_client import get_default_client
         from web.backend.config import settings
         if settings.llm.enabled and settings.llm.api_key:
             llm = get_default_client()
@@ -328,8 +328,6 @@ def identify_media(
                     hit['series_name'] = hit['title']
                 hit['confidence'] = conf
                 return hit
-    except LLMQuotaExceeded as e:
-        logger.warning(f"LLM 配额已满: {e}")
     except Exception as e:
         logger.warning(f"LLM 识别异常: {e}")
 

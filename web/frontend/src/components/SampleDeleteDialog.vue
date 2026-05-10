@@ -4,6 +4,7 @@
     :title="dialogTitle"
     width="720"
     :close-on-click-modal="false"
+    :close-on-press-escape="false"
     @opened="onOpened"
     @closed="onClosed"
   >

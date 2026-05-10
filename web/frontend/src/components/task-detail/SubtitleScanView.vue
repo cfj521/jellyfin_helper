@@ -156,6 +156,7 @@
       :title="annoDialog.title"
       width="520px"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
     >
       <div class="anno-tip">{{ annoDialog.subtitle }}</div>
       <el-form label-width="90px">

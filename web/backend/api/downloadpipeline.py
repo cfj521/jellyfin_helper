@@ -80,7 +80,13 @@ def push_download(
     )
 
     # save_path 仅当 request 显式指定才传 —— 否则让 qB 用自己的默认下载路径。
-    save_path = request.save_path
+    # 前端送的是 backend view（如 Z:/downloads），qB 那边要的是它自己视角（如 /downloads），
+    # reverse-translate 一次。同机部署时 reverse 不命中规则会原样返回，无影响。
+    from web.backend.path_translator import reverse_translate_path_with_settings
+    save_path = (
+        reverse_translate_path_with_settings(request.save_path)
+        if request.save_path else request.save_path
+    )
     ok = client.add_torrent(
         magnet=request.magnet,
         torrent_url=request.torrent_url,
@@ -188,6 +194,8 @@ def list_downloads(
     except Exception as e:
         logger.warning(f"加载 Jellyfin 库列表失败: {e}")
 
+    from web.backend.path_translator import translate_path_with_settings
+
     def _build_dispatch_info(t: Dict) -> Optional[Dict]:
         h = (t.get('hash') or '').lower()
         dm = dispatch_by_hash.get(h)
@@ -201,7 +209,7 @@ def list_downloads(
             "series_name": dm.series_name,
             "target_library_id": dm.target_library_id,
             "target_library_name": lib_id_to_name.get(dm.target_library_id) if dm.target_library_id else None,
-            "target_path": dm.target_path,
+            "target_path": translate_path_with_settings(dm.target_path) if dm.target_path else None,
             "move_mode": dm.move_mode,
             "phase": dm.phase,
             "phase_status": dm.phase_status,
@@ -219,7 +227,8 @@ def list_downloads(
                 "state": t.get('state'),
                 "dlspeed": t.get('dlspeed'),
                 "upspeed": t.get('upspeed'),
-                "save_path": t.get('save_path'),
+                "save_path": translate_path_with_settings(t.get('save_path')) if t.get('save_path') else None,
+                "content_path": translate_path_with_settings(t.get('content_path')) if t.get('content_path') else None,
                 "added_on": t.get('added_on'),
                 "ratio": t.get('ratio') or 0,
                 "eta": t.get('eta'),

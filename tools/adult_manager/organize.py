@@ -45,6 +45,22 @@ def _path_in(child: Path, parent: Path) -> bool:
         return False
 
 
+def _to_local(jf_str) -> str:
+    """DB 里 file_path 是 Jellyfin view → 本机视角（做磁盘 op / 比对 source/target）"""
+    if not jf_str:
+        return ''
+    from web.backend.path_translator import translate_path_with_settings
+    return translate_path_with_settings(str(jf_str)) or str(jf_str)
+
+
+def _to_jf(local_str) -> str:
+    """本机视角字符串 → Jellyfin view（写 DB / 按 DB.file_path 查）"""
+    if not local_str:
+        return ''
+    from web.backend.path_translator import reverse_translate_path_with_settings
+    return reverse_translate_path_with_settings(str(local_str)) or str(local_str)
+
+
 def _top_unit(file_path: Path, source: Path) -> Path:
     """
     返回 file_path 在 source 下的"移动单元"：
@@ -139,7 +155,8 @@ def build_plan(source: Path, target: Path) -> Tuple[List[dict], List[str]]:
         if not it.file_path:
             warnings.append(f"#{it.id} {it.code}: file_path 为空，跳过")
             continue
-        fp = Path(it.file_path)
+        # DB 是 Jellyfin view，磁盘比对要本机视角
+        fp = Path(_to_local(it.file_path))
         if not fp.exists():
             warnings.append(f"#{it.id} {it.code}: 源文件不存在 {fp}，跳过")
             continue
@@ -158,7 +175,7 @@ def build_plan(source: Path, target: Path) -> Tuple[List[dict], List[str]]:
         grouped[key]['items'].append({
             'id': it.id,
             'code': it.code,
-            'file_path': it.file_path,
+            'file_path': it.file_path,    # 保留 DB 原值（Jellyfin view），后续更新 DB 时配合 _to_jf 比对
             'nfo_path': it.nfo_path,
             'poster_path': it.poster_path,
         })
@@ -169,15 +186,17 @@ def build_plan(source: Path, target: Path) -> Tuple[List[dict], List[str]]:
     try:
         import sqlalchemy as _sa
         for key, g in grouped.items():
+            # unit 是本机 Path；DB 里 file_path 是 Jellyfin view，前缀比对前转一次
             unit_str = str(g['unit'])
+            unit_jf = _to_jf(unit_str)
             if g['is_file']:
-                rows = db.query(AdultItem).filter(AdultItem.file_path == unit_str).all()
+                rows = db.query(AdultItem).filter(AdultItem.file_path == unit_jf).all()
             else:
                 rows = db.query(AdultItem).filter(
                     _sa.or_(
-                        AdultItem.file_path == unit_str,
-                        AdultItem.file_path.like(unit_str + '\\%'),
-                        AdultItem.file_path.like(unit_str + '/%'),
+                        AdultItem.file_path == unit_jf,
+                        AdultItem.file_path.like(unit_jf + '\\%'),
+                        AdultItem.file_path.like(unit_jf + '/%'),
                     )
                 ).all()
             g['items'] = [{
@@ -292,8 +311,9 @@ def apply_plan(plans: List[dict], dry_run: bool = False) -> Tuple[int, int]:
                         print(f"  [ERR] 附件移动失败 {att}: {e}")
 
             # 3. 更新 DB 中所有受影响 item 的路径前缀
-            old_prefix = str(unit)
-            new_prefix = str(tgt)
+            # 路径在 DB 里存 Jellyfin view，前缀比对/替换都得在 Jellyfin view 下做
+            old_prefix = _to_jf(str(unit))
+            new_prefix = _to_jf(str(tgt))
             for item_brief in p['items']:
                 item = db.query(AdultItem).filter(AdultItem.id == item_brief['id']).first()
                 if not item:

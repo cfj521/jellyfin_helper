@@ -446,17 +446,9 @@
               <el-input-number v-model="form.cache.tmdb_minutes" :min="1" :max="10080" />
               <span class="form-hint">热门 / 详情 / 搜索结果</span>
             </el-form-item>
-            <el-form-item label="库统计缓存(分钟)">
-              <el-input-number v-model="form.cache.library_stats_minutes" :min="1" :max="10080" />
-              <span class="form-hint">视频数 / 总占用 / 总时长 / 缺海报</span>
-            </el-form-item>
-            <el-form-item label="剧集树形子节点(分钟)">
-              <el-input-number v-model="form.cache.tree_children_minutes" :min="1" :max="10080" />
-              <span class="form-hint">Series→Seasons / Season→Episodes / Series 聚合摘要</span>
-            </el-form-item>
-            <el-form-item label="字幕扫描结果(分钟)">
-              <el-input-number v-model="form.cache.subtitle_scan_minutes" :min="1" :max="20160" />
-              <span class="form-hint">缺字幕统计的复用窗口</span>
+            <el-form-item label="库信息缓存(天)">
+              <el-input-number v-model="form.cache.library_days" :min="1" :max="90" />
+              <span class="form-hint">视频数 / 总占用 / 总时长 / 缺海报 / 剧集树形子节点 / 缺字幕统计 —— 共用此 TTL</span>
             </el-form-item>
             <el-form-item label="MDB List 评分(天)">
               <el-input-number v-model="form.mdblist.cache_ttl_days" :min="1" :max="365" />
@@ -691,7 +683,7 @@
             后续可"葵司"="葵つかさ"="Tsukasa Aoi"互相对应。运行期间可随时停，下次再点开始会接着跑。
           </p>
 
-          <el-form label-width="160px">
+          <el-form label-width="100px" label-position="left">
             <el-form-item label="请求间隔(秒)">
               <el-input-number
                 v-model="actressDelay"
@@ -882,9 +874,12 @@
 
                 <el-form-item label="信心阈值">
                   <el-input-number v-model="form.llm.confidence_threshold" :min="0.5" :max="1.0" :step="0.05" :precision="2" controls-position="right" />
-                  <span class="form-hint">
-                    LLM 返回的 confidence ≥ 此值，识别结果直接采用；低于此值落入「待审核」等用户人工确认。推荐 0.80–0.90。
-                  </span>
+                  <span class="form-hint" style="margin-left: 8px">流水线识别中，信心阈值 ≥ 此值直接采用，否则进入待审核（推荐 0.80–0.90）</span>
+                </el-form-item>
+
+                <el-form-item label="超时(秒)">
+                  <el-input-number v-model="form.llm.timeout_seconds" :min="10" :max="600" :step="10" controls-position="right" />
+                  <span class="form-hint" style="margin-left: 8px">单次调用上限，长 prompt / reasoning 模型建议 ≥ 120s</span>
                 </el-form-item>
               </el-form>
             </el-card>
@@ -1187,11 +1182,10 @@ const blank = () => ({
     api_key: '',
     model: 'qwen-plus',
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    timeout_seconds: 15,
+    timeout_seconds: 180,
     max_retries: 1,
     cache_ttl_days: 30,
     confidence_threshold: 0.85,
-    daily_call_limit: 500,
   },
   // 入库流水线（每 media_type 仅配 library_id + location_template；
   // file_template 由 organizer 内置；move_mode 由全局 default_move_mode 统一）
@@ -1215,9 +1209,7 @@ const blank = () => ({
   path_mappings: { enabled: false, rules: [] },
   cache: {
     tmdb_minutes: 120,
-    library_stats_minutes: 120,
-    tree_children_minutes: 120,
-    subtitle_scan_minutes: 1440,
+    library_days: 7,
   },
   mdblist: { enabled: true, api_key: '', request_delay: 1.0, cache_ttl_days: 30 },
   douban: { enabled: true, request_delay: 5.0, cache_ttl_days: 30 },

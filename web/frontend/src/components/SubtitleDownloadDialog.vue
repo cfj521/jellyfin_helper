@@ -4,6 +4,7 @@
     title="下载字幕"
     width="780"
     :close-on-click-modal="false"
+    :close-on-press-escape="false"
     @closed="onClosed"
   >
     <div v-if="item" class="sub-dl-dialog">

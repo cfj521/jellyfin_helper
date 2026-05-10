@@ -87,6 +87,19 @@ class ActressResolver:
         if getattr(r, 'status_code', 0) >= 400:
             logger.info(f"[actress] HTTP {r.status_code} {url}")
             return None
+        # javdb 在被屏蔽地区会返回 200 + 版权拦截页（HTML 很短，含 copyright restrictions）
+        # 这种情况要识别出来，否则上层会误以为"找不到"，把全部条目标 not_found
+        body = (r.text or '')
+        if len(body) < 4000 and (
+            'copyright restrictions' in body.lower()
+            or '版权限制' in body
+            or '版權限制' in body
+        ):
+            logger.error(
+                f"[actress] javdb 地理屏蔽（200 但返回版权拦截页）: {url}\n"
+                f"  → 出口 IP 被 javdb 屏蔽，请更换代理节点（日本/美国线路通常可用）"
+            )
+            return None
         return r
 
     # ---- 业务逻辑 ----

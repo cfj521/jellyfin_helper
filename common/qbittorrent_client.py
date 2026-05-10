@@ -110,8 +110,11 @@ class QBittorrentClient:
             return False
 
     def get_torrent_info(self, torrent_hash: str) -> Optional[Dict]:
-        """单条种子详情（properties endpoint），无则 None。
+        """单条种子详情（/properties endpoint），无则 None。
         关键字段：total_size（metadata 拿到才有）、save_path、share_ratio、seeding_time...
+
+        ⚠️ /properties **不返回 content_path**。要拿种子内容路径（含子目录名）请用
+        get_torrent_meta()，那个走 /info endpoint。
         """
         if not self._ensure_login():
             return None
@@ -127,6 +130,28 @@ class QBittorrentClient:
             return r.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"获取种子详情失败 {torrent_hash}: {e}")
+            return None
+
+    def get_torrent_meta(self, torrent_hash: str) -> Optional[Dict]:
+        """单条种子的 /info 元数据，含 content_path / save_path / state / progress / name 等。
+        没找到 → None。
+
+        跟 get_torrent_info 区别：那个走 /properties（统计/计时类字段），本方法走 /info
+        （列表展示字段，含 content_path）。pipeline 取源路径用本方法。
+        """
+        if not self._ensure_login():
+            return None
+        try:
+            r = self.session.get(
+                f"{self.host}/api/v2/torrents/info",
+                params={'hashes': torrent_hash},
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+            arr = r.json() or []
+            return arr[0] if arr else None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"获取种子 meta 失败 {torrent_hash}: {e}")
             return None
 
     def get_files(self, torrent_hash: str) -> List[Dict]:

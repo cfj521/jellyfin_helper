@@ -29,10 +29,20 @@ VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '
 LIBRARY_COOLDOWN_SEC = 5 * 60
 
 
+def _jf_path(p) -> str:
+    """本机扫到的文件路径 → Jellyfin view（DB 约定存 Jellyfin view）。
+    同机部署 / 没配映射时 reverse 不命中规则会原样返回，无影响。"""
+    s = str(p)
+    from web.backend.path_translator import reverse_translate_path_with_settings
+    return reverse_translate_path_with_settings(s) or s
+
+
 def _detect_local_attachments(video_file: Path):
     """
     探测视频文件同目录下已存在的 poster / nfo，返回 (poster_path, nfo_path) 字符串或 None。
     覆盖常见命名：<stem>-poster.{jpg,jpeg,png} / <stem>.nfo
+
+    返回的路径是 Jellyfin view（DB 约定）；同机部署 / 没配映射时与本机视角相同。
     """
     if not video_file:
         return None, None
@@ -43,11 +53,11 @@ def _detect_local_attachments(video_file: Path):
     for ext in ('.jpg', '.jpeg', '.png'):
         cand = parent / f'{stem}-poster{ext}'
         if cand.exists():
-            poster_path = str(cand)
+            poster_path = _jf_path(cand)
             break
 
     nfo = parent / f'{stem}.nfo'
-    nfo_path = str(nfo) if nfo.exists() else None
+    nfo_path = _jf_path(nfo) if nfo.exists() else None
 
     return poster_path, nfo_path
 
@@ -242,7 +252,7 @@ class AdultWatcher:
                     mtime = 0.0
                 stats["scanned"] += 1
 
-                existing = db.query(AdultItem).filter(AdultItem.file_path == str(f)).first()
+                existing = db.query(AdultItem).filter(AdultItem.file_path == _jf_path(f)).first()
 
                 # excluded 项不再自动识别 / 刮削，扫描直接跳
                 if existing and existing.excluded:
@@ -284,7 +294,7 @@ class AdultWatcher:
                         new_item = AdultItem(
                             code=None,
                             title=f.stem,
-                            file_path=str(f),
+                            file_path=_jf_path(f),
                             file_mtime=mtime,
                             excluded=True,
                         )
@@ -318,7 +328,7 @@ class AdultWatcher:
                         ).first()
                         if clash:
                             # 把当前文件路径并入 clash，删掉本记录
-                            clash.file_path = str(f)
+                            clash.file_path = _jf_path(f)
                             clash.file_mtime = mtime
                             if local_poster:
                                 clash.poster_path = local_poster
@@ -343,7 +353,7 @@ class AdultWatcher:
                     code_existing = db.query(AdultItem).filter(AdultItem.code == code).first()
                     if code_existing:
                         # 视频换位置
-                        code_existing.file_path = str(f)
+                        code_existing.file_path = _jf_path(f)
                         code_existing.file_mtime = mtime
                         if local_poster:
                             code_existing.poster_path = local_poster
@@ -355,7 +365,7 @@ class AdultWatcher:
                         })
                     else:
                         new_item = AdultItem(
-                            code=code, file_path=str(f), file_mtime=mtime,
+                            code=code, file_path=_jf_path(f), file_mtime=mtime,
                             poster_path=local_poster, nfo_path=local_nfo,
                         )
                         db.add(new_item)
@@ -430,6 +440,7 @@ class AdultWatcher:
                 self._active_tasks.pop(library_id, None)
 
     def _get_library_paths(self, library_id: str) -> List[str]:
+        """返回本机视角路径（已 forward-translate），给磁盘扫描用。"""
         from web.backend.config import settings
         from web.backend.path_translator import translate_path_with_settings
         if not settings.jellyfin_api_key:
@@ -441,6 +452,23 @@ class AdultWatcher:
                 if lib['id'] == library_id:
                     # Jellyfin 视角的 /library/videos → 翻译成本机可访问的路径
                     return [translate_path_with_settings(loc) or loc for loc in lib['locations']]
+        except Exception as e:
+            logger.warning(f"获取库路径失败 {library_id}: {e}")
+        return []
+
+    def _get_library_paths_raw(self, library_id: str) -> List[str]:
+        """返回 Jellyfin 视角的 locations（不翻译），给 DB 按 file_path 前缀匹配用——
+        DB 现在约定存 Jellyfin view，前缀匹配也得用 Jellyfin view。
+        """
+        from web.backend.config import settings
+        if not settings.jellyfin_api_key:
+            return []
+        try:
+            from common.jellyfin_client import JellyfinClient
+            client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
+            for lib in client.get_libraries_normalized():
+                if lib['id'] == library_id:
+                    return list(lib['locations'])
         except Exception as e:
             logger.warning(f"获取库路径失败 {library_id}: {e}")
         return []

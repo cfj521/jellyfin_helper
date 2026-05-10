@@ -624,7 +624,7 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                 'item_id': item_id,
                 'item_name': item_name,
                 'item_type': item_type,
-                'path': it.get('Path'),
+                'path': translate_path_with_settings(it.get('Path')) if it.get('Path') else None,
                 'extracted_title': None,
                 'extracted_year': None,
                 'first_candidate': None,

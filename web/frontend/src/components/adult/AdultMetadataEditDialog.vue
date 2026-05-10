@@ -4,7 +4,7 @@
     title="编辑元数据"
     width="720"
     :close-on-click-modal="false"
-    @opened="onOpened"
+    :close-on-press-escape="false"
   >
     <div v-if="form" class="meta-edit">
       <!-- 番号头部（只读） -->
@@ -66,6 +66,7 @@
 
         <el-form-item label="女优">
           <el-select
+            ref="actorsSelectRef"
             v-model="form.actors"
             multiple
             filterable
@@ -78,6 +79,7 @@
 
         <el-form-item label="标签">
           <el-select
+            ref="tagsSelectRef"
             v-model="form.tags"
             multiple
             filterable
@@ -175,6 +177,10 @@ const clearing = ref(false)
 const coverPreviewError = ref(false)
 // item.id 变化导致 cache buster 变化，避免上传后浏览器还显示老缩略图
 const coverCacheBust = ref(Date.now())
+// el-select refs：保存前要把输入框里没按 Enter 的残留文本强制提交进 v-model，
+// 否则用户填了名字直接点"保存"会丢失
+const actorsSelectRef = ref(null)
+const tagsSelectRef = ref(null)
 
 const _initForm = () => {
   const it = props.item || {}
@@ -246,7 +252,18 @@ const clearCover = () => {
 watch(() => props.modelValue, (v) => {
   if (v) _initForm()
 })
-const onOpened = () => _initForm()
+
+// 把 el-select 里残留的输入文本（用户没按 Enter）强制 commit 进 v-model 数组。
+// el-select multiple+allow-create 的 UX 缺陷：必须 Enter 才创建，否则保存丢字。
+const _flushPendingInput = (selectRef, currentArray) => {
+  if (!selectRef?.value) return currentArray
+  // el-select 内部 input value 在不同版本字段名不同：states.inputValue (>=2.5) / query
+  const states = selectRef.value.states
+  const pending = (states?.inputValue || states?.query || selectRef.value.query || '').trim()
+  if (!pending) return currentArray
+  if (currentArray.includes(pending)) return currentArray
+  return [...currentArray, pending]
+}
 
 // 清除所有刮削元数据 + 标记排除（删本地 poster/nfo + 清 DB 字段，保留 file_path / code）
 // 使用场景：用户判定刮削结果错乱（演员混入无关人 / 标题张冠李戴等），希望"重置 +
@@ -288,6 +305,10 @@ const save = async () => {
   if (!props.item?.id) return
   saving.value = true
   try {
+    // 收尾：把 actors / tags 输入框里没按 Enter 的残留 commit 进数组（防止用户填了不按 Enter 直接保存丢失）
+    form.value.actors = _flushPendingInput(actorsSelectRef, form.value.actors || [])
+    form.value.tags = _flushPendingInput(tagsSelectRef, form.value.tags || [])
+
     // 后端 PUT 接口接受 ManualUpdate；空字符串当成 "" 写入；rating null 也合法
     // cover_url：仅当用户改过才传（避免误下载已有 URL）
     const payload = {

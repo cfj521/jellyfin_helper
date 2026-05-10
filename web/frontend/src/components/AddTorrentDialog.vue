@@ -4,6 +4,7 @@
     title="添加种子"
     width="560"
     :close-on-click-modal="false"
+    :close-on-press-escape="false"
     @closed="onClosed"
     :destroy-on-close="false"
   >

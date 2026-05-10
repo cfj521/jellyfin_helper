@@ -90,8 +90,7 @@ class LLMConfig(BaseModel):
     api_key: str = ''
     model: str = 'qwen-plus'
     base_url: str = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-    timeout_seconds: int = 15
+    timeout_seconds: int = 180
     max_retries: int = 1
     cache_ttl_days: int = 30
     confidence_threshold: float = 0.85     # < 阈值落用户确认
-    daily_call_limit: int = 500
