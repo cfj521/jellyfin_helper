@@ -347,6 +347,12 @@ export const adultApi = {
 export const discoverApi = {
   trending: (params = {}) => api.get('/api/discover/trending', { params }),
   popular: (params = {}) => api.get('/api/discover/popular', { params }),
+  // Trakt 实时观看活动信号（互补 TMDB 元数据流行度）
+  trakt: (params = {}) => api.get('/api/discover/trakt', { params }),
+  // AniList 番剧专用（trending / popular / top_rated / current_season）
+  anilist: (params = {}) => api.get('/api/discover/anilist', { params }),
+  // 豆瓣片单（不带 doulist_id 拿白名单；带了拿条目）
+  doubanLists: (params = {}) => api.get('/api/discover/douban-lists', { params }),
   // 通用分类列表（电影/剧集 × Popular/NowPlaying/Upcoming/TopRated/AiringToday/OnTheAir）
   list: (params = {}) => api.get('/api/discover/list', { params }),
   detail: (mediaType, tmdbId, params = {}) =>

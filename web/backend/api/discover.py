@@ -25,29 +25,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ---------- TMDB 热门（带 30 分钟内存缓存）----------
+# ---------- TMDB 热门：DB 持久化缓存（之前是 in-memory，重启就丢） ----------
 
-import time as _time
 from web.backend.config import settings as _settings
-_TMDB_CACHE: dict = {}  # key=str → (data, expire_at)
-# TTL 来自 settings.cache_tmdb_minutes（分钟），改完需重启后端
+from web.backend.cache_store import (
+    get_cached as _kv_get,
+    set_cached as _kv_set,
+    invalidate as _kv_invalidate,
+)
+
+_TMDB_SCOPE = 'tmdb_discover'
+_TRAKT_SCOPE = 'trakt_discover'
+_ANILIST_SCOPE = 'anilist_discover'
+_DOUBAN_SCOPE = 'douban_discover'
+
+
 def _tmdb_ttl_secs() -> int:
     return max(1, _settings.cache_tmdb_minutes) * 60
 
 
+def _strip_cache_meta(v):
+    """剥掉 _cached / _cached_at / _cache_age_seconds，让旧调用点拿到的对象跟原 in-memory 一致。"""
+    if isinstance(v, dict):
+        return {k: vv for k, vv in v.items() if not k.startswith('_cached') and k != '_cache_age_seconds'}
+    return v
+
+
 def _cache_get(key: str):
-    item = _TMDB_CACHE.get(key)
-    if item and item[1] > _time.time():
-        return item[0]
-    return None
+    return _strip_cache_meta(_kv_get(_TMDB_SCOPE, key, ttl_seconds=_tmdb_ttl_secs()))
 
 
 def _cache_set(key: str, data):
-    _TMDB_CACHE[key] = (data, _time.time() + _tmdb_ttl_secs())
+    _kv_set(_TMDB_SCOPE, key, data)
 
 
 def _cache_clear():
-    _TMDB_CACHE.clear()
+    _kv_invalidate(_TMDB_SCOPE)
+    _kv_invalidate(_TRAKT_SCOPE)
+    _kv_invalidate(_ANILIST_SCOPE)
+    _kv_invalidate(_DOUBAN_SCOPE)
 
 
 
@@ -56,17 +72,19 @@ def _cache_clear():
 def get_trending(
     media_type: str = "all",
     time_window: str = "week",
+    page: int = 1,
     refresh: bool = False,
 ):
-    """TMDB 热门内容（all / movie / tv，day / week）。30 分钟内存缓存；refresh=true 强制刷新"""
+    """TMDB 热门内容（all / movie / tv，day / week）。一页 20 条；refresh=true 跳过缓存"""
     if not settings.tmdb_api_key:
         raise HTTPException(status_code=400, detail="未配置 TMDB API Key")
     if media_type not in ("all", "movie", "tv", "person"):
         raise HTTPException(status_code=400, detail="media_type 必须是 all / movie / tv / person")
     if time_window not in ("day", "week"):
         raise HTTPException(status_code=400, detail="time_window 必须是 day / week")
+    page = max(1, min(20, int(page)))
 
-    cache_key = f"trending:{media_type}:{time_window}"
+    cache_key = f"trending:{media_type}:{time_window}:p{page}"
     if not refresh:
         cached = _cache_get(cache_key)
         if cached is not None:
@@ -76,8 +94,13 @@ def get_trending(
     # 推荐/流行列表不受 tmdb_request_delay 约束（30s 延迟仅用于演员图/海报批量修复）
     client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=settings.tmdb_language)
 
-    items = client.trending(media_type=media_type, time_window=time_window)
-    result = {"count": len(items), "items": _normalize_tmdb(items)}
+    items = client.trending(media_type=media_type, time_window=time_window, page=page)
+    result = {
+        "count": len(items),
+        "items": _normalize_tmdb(items),
+        "page": page,
+        "has_more": len(items) >= 20,   # TMDB 一页 20 条
+    }
     _cache_set(cache_key, result)
     return {**result, "cached": False}
 
@@ -104,7 +127,12 @@ def get_popular(media_type: str = "movie", page: int = 1, refresh: bool = False)
     else:
         raise HTTPException(status_code=400, detail="media_type 必须是 movie / tv")
 
-    result = {"count": len(items), "items": _normalize_tmdb(items, default_type=media_type)}
+    result = {
+        "count": len(items),
+        "items": _normalize_tmdb(items, default_type=media_type),
+        "page": page,
+        "has_more": len(items) >= 20,
+    }
     _cache_set(cache_key, result)
     return {**result, "cached": False}
 
@@ -155,6 +183,7 @@ def get_category_list(
         "media_type": media_type,
         "category": category,
         "page": page,
+        "has_more": len(items) >= 20,
     }
     _cache_set(cache_key, result)
     return {**result, "cached": False}
@@ -353,3 +382,241 @@ def _normalize_tmdb(items: List[dict], default_type: Optional[str] = None) -> Li
             "poster_url": f"https://image.tmdb.org/t/p/w342{poster}" if poster else None,
         })
     return out
+
+
+# ============================================================================
+# Trakt 推荐
+# ============================================================================
+
+# Trakt 海报通过 tmdb_id 反查；这里按 tmdb_id 单独缓存 7 天，避免同一作品反复打 TMDB
+_TRAKT_POSTER_SCOPE = 'trakt_poster'
+_TRAKT_POSTER_TTL = 7 * 86400
+
+
+def _fetch_trakt_poster(tmdb, tmdb_id: int, media_type: str) -> Optional[str]:
+    """单条 tmdb_id → poster_url（带 DB 缓存）。命中缓存则零调用。"""
+    cache_key = f"{media_type}:{tmdb_id}"
+    cached = _kv_get(_TRAKT_POSTER_SCOPE, cache_key, ttl_seconds=_TRAKT_POSTER_TTL)
+    if isinstance(cached, dict) and 'url' in cached:
+        return cached['url'] or None
+    try:
+        if media_type == 'tv':
+            path = tmdb.get_tv_poster_path(int(tmdb_id))
+        else:
+            path = tmdb.get_movie_poster_path(int(tmdb_id))
+    except Exception:
+        return None
+    url = f"https://image.tmdb.org/t/p/w342{path}" if path else None
+    # 缓存：拉到 url 写实际值；拉到空也写空（避免反复试）
+    _kv_set(_TRAKT_POSTER_SCOPE, cache_key, {'url': url or ''})
+    return url
+
+
+# Trakt / AniList 后端固定页大小：跟 viewport 无关，让缓存键只跟 page 走
+# 缓存命中率最大化；前端按 wanted 切片显示
+_TRAKT_PAGE_SIZE = 30
+_ANILIST_PAGE_SIZE = 30
+
+
+@router.get("/trakt")
+def get_trakt(
+    media_type: str = "movie",
+    category: str = "trending",
+    page: int = 1,
+    refresh: bool = False,
+):
+    """
+    Trakt 推荐：实时观看活动信号（互补 TMDB 元数据流行度）。
+
+    media_type: movie | tv
+    category:   trending（热门） | anticipated（期待） | popular（流行） | watched_weekly（本周观看榜）
+    page: 分页（无限滚动用），page size 固定 30。前端 wanted < 30 时自己切片显示。
+    """
+    cfg = settings.trakt
+    if not cfg.enabled or not cfg.client_id:
+        raise HTTPException(status_code=400, detail="Trakt 未配置 client_id（设置 → 第三方推荐源）")
+    if media_type not in ('movie', 'tv'):
+        raise HTTPException(status_code=400, detail="media_type 必须是 movie / tv")
+    if category not in ('trending', 'anticipated', 'popular', 'watched_weekly'):
+        raise HTTPException(status_code=400, detail=f"非法 category: {category}")
+    page = max(1, min(20, int(page)))
+
+    # 缓存 key 只含 page —— 同一页的 30 条数据复用，无论用户 viewport 怎么变
+    cache_key = f"{media_type}:{category}:p{page}"
+    ttl = max(1, cfg.cache_minutes) * 60
+    if not refresh:
+        cached = _strip_cache_meta(_kv_get(_TRAKT_SCOPE, cache_key, ttl_seconds=ttl))
+        if cached is not None:
+            return {**cached, "cached": True}
+
+    from common.trakt_client import TraktClient
+    client = TraktClient(
+        client_id=cfg.client_id,
+        base_url=cfg.base_url,
+        request_delay=cfg.request_delay,
+        timeout=cfg.timeout_seconds,
+    )
+
+    if category == 'trending':
+        items = client.trending(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
+    elif category == 'anticipated':
+        items = client.anticipated(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
+    elif category == 'popular':
+        items = client.popular(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
+    else:  # watched_weekly
+        items = client.watched(media_type, period='weekly', page=page, limit=_TRAKT_PAGE_SIZE)
+
+    # 给有 tmdb_id 的项补 TMDB 海报：5 路并发 + 每张 tmdb_id 单独 7 天缓存
+    out = [it.to_dict() for it in items]
+    if settings.tmdb_api_key and out:
+        try:
+            from common.tmdb_client import TMDBClient
+            from concurrent.futures import ThreadPoolExecutor
+            tmdb = TMDBClient(settings.tmdb_api_key, delay=0.0, language=settings.tmdb_language)
+            poster_targets = [(d, d.get('tmdb_id'), d.get('media_type') or media_type)
+                              for d in out if d.get('tmdb_id')]
+            if poster_targets:
+                with ThreadPoolExecutor(max_workers=5) as ex:
+                    futures = {
+                        ex.submit(_fetch_trakt_poster, tmdb, tid, mt): d
+                        for (d, tid, mt) in poster_targets
+                    }
+                    for fut, d in futures.items():
+                        try:
+                            url = fut.result(timeout=15)
+                            if url:
+                                d['poster_url'] = url
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"trakt 拼海报失败: {e}")
+
+    result = {
+        "count": len(out), "items": out,
+        "media_type": media_type, "category": category,
+        "page": page, "limit": _TRAKT_PAGE_SIZE,
+        "has_more": len(out) >= _TRAKT_PAGE_SIZE,
+    }
+    _kv_set(_TRAKT_SCOPE, cache_key, result)
+    return {**result, "cached": False}
+
+
+# ============================================================================
+# AniList 推荐（anime 专用）
+# ============================================================================
+
+@router.get("/anilist")
+def get_anilist(
+    category: str = "trending",
+    page: int = 1,
+    refresh: bool = False,
+):
+    """
+    AniList 番剧推荐：trending / popular / top_rated / current_season。
+    无 API key（公开 GraphQL）。page size 固定 30；前端按 wanted 切片显示。
+    """
+    cfg = settings.anilist
+    if not cfg.enabled:
+        raise HTTPException(status_code=400, detail="AniList 已在配置中关闭")
+    if category not in ('trending', 'popular', 'top_rated', 'current_season'):
+        raise HTTPException(status_code=400, detail=f"非法 category: {category}")
+    page = max(1, min(20, int(page)))
+
+    cache_key = f"{category}:p{page}"
+    ttl = max(1, cfg.cache_minutes) * 60
+    if not refresh:
+        cached = _strip_cache_meta(_kv_get(_ANILIST_SCOPE, cache_key, ttl_seconds=ttl))
+        if cached is not None:
+            return {**cached, "cached": True}
+
+    from common.anilist_client import AniListClient
+    client = AniListClient(
+        base_url=cfg.base_url,
+        request_delay=cfg.request_delay,
+        timeout=cfg.timeout_seconds,
+    )
+
+    if category == 'trending':
+        items = client.trending(page=page, limit=_ANILIST_PAGE_SIZE)
+    elif category == 'popular':
+        items = client.popular(page=page, limit=_ANILIST_PAGE_SIZE)
+    elif category == 'top_rated':
+        items = client.top_rated(page=page, limit=_ANILIST_PAGE_SIZE)
+    else:  # current_season
+        from datetime import datetime as _dt
+        now = _dt.utcnow()
+        # 季：Q1 WINTER, Q2 SPRING, Q3 SUMMER, Q4 FALL
+        season_map = {1: 'WINTER', 2: 'SPRING', 3: 'SUMMER', 4: 'FALL'}
+        season = season_map[((now.month - 1) // 3) + 1]
+        items = client.current_season(season=season, year=now.year,
+                                       page=page, limit=_ANILIST_PAGE_SIZE)
+
+    out = [it.to_dict() for it in items]
+    result = {
+        "count": len(out), "items": out,
+        "category": category, "page": page, "limit": _ANILIST_PAGE_SIZE,
+        "has_more": len(out) >= _ANILIST_PAGE_SIZE,
+    }
+    _kv_set(_ANILIST_SCOPE, cache_key, result)
+    return {**result, "cached": False}
+
+
+# ============================================================================
+# 豆瓣片单
+# ============================================================================
+
+@router.get("/douban-lists")
+def get_douban_lists(
+    doulist_id: Optional[str] = None,
+    page: int = 1,
+    refresh: bool = False,
+):
+    """
+    豆瓣 doulist 精选片单。
+    不传 doulist_id → 返回 settings.douban_lists.lists 的元数据列表（前端先选）。
+    传 doulist_id → 拉该片单第 page 页（豆瓣每页固定 25 条）。
+    """
+    cfg = settings.douban_lists
+    if not cfg.enabled:
+        raise HTTPException(status_code=400, detail="豆瓣片单已在配置中关闭")
+
+    # 不传 ID 时返回片单白名单（让前端做"片单选择 → 拉详情"两步流程）
+    if not doulist_id:
+        return {"lists": cfg.lists}
+
+    page = max(1, min(20, int(page)))
+    page_size = 25  # 豆瓣 doulist 固定一页 25 条
+    cache_key = f"{doulist_id}:p{page}"
+    ttl = max(1, cfg.cache_days) * 86400      # 默认 3 天，反爬严 + 内容变化慢
+    if not refresh:
+        cached = _strip_cache_meta(_kv_get(_DOUBAN_SCOPE, cache_key, ttl_seconds=ttl))
+        if cached is not None:
+            return {**cached, "cached": True}
+
+    from common.douban_client import DoubanClient
+    # 复用 douban 段的 user_agent + delay 配置
+    client = DoubanClient(
+        user_agent=settings.douban_user_agent,
+        delay=settings.douban_request_delay,
+    )
+    items = client.fetch_doulist(doulist_id, start=(page - 1) * page_size, limit=page_size)
+
+    # 找到对应配置项的元信息（name / media_type）
+    meta = next((d for d in cfg.lists if str(d.get('doulist_id')) == str(doulist_id)), None)
+    name = (meta or {}).get('name') or f'doulist {doulist_id}'
+    media_type = (meta or {}).get('media_type') or 'movie'
+
+    result = {
+        "count": len(items),
+        "items": items,
+        "doulist_id": doulist_id,
+        "name": name,
+        "media_type": media_type,
+        "page": page,
+        "limit": page_size,
+        "has_more": len(items) >= page_size,
+    }
+    # 豆瓣页面拉空（很可能是反爬）就不要写缓存，避免长 TTL 把空结果钉死
+    if items:
+        _kv_set(_DOUBAN_SCOPE, cache_key, result)
+    return {**result, "cached": False}

@@ -94,3 +94,47 @@ class LLMConfig(BaseModel):
     max_retries: int = 1
     cache_ttl_days: int = 30
     confidence_threshold: float = 0.85     # < 阈值落用户确认
+
+
+# ============ 第三方推荐源（Trakt / AniList / 豆瓣 doulist）============
+
+class TraktConfig(BaseModel):
+    """Trakt API 配置。
+    https://trakt.tv/oauth/applications 创建 application 后，把"Client ID"贴到 client_id。
+    公开 endpoint（trending / popular）不需要 OAuth；header 里带 trakt-api-key 即可。
+    """
+    enabled: bool = False
+    client_id: str = ''
+    base_url: str = 'https://api.trakt.tv'
+    request_delay: float = 1.0
+    timeout_seconds: int = 15
+    # 缓存 TTL（分钟）：Trakt 是实时观看活动信号，刷新频率应该比 TMDB 高一点
+    cache_minutes: int = 60
+
+
+class AniListConfig(BaseModel):
+    """AniList GraphQL 配置（公开 API，**完全不需要账号和 key**）。"""
+    enabled: bool = True
+    base_url: str = 'https://graphql.anilist.co'
+    request_delay: float = 1.0
+    timeout_seconds: int = 15
+    cache_minutes: int = 240        # 4 小时；番剧排行变化慢
+
+
+class DoubanListsConfig(BaseModel):
+    """豆瓣 doulist（精选片单）爬取配置。
+    跟评分爬取共用 douban.request_delay；这里只放片单 ID 白名单。
+
+    豆瓣对未登录访问反爬强，触发限速会拉黑半小时；而片单（如 Top 250）本身
+    变化极慢（一周改不了几条），所以 TTL 默认拉到 3 天。
+    """
+    enabled: bool = True
+    cache_days: int = 3              # 默认 3 天
+    # 默认列表：豆瓣每日热门 / 高分华语 / 高分日剧等。用户可自定义补充。
+    # 格式：[{name: "中文显示名", doulist_id: "123", media_type: "movie"|"tv"}, ...]
+    lists: List[Dict] = Field(default_factory=lambda: [
+        {'name': '豆瓣 Top 250', 'doulist_id': '240962',  'media_type': 'movie'},
+        {'name': '高分华语电影', 'doulist_id': '1518184', 'media_type': 'movie'},
+        {'name': '高分日剧',     'doulist_id': '1631879', 'media_type': 'tv'},
+        {'name': '高分韩剧',     'doulist_id': '1648104', 'media_type': 'tv'},
+    ])

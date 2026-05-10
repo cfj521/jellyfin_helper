@@ -81,6 +81,7 @@ from web.backend.api import (
     subtitle, metadata, media, stats, tasks, config_api,
     discover, resourcesearch, downloadpipeline,
     medialibraries, audio, maintenance, ratings, logs as logs_api, dispatch,
+    img_proxy,
 )
 
 
@@ -207,6 +208,7 @@ app.include_router(maintenance.router, prefix="/api/maintenance", tags=["媒体�
 app.include_router(ratings.router, prefix="/api/ratings", tags=["评分聚合"])
 app.include_router(logs_api.router, prefix="/api", tags=["日志查看"])
 app.include_router(dispatch.router, prefix="/api/dispatch", tags=["下载入库流水线"])
+app.include_router(img_proxy.router, prefix="/api", tags=["图片反代"])
 
 # 成人内容仅在配置开启时挂载
 if settings.adult_enabled:
@@ -290,10 +292,16 @@ else:
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
+    # 端口优先级：环境变量 BACKEND_PORT > config.yaml server.backend_port > 8000
+    port = int(os.environ.get('BACKEND_PORT') or settings.backend_port or 8000)
+    # reload 仅开发用：环境变量 BACKEND_RELOAD=1 时启用；服务模式默认关闭（避免 watcher 占进程 + 假阻塞）
+    reload = os.environ.get('BACKEND_RELOAD', '').lower() in ('1', 'true', 'yes')
+    logger.info(f"启动 uvicorn host=0.0.0.0 port={port} reload={reload}")
     uvicorn.run(
         "web.backend.main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True
+        port=port,
+        reload=reload,
     )

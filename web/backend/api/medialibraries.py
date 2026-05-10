@@ -37,16 +37,16 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.heic'
 
 
 # ---- 媒体库统计 in-memory 缓存（2 小时 TTL）----
-# 单 worker 部署够用；重启会丢，但首次进页面会重算，可接受。
-# 多 worker 时各 worker 各自缓存（可能不一致），需要时再升级到 DB / Redis。
-from threading import Lock as _CacheLock
-from datetime import datetime as _dt, timedelta as _td
+# 媒体库统计缓存：DB 持久化（之前是内存 dict，重启 / uvicorn reload 全清；
+# 用户配 7 天 TTL 是为了真撑 7 天，进程内存抗不住）。
+from web.backend.cache_store import get_cached as _kv_get, set_cached as _kv_set, invalidate as _kv_invalidate
 
-_LIB_STATS_CACHE: Dict[str, Dict] = {}  # library_id → {'data': ..., 'cached_at': datetime}
-_LIB_STATS_LOCK = _CacheLock()
-# TTL 从 settings.cache_library_days（天）读取；改值后需重启后端
-def _lib_stats_ttl():
-    return _td(days=max(1, settings.cache_library_days))
+_LIB_STATS_SCOPE = 'lib_stats'
+
+
+def _lib_stats_ttl_seconds() -> int:
+    """settings.cache_library_days（天）→ 秒。改值后立即生效（每次 read 现读 settings）。"""
+    return max(1, settings.cache_library_days) * 86400
 
 
 def _stats_cache_key(library_id: str, fields: Optional[set] = None) -> str:
@@ -58,37 +58,17 @@ def _stats_cache_key(library_id: str, fields: Optional[set] = None) -> str:
 
 def _get_cached_lib_stats(library_id: str, fields: Optional[set] = None) -> Optional[Dict]:
     key = _stats_cache_key(library_id, fields)
-    with _LIB_STATS_LOCK:
-        entry = _LIB_STATS_CACHE.get(key)
-    if not entry:
-        return None
-    age = _dt.utcnow() - entry['cached_at']
-    if age > _lib_stats_ttl():
-        return None
-    # 返回浅拷贝，附加 _cache 字段告知前端这是缓存
-    out = dict(entry['data'])
-    out['_cached'] = True
-    out['_cached_at'] = entry['cached_at'].isoformat()
-    out['_cache_age_seconds'] = int(age.total_seconds())
-    return out
+    return _kv_get(_LIB_STATS_SCOPE, key, ttl_seconds=_lib_stats_ttl_seconds())
 
 
 def _set_cached_lib_stats(library_id: str, data: Dict, fields: Optional[set] = None):
     key = _stats_cache_key(library_id, fields)
-    with _LIB_STATS_LOCK:
-        _LIB_STATS_CACHE[key] = {'data': data, 'cached_at': _dt.utcnow()}
+    _kv_set(_LIB_STATS_SCOPE, key, data)
 
 
 def _invalidate_lib_stats_cache(library_id: Optional[str] = None):
-    """library_id=None 时清空全部缓存（用于"全部强制刷新"）"""
-    with _LIB_STATS_LOCK:
-        if library_id is None:
-            _LIB_STATS_CACHE.clear()
-        else:
-            # 删 library_id 下的所有 fields 变体
-            for k in list(_LIB_STATS_CACHE.keys()):
-                if k == library_id or k.startswith(library_id + '|'):
-                    del _LIB_STATS_CACHE[k]
+    """library_id=None 时清空整个 scope（用于"全部强制刷新"）"""
+    _kv_invalidate(_LIB_STATS_SCOPE, key_prefix=library_id)
 
 
 def _client() -> JellyfinClient:
@@ -307,48 +287,36 @@ def get_library_genres(library_id: str):
 # Series → Season → Episode 钻取（带 30 分钟内存缓存）
 # ============================================================
 
-import threading
-import time
 from common.jellyfin_client import JellyfinClient as _JfClientType  # alias for typing
 
-# TTL：从 settings.cache_library_days 读，模块加载时一次性算成秒
-# 改值需要重启后端（_TTLCache 实例上的 ttl 是 init 时定的，不会跟 settings 同步）
-_CHILDREN_CACHE_TTL = max(1, settings.cache_library_days) * 86400
 
+# 树形子节点 / 聚合摘要缓存：DB 持久化（同 _LIB_STATS_CACHE 的处理思路）
+# TTL 由 settings.cache_library_days 控制，每次 get 现读，settings 改完立即生效。
+class _DbCacheView:
+    """对单个 scope 的 DB 缓存薄封装，跟原 _TTLCache 同款 get/set/invalidate 接口。
+    这样所有调用点不用改方法名。"""
+    def __init__(self, scope: str):
+        self.scope = scope
 
-class _TTLCache:
-    """简易 TTL 内存缓存：用于剧集/季的子节点查询。"""
-
-    def __init__(self, ttl: int):
-        self.ttl = ttl
-        self._store: Dict[str, tuple] = {}  # key -> (expires_at, value)
-        self._lock = threading.Lock()
+    def _ttl(self) -> int:
+        return max(1, settings.cache_library_days) * 86400
 
     def get(self, key: str):
-        with self._lock:
-            entry = self._store.get(key)
-            if entry is None:
-                return None
-            expires_at, value = entry
-            if time.time() >= expires_at:
-                self._store.pop(key, None)
-                return None
-            return value
+        v = _kv_get(self.scope, key, ttl_seconds=self._ttl())
+        if isinstance(v, dict):
+            # 剥掉 _cached_at 这种元字段，让旧调用点拿到的对象跟原本一致
+            return {k: vv for k, vv in v.items() if not k.startswith('_cached') and k != '_cache_age_seconds'}
+        return v
 
     def set(self, key: str, value):
-        with self._lock:
-            self._store[key] = (time.time() + self.ttl, value)
+        _kv_set(self.scope, key, value)
 
     def invalidate(self, key: Optional[str] = None):
-        with self._lock:
-            if key is None:
-                self._store.clear()
-            else:
-                self._store.pop(key, None)
+        _kv_invalidate(self.scope, key_prefix=key)
 
 
-_seasons_cache = _TTLCache(_CHILDREN_CACHE_TTL)
-_episodes_cache = _TTLCache(_CHILDREN_CACHE_TTL)
+_seasons_cache = _DbCacheView('tree_seasons')
+_episodes_cache = _DbCacheView('tree_episodes')
 
 
 _JF_LANG_NORMALIZE = {
@@ -626,7 +594,7 @@ def clear_children_cache():
 # 前端列表加载后批量调一次，覆盖到 Series 行上
 # ============================================================
 
-_aggregates_cache = _TTLCache(_CHILDREN_CACHE_TTL)
+_aggregates_cache = _DbCacheView('tree_aggregates')
 
 
 class SeriesAggregatesRequest(BaseModel):
@@ -1302,7 +1270,8 @@ def library_stats(
             可选项：health（健康度，最贵）/ poster（缺海报）/ tmdb（TMDB 绑定）
             不传 = 全部计算（默认）；传空字符串 = 都不算
 
-    缓存：内存级 2 小时 TTL，按 (library_id, fields) 分桶。force_refresh=true 跳过缓存重算。
+    缓存：DB 持久化（kv_cache 表）+ settings.cache_library_days TTL，按 (library_id, fields) 分桶。
+    force_refresh=true 跳过缓存重算。重启后端不会丢缓存。
     """
     included = _parse_stats_fields(fields)
 

@@ -161,6 +161,36 @@ llm:
   cache_ttl_days: 30
   confidence_threshold: 0.85
 
+# 第三方推荐源（互补 TMDB）
+# Trakt：实时观看活动信号；https://trakt.tv/oauth/applications 创建 app 拿 client_id
+trakt:
+  enabled: false
+  client_id: ""                 # 64 位十六进制
+  base_url: "https://api.trakt.tv"
+  request_delay: 1.0
+  timeout_seconds: 15
+  cache_minutes: 60             # Trakt 是实时观看活动，缓存 1 小时即可
+
+# AniList：番剧专用；公开 GraphQL，**完全不需要账号和 key**
+anilist:
+  enabled: true
+  base_url: "https://graphql.anilist.co"
+  request_delay: 1.0
+  timeout_seconds: 15
+  cache_minutes: 240            # 番剧排行变化慢，4 小时
+
+# 豆瓣片单：白名单形式，每个 doulist_id 是 douban.com/doulist/<id>/ 的 ID 部分
+# 反爬严：豆瓣对未登录访问触发限速会拉黑半小时；片单内容变化慢（如 Top 250 一周改不了几条）
+# → cache_days 默认 3 天；空结果不写缓存（避免反爬被命中后长期返回空）
+douban_lists:
+  enabled: true
+  cache_days: 3
+  lists:
+    - { name: "豆瓣 Top 250",   doulist_id: "240962",  media_type: "movie" }
+    - { name: "高分华语电影",   doulist_id: "1518184", media_type: "movie" }
+    - { name: "高分日剧",       doulist_id: "1631879", media_type: "tv" }
+    - { name: "高分韩剧",       doulist_id: "1648104", media_type: "tv" }
+
 # 成人内容配置（默认关闭）
 # enabled=false 时菜单不显示，相关 API 路由也不挂载
 adult:

@@ -326,6 +326,24 @@ class DownloadDispatchMap(Base):
     qb_added_on = Column(DateTime, index=True)
 
 
+class KvCache(Base):
+    """通用 key-value 缓存表。
+    用来持久化原本只在内存里的 TTL 缓存（库统计 / 剧集树形子节点 / TMDB 推荐等），
+    避免后端重启 / uvicorn reload 把缓存全清。
+
+    scope: 缓存命名空间（'lib_stats' / 'tree_seasons' / 'tmdb_trending' 等）
+    key  : scope 内的唯一 key（字符串，由调用方拼）
+    data : 序列化后的 JSON 文本
+    cached_at: 写入时刻；TTL 由调用方传入，过期与否在读取时算
+    """
+    __tablename__ = "kv_cache"
+
+    scope = Column(String(40), primary_key=True)
+    key = Column(String(500), primary_key=True)
+    data = Column(Text, nullable=False)
+    cached_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class LLMClassifyCache(Base):
     """LLM 类型识别结果缓存（按 torrent_name + sorted(files) 指纹）。"""
     __tablename__ = "llm_classify_cache"
