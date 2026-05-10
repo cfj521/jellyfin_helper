@@ -188,21 +188,12 @@
             />
           </el-select>
 
-          <!-- 右侧组：分页 + Folder 开关紧贴在一起，作为整体推到行尾 -->
+          <!-- 右侧组：进度统计 + Folder 开关 -->
           <div class="header-right-group">
-            <el-pagination
-              v-if="itemsTotal > 0"
-              v-model:current-page="page"
-              v-model:page-size="pageSize"
-              :total="itemsTotal"
-              :page-sizes="[20, 50, 100, 200]"
-              layout="total, sizes, prev, pager, next, jumper"
-              background
-              small
-              class="header-pagination"
-              @current-change="loadItems"
-              @size-change="onPageSizeChange"
-            />
+            <!-- 无限滚动：展示"已加载 X / 共 Y"，替代原分页器 -->
+            <span v-if="itemsTotal > 0" class="items-progress">
+              已加载 {{ items.length }} / 共 {{ itemsTotal }}
+            </span>
             <!-- 忽略 Folder 开关：与 Jellyfin Web 默认行为对齐 -->
             <div class="toggle-folder">
               <span class="switch-label">忽略 Folder</span>
@@ -270,7 +261,6 @@
         :data="sortedItems"
         stripe
         size="small"
-        max-height="700"
         row-key="id"
         lazy
         :load="loadChildren"
@@ -594,6 +584,14 @@
         </el-table-column>
       </el-table>
 
+      <!-- 无限滚动哨兵：进入视口（含 rootMargin 200px 提前量）→ loadMore -->
+      <div ref="sentinelRef" class="scroll-sentinel">
+        <span v-if="loadingMore" class="muted">
+          <el-icon class="spin"><Loading /></el-icon> 加载更多...
+        </span>
+        <span v-else-if="!hasMore && items.length" class="muted">— 已经到底了 —</span>
+      </div>
+
       <el-empty v-if="!itemsLoading && !items.length" description="暂无内容" />
     </el-card>
 
@@ -826,7 +824,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, Refresh, MagicStick, Loading, Check, Close, Search, Link, Star,
@@ -934,18 +932,32 @@ const dupTagType = (mt) => ({
   size_only: 'info',
 }[mt] || '')
 
-// 内容（分页）
+// 内容（无限滚动累积器）
+// items 是累积数组：首次 loadItems(reset=true) 清空 + 拉首批，loadMore 追加
+// itemsTotal 仍然由后端 /Items?TotalRecordCount 返回，用来显示"已加载 X / 共 Y"
 const items = ref([])
 const itemsTotal = ref(0)
-const itemsLoading = ref(false)
+const itemsLoading = ref(false)         // 首批/重置加载（清空 items 时显示骨架）
+const loadingMore = ref(false)          // 触底追加加载（不清 items）
+const hasMore = ref(true)               // 是否还有下一批
 const itemsTable = ref(null)
+const sentinelRef = ref(null)
 const selectedItems = ref([])
 // 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
 const expandedSet = ref(new Set())
 // 已懒加载的子节点：{ [parentId]: childrenArray }
 // el-table lazy 模式下 row._children 不可靠（取决于 store 内部），自管一份用于级联选择
 const childrenMap = ref({})
-const page = ref(1)
+// 无限滚动游标 + 批量大小
+//   INITIAL_LIMIT 大一点（100）让首屏能塞满几行（库视图卡片是 16:9 不是海报，密度更高）
+//   BATCH_LIMIT 中等（50）平衡请求频率与单次延迟
+const INITIAL_LIMIT = 100
+const BATCH_LIMIT = 50
+const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模型）
+// reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
+let reqSeq = 0
+let observer = null                     // IntersectionObserver
+let skipNextIntersection = false        // 防 observe() 首次 fire 误触发（与 Trending 同款套路）
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
@@ -963,7 +975,6 @@ const yearOptions = computed(() => {
   for (let y = cur; y >= 1950; y--) out.push(String(y))
   return out
 })
-const pageSize = ref(50)
 // 忽略 Folder 开关：与 Jellyfin Web 默认行为对齐（默认关闭，即显示所有类型）
 const hideFolders = ref(false)
 
@@ -1279,11 +1290,6 @@ const clearSelection = () => {
     itemsTable.value.clearSelection()
   }
   selectedItems.value = []
-}
-
-const onPageSizeChange = () => {
-  page.value = 1
-  loadItems()
 }
 
 // TMDB 详情页链接（电影/剧集/季 URL 格式不同；Episode 在表格里已显示 —）
@@ -1782,33 +1788,118 @@ const formatCacheAge = (seconds) => {
   return `${Math.floor(seconds / 3600)} 小时`
 }
 
+// 加载首批 / 重置（filter 变了 / 切库 / 强制刷新都走这条）
+// 清空 items 数组 + 重置游标 + 拉 INITIAL_LIMIT 条 + 启动 observer
 const loadItems = async () => {
+  const seq = ++reqSeq
   itemsLoading.value = true
+  items.value = []
+  itemsTotal.value = 0
+  nextStartIndex.value = 0
+  hasMore.value = true
+  // 清掉已展开 / 已加载的子节点缓存（行 id 跟新批不一定一一对应）
+  expandedSet.value = new Set()
+  childrenMap.value = {}
+  selectedItems.value = []
   try {
-    const params = {
-      start_index: (page.value - 1) * pageSize.value,
-      limit: pageSize.value,
-      search: itemsSearch.value || undefined,
-    }
-    if (searchYears.value.length) {
-      // jellyfin /Items 接受逗号分隔的多年（OR 关系）
-      params.years = searchYears.value.join(',')
-    }
-    if (searchGenres.value.length) {
-      // jellyfin /Items 接受 | 分隔的多 genre（默认 AND，全部命中才返回）
-      params.genres = searchGenres.value.join('|')
-    }
-    const res = await jellyfinApi.libraryItems(id.value, params)
-    items.value = res.data.items || []
+    const res = await jellyfinApi.libraryItems(id.value, _buildItemsParams(0, INITIAL_LIMIT))
+    if (seq !== reqSeq) return  // 期间又触发了一次新 load，丢弃
+    const newItems = res.data.items || []
+    items.value = newItems
     itemsTotal.value = res.data.total || 0
-    fetchRatingsForItems()
-    fetchSeriesAggregates()
-    fetchSubtitleLangsForItems()
+    nextStartIndex.value = newItems.length
+    // 后端的 has_more 字段不一定有；按 "本批返回数 < limit" OR "已拉到 total" 判定
+    hasMore.value = newItems.length >= INITIAL_LIMIT && nextStartIndex.value < itemsTotal.value
+    _fireBatchEnrichments()
   } catch (e) {
     ElMessage.error('加载内容失败: ' + (e.response?.data?.detail || e.message))
+    hasMore.value = false
   } finally {
-    itemsLoading.value = false
+    if (seq === reqSeq) {
+      itemsLoading.value = false
+      // observer 可能还在观察旧 sentinel；DOM 稳定后重挂一次
+      // 同时如果首批没填满视口，重挂会立刻 fire 一次 IntersectionObserver
+      // 但 skipNextIntersection 会跳过那一次；用户滚一行就能触发下一批
+      await nextTick()
+      _observeSentinel()
+    }
   }
+}
+
+// 触底拉下一批（IntersectionObserver 调）
+// 不清 items，append 到累积数组尾部；防并发：loadingMore 锁
+const loadMore = async () => {
+  if (itemsLoading.value || loadingMore.value || !hasMore.value) return
+  const seq = reqSeq
+  loadingMore.value = true
+  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
+  try {
+    const start = nextStartIndex.value
+    const res = await jellyfinApi.libraryItems(id.value, _buildItemsParams(start, BATCH_LIMIT))
+    if (seq !== reqSeq) return  // 期间换了 source/filter，丢弃
+    const newItems = res.data.items || []
+    items.value = [...items.value, ...newItems]
+    if (res.data.total != null) itemsTotal.value = res.data.total
+    nextStartIndex.value = start + newItems.length
+    hasMore.value = newItems.length >= BATCH_LIMIT && nextStartIndex.value < itemsTotal.value
+    _fireBatchEnrichments()
+  } catch (e) {
+    console.warn('继续加载失败:', e)
+    hasMore.value = false
+  } finally {
+    if (seq === reqSeq) {
+      loadingMore.value = false
+      await nextTick()
+      _observeSentinel()  // 重新挂观察（observer 必 fire 首次状态，下方有 skip 保护）
+    }
+  }
+}
+
+// 公共 params 构造：filter / search 共用
+const _buildItemsParams = (start, limit) => {
+  const params = {
+    start_index: start,
+    limit,
+    search: itemsSearch.value || undefined,
+  }
+  if (searchYears.value.length) {
+    params.years = searchYears.value.join(',')
+  }
+  if (searchGenres.value.length) {
+    params.genres = searchGenres.value.join('|')
+  }
+  return params
+}
+
+// 每批数据到达后触发三个补齐查询：评分 / 季聚合 / 字幕
+// 这三个原来在 loadItems 末尾各调一次；现在 loadMore 也要调（只针对新加入的批）
+// 简化：仍然全量调（评分 batch / 字幕 batch 都有缓存，重复 ID 不会重复打远端）
+const _fireBatchEnrichments = () => {
+  fetchRatingsForItems()
+  fetchSeriesAggregates()
+  fetchSubtitleLangsForItems()
+}
+
+// ============ IntersectionObserver 无限滚动 ============
+// 设计跟 Trending.vue 一致：sentinel 在列表/网格之后；rootMargin 200px 提前量
+const _setupObserver = () => {
+  if (observer) observer.disconnect()
+  observer = new IntersectionObserver((entries) => {
+    if (skipNextIntersection) {
+      skipNextIntersection = false
+      return
+    }
+    for (const e of entries) {
+      if (e.isIntersecting) loadMore()
+    }
+  }, { rootMargin: '200px 0px' })
+  _observeSentinel()
+}
+
+const _observeSentinel = () => {
+  if (!observer || !sentinelRef.value) return
+  skipNextIntersection = true  // observe() 会立刻 fire 一次当前状态，跳过它
+  observer.observe(sentinelRef.value)
 }
 
 /**
@@ -1868,7 +1959,7 @@ const fetchSeriesAggregates = async () => {
 
 const onSearchSubmit = () => {
   itemsSearch.value = (searchInput.value || '').trim()
-  page.value = 1
+  // 无限滚动模式：loadItems() 内部会清空 items + 重置游标，等同于回到 page 1
   loadItems()
 }
 
@@ -2166,13 +2257,24 @@ const formatSize = (bytes) => {
 onMounted(async () => {
   loadStatsPrefs(id.value)
   await loadAll()
+  // 首批渲染完成后挂哨兵 observer：等 DOM 稳定再绑，避免观察空容器误 fire
+  await nextTick()
+  _setupObserver()
 })
 
-// 切换不同库时重新加载该库的显示偏好
-watch(() => id.value, (newId) => loadStatsPrefs(newId))
+// 切换不同库时重新加载该库的显示偏好；observer 也要重挂（router 复用同组件）
+watch(() => id.value, async (newId) => {
+  loadStatsPrefs(newId)
+  await nextTick()
+  _setupObserver()
+})
 
 onUnmounted(() => {
   stopSubtitlePoll()
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
 })
 </script>
 
@@ -2988,10 +3090,44 @@ onUnmounted(() => {
     flex-wrap: nowrap;  // 组内不允许换行，分页和开关永远贴一起
   }
 
-  // 分页本身不再需要 margin-left（它的容器负责右推）
+  // 无限滚动进度文字（替代原 el-pagination）
+  .items-progress {
+    flex-shrink: 0;
+    color: #6b7280;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  // 旧 header-pagination 已被无限滚动取代；样式保留以兼容其他可能引用，flex-shrink 防止压缩
   .header-pagination {
     flex-shrink: 0;
   }
+}
+
+// 无限滚动哨兵：底部空白区域 + 居中提示（"加载更多..." / "— 已经到底了 —"）
+.scroll-sentinel {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
+
+  .muted {
+    color: #94a3b8;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .spin {
+    animation: spin 1s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 // 让表格行的 vertical-align 居中，让海报和文字共存时不偏上

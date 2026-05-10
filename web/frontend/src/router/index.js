@@ -57,6 +57,18 @@ const routes = [
     component: () => import('@/views/discover/Detail.vue'),
     meta: { title: '影视详情' }
   },
+  {
+    path: '/discover/anilist/:anilistId',
+    name: 'DiscoverAniListDetail',
+    component: () => import('@/views/discover/AniListDetail.vue'),
+    meta: { title: '番剧详情' }
+  },
+  {
+    path: '/discover/douban/:doubanId',
+    name: 'DiscoverDoubanDetail',
+    component: () => import('@/views/discover/DoubanDetail.vue'),
+    meta: { title: '豆瓣详情' }
+  },
   // 资源搜索
   {
     path: '/resourcesearch',

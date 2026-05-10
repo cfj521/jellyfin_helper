@@ -720,6 +720,17 @@ const searchTorrents = async (item) => {
 
 const openDetail = (item) => {
   if (item.media_type === 'person') return
+  // 优先级 1：TMDB ID 走我们自己的 TMDB 详情页（结构最全）
+  // 注意 AniList 番剧偶尔附带 tmdb_id（external links → TMDB 链接），但 TMDB 上番剧元数据偏 thin，
+  // 番剧详情还是优先走 AniList 自己的页面。所以这里 source 判断在前。
+  if (source.value === 'anilist' && item.anilist_id) {
+    router.push({ name: 'DiscoverAniListDetail', params: { anilistId: item.anilist_id } })
+    return
+  }
+  if (source.value === 'douban' && item.douban_id) {
+    router.push({ name: 'DiscoverDoubanDetail', params: { doubanId: item.douban_id } })
+    return
+  }
   if (item.tmdb_id) {
     router.push({
       name: 'DiscoverDetail',
@@ -728,14 +739,6 @@ const openDetail = (item) => {
         tmdbId: item.tmdb_id,
       },
     })
-    return
-  }
-  if (source.value === 'anilist' && item.anilist_id) {
-    window.open(`https://anilist.co/anime/${item.anilist_id}`, '_blank')
-    return
-  }
-  if (source.value === 'douban' && item.douban_id) {
-    window.open(`https://movie.douban.com/subject/${item.douban_id}/`, '_blank')
     return
   }
   ElMessage.info('该条目无可用详情链接')

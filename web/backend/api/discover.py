@@ -698,6 +698,38 @@ def get_douban_lists(
     return {**result, "cached": False}
 
 
+_ANILIST_DETAIL_SCOPE = 'anilist_detail'
+_ANILIST_DETAIL_TTL = 7 * 86400  # 7 天：番剧详情（评分/集数）会变，但缓存内重复访问无忧
+
+
+@router.get("/anilist-detail")
+def get_anilist_detail(anilist_id: int, refresh: bool = False):
+    """AniList 单条番剧详情。前端 AniListDetail.vue 用。"""
+    cfg = settings.anilist
+    if not cfg.enabled:
+        raise HTTPException(status_code=400, detail="AniList 模块已关闭")
+    if not anilist_id:
+        raise HTTPException(status_code=400, detail="缺少 anilist_id")
+
+    cache_key = str(anilist_id)
+    if not refresh:
+        cached = _strip_cache_meta(_kv_get(_ANILIST_DETAIL_SCOPE, cache_key, ttl_seconds=_ANILIST_DETAIL_TTL))
+        if cached is not None:
+            return {**cached, "cached": True}
+
+    from common.anilist_client import AniListClient
+    client = AniListClient(
+        base_url=cfg.base_url,
+        request_delay=cfg.request_delay,
+        timeout=cfg.timeout_seconds,
+    )
+    detail = client.detail(int(anilist_id))
+    if not detail:
+        raise HTTPException(status_code=404, detail="AniList 中未找到该条目")
+    _kv_set(_ANILIST_DETAIL_SCOPE, cache_key, detail)
+    return {**detail, "cached": False}
+
+
 _DOUBAN_DETAIL_SCOPE = 'douban_detail'
 _DOUBAN_DETAIL_TTL = 30 * 86400  # 30 天：豆瓣条目元信息变化极少
 

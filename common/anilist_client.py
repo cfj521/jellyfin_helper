@@ -49,6 +49,68 @@ class AniListItem:
         return self.__dict__.copy()
 
 
+# 详情查询：单条 anilist_id 一次性拿足够撑详情页的数据
+_DETAIL_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    idMal
+    title { romaji english native }
+    coverImage { large extraLarge }
+    bannerImage
+    description(asHtml: false)
+    season seasonYear
+    startDate { year month day }
+    endDate   { year month day }
+    episodes duration format status source countryOfOrigin
+    averageScore meanScore popularity favourites
+    genres
+    tags { name rank }
+    studios { nodes { name } }
+    trailer { id site }
+    externalLinks { site url type }
+    characters(perPage: 12, sort: ROLE) {
+      edges {
+        role
+        node {
+          id
+          name { full }
+          image { large }
+        }
+        voiceActors(language: JAPANESE) {
+          name { full }
+          image { large }
+          language
+        }
+      }
+    }
+    relations {
+      edges {
+        relationType
+        node {
+          id
+          type
+          format
+          title { romaji english native }
+          coverImage { large }
+        }
+      }
+    }
+    recommendations(perPage: 12, sort: RATING_DESC) {
+      nodes {
+        mediaRecommendation {
+          id
+          title { romaji english native }
+          coverImage { large }
+          averageScore
+        }
+      }
+    }
+  }
+}
+"""
+
+
 # 列表查询：包含 description（前端"简介"按钮要展示）；继续不拉 bannerImage / externalLinks 减体积
 # 详情页用更完整的 query（暂未引入；想看 banner 等需要再加）
 _LIST_QUERY = """
@@ -117,6 +179,149 @@ class AniListClient:
         except requests.RequestException as e:
             logger.warning(f"[anilist] 请求失败: {e}")
             return None
+
+    # ---- 详情查询 ----
+
+    def detail(self, anilist_id: int) -> Optional[Dict]:
+        """
+        单条番剧详情。前端详情页用。
+        返回 dict 比 _parse_item 更全：banner / description / studios / 声优 / characters /
+        relations / external_links / trailer 等。
+        """
+        if not anilist_id:
+            return None
+        data = self._query(_DETAIL_QUERY, {'id': int(anilist_id)})
+        if not data:
+            return None
+        m = (data.get('Media') or {})
+        if not m:
+            return None
+        return self._parse_detail(m)
+
+    @staticmethod
+    def _parse_detail(m: Dict) -> Dict:
+        """把 AniList Media 详情对象简化成前端需要的字段。"""
+        title = m.get('title') or {}
+        cover = m.get('coverImage') or {}
+        start = m.get('startDate') or {}
+        end = m.get('endDate') or {}
+
+        cast = []
+        for edge in (m.get('characters') or {}).get('edges') or []:
+            ch = edge.get('node') or {}
+            ch_name = (ch.get('name') or {}).get('full') or ''
+            ch_image = (ch.get('image') or {}).get('large')
+            # 主声优（取第一位日语 voice actor）
+            va_name, va_image = None, None
+            for va in edge.get('voiceActors') or []:
+                if (va.get('language') or '').upper() == 'JAPANESE':
+                    va_name = (va.get('name') or {}).get('full')
+                    va_image = (va.get('image') or {}).get('large')
+                    break
+            cast.append({
+                'character': ch_name,
+                'image': ch_image,
+                'voice_actor': va_name,
+                'voice_actor_image': va_image,
+            })
+
+        # 关联作品（前/后传 / 衍生 / 改编）
+        relations = []
+        for edge in (m.get('relations') or {}).get('edges') or []:
+            node = edge.get('node') or {}
+            t = node.get('title') or {}
+            c = node.get('coverImage') or {}
+            relations.append({
+                'anilist_id': node.get('id'),
+                'relation': edge.get('relationType'),
+                'title': t.get('english') or t.get('romaji') or t.get('native'),
+                'media_type': (node.get('type') or '').lower() or 'anime',
+                'format': node.get('format'),
+                'cover_image': c.get('large'),
+            })
+
+        # 推荐
+        recommendations = []
+        for rec in ((m.get('recommendations') or {}).get('nodes') or [])[:12]:
+            rm = rec.get('mediaRecommendation') or {}
+            if not rm:
+                continue
+            t = rm.get('title') or {}
+            c = rm.get('coverImage') or {}
+            recommendations.append({
+                'anilist_id': rm.get('id'),
+                'title': t.get('english') or t.get('romaji') or t.get('native'),
+                'cover_image': c.get('large'),
+                'average_score': rm.get('averageScore'),
+            })
+
+        # external links → TMDB / MAL / 官网 等；顺手抽 tmdb_id
+        ext_links = []
+        tmdb_id = None
+        mal_id = m.get('idMal')
+        for link in m.get('externalLinks') or []:
+            site = link.get('site') or ''
+            url = link.get('url') or ''
+            ext_links.append({'site': site, 'url': url, 'type': link.get('type')})
+            if site.lower() == 'tmdb' and 'tv/' in url:
+                try:
+                    tmdb_id = int(url.rstrip('/').split('/')[-1])
+                except (ValueError, IndexError):
+                    pass
+
+        trailer = m.get('trailer') or None
+        if trailer:
+            site = (trailer.get('site') or '').lower()
+            trailer_id = trailer.get('id')
+            if site == 'youtube' and trailer_id:
+                trailer = {
+                    'site': 'youtube',
+                    'key': trailer_id,
+                    'youtube_url': f'https://www.youtube.com/watch?v={trailer_id}',
+                    'thumb_url': f'https://img.youtube.com/vi/{trailer_id}/hqdefault.jpg',
+                }
+            else:
+                trailer = None
+
+        # 主标签（前 6 个，按 rank 降序）
+        tags = []
+        for tag in sorted((m.get('tags') or []), key=lambda t: -(t.get('rank') or 0))[:6]:
+            tags.append(tag.get('name'))
+
+        return {
+            'anilist_id': int(m.get('id') or 0),
+            'mal_id': mal_id,
+            'tmdb_id': tmdb_id,
+            'media_type': 'anime',
+            'title_romaji': title.get('romaji'),
+            'title_english': title.get('english'),
+            'title_native': title.get('native'),
+            'cover_image': cover.get('extraLarge') or cover.get('large'),
+            'banner_image': m.get('bannerImage'),
+            'description': _strip_html(m.get('description')),
+            'season': m.get('season'),
+            'season_year': m.get('seasonYear'),
+            'start_date': f"{start.get('year')}-{start.get('month') or 1:02d}-{start.get('day') or 1:02d}" if start.get('year') else None,
+            'end_date': f"{end.get('year')}-{end.get('month') or 1:02d}-{end.get('day') or 1:02d}" if end.get('year') else None,
+            'episodes': m.get('episodes'),
+            'duration': m.get('duration'),
+            'format': m.get('format'),
+            'status': m.get('status'),
+            'source': m.get('source'),
+            'country_of_origin': m.get('countryOfOrigin'),
+            'average_score': m.get('averageScore'),
+            'mean_score': m.get('meanScore'),
+            'popularity': m.get('popularity'),
+            'favourites': m.get('favourites'),
+            'genres': list(m.get('genres') or []),
+            'tags': tags,
+            'studios': [(s.get('name') or '') for s in ((m.get('studios') or {}).get('nodes') or []) if s.get('name')],
+            'cast': cast,
+            'relations': relations,
+            'recommendations': recommendations,
+            'external_links': ext_links,
+            'trailer': trailer,
+        }
 
     # ---- 业务接口 ----
 
