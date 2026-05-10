@@ -214,8 +214,20 @@ def _fetch_mdblist_sync(
         db.add(rating)
 
     # title/year/imdb_id 也一并更新（MDB List 有就用它的）
-    if parsed.get('title'):
-        rating.title = parsed['title']
+    # 例外：MDB List 几乎只返回英文 title，但豆瓣 worker 拿这个去搜中文/日文条目会失败。
+    # 所以"DB 已有 CJK 字符"时优先保留 —— 中文片豆瓣搜索靠这一保护。
+    new_title = parsed.get('title')
+    if new_title:
+        existing = rating.title or ''
+        existing_has_cjk = any(
+            '一' <= c <= '鿿'  # 中日韩统一表意文字
+            or '぀' <= c <= 'ヿ'  # 平假名/片假名
+            or '가' <= c <= '힯'  # 韩文
+            for c in existing
+        )
+        if not existing_has_cjk:
+            rating.title = new_title
+        # 否则 keep existing 中文/日文/韩文 title，避免被英文覆盖
     if parsed.get('year'):
         rating.year = parsed['year']
     if parsed.get('imdb_id'):
@@ -359,6 +371,8 @@ def get_rating(
     tmdb_id: int,
     media_type: str = "movie",
     imdb_id: Optional[str] = None,
+    title: Optional[str] = None,
+    year: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -369,6 +383,9 @@ def get_rating(
       2. MDB List 不在 fresh 缓存内 → 同步重取
       3. 豆瓣不在 fresh 缓存内 → 排队后台爬（不阻塞响应）
       4. 返回当前 DB 状态 + 各源缓存状态
+
+    title / year（可选）：调用方提供的本地化标题/年份，优先用于豆瓣搜索。
+    用途：Detail 页 TMDB 详情拿到的 zh-CN title 比 MDB List 英文 title 更利于豆瓣命中。
     """
     if media_type not in ('movie', 'tv'):
         raise HTTPException(status_code=400, detail="media_type 必须是 movie 或 tv")
@@ -385,9 +402,12 @@ def get_rating(
         if new_rating is not None:
             rating = new_rating
 
-    # 豆瓣：缓存外排队（用最新 title/year，可能来自 MDB List）
-    if _douban_status(rating) != "fresh" and rating is not None:
-        queue_douban_fetch(tmdb_id, media_type, rating.title, rating.year)
+    # 豆瓣：缓存外排队。hint 优先：调用方传的 title 比 DB 里被 MDB List 覆盖的英文版本更利于豆瓣命中
+    if _douban_status(rating) != "fresh":
+        douban_title = title or (rating.title if rating else None)
+        douban_year = year or (rating.year if rating else None)
+        if douban_title:
+            queue_douban_fetch(tmdb_id, media_type, douban_title, douban_year)
 
     return _to_response(rating, tmdb_id=tmdb_id, media_type=media_type)
 
@@ -454,9 +474,10 @@ def get_ratings_batch(
             # MDB List 也用后台获取（首批批量响应会缺，下次轮询补齐）
             _enqueue_mdblist_fetch(tmdb_id, media_type, imdb_id=hint.get('imdb_id'))
 
-        # 豆瓣：用 hint 里的 title/year 或 DB 里现有的
-        title = (rating.title if rating else None) or hint.get('title')
-        year = (rating.year if rating else None) or hint.get('year')
+        # 豆瓣：优先用 hint 里的 title/year（前端展示的本地化标题），DB 兜底
+        # 不能反着来：MDB List 一刷 DB title 就被英文覆盖，再去搜豆瓣中文条目会查不到
+        title = hint.get('title') or (rating.title if rating else None)
+        year = hint.get('year') or (rating.year if rating else None)
         if _douban_status(rating) != "fresh" and title:
             queue_douban_fetch(tmdb_id, media_type, title, year)
 

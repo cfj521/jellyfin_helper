@@ -272,13 +272,19 @@ const load = async () => {
 
 // 取评分：detail 页同步取 MDB List + 异步排队豆瓣，
 // 豆瓣 5s/req 不会立刻有数据，所以 5s/15s 各轮询一次更新页面
+// 把当前显示的本地化 title/year 传过去：MDB List 会覆盖 DB title 成英文，
+// 后端豆瓣 worker 拿那个英文搜中文条目会失败，传 hint 是 P0 修复的关键
 const fetchRating = async () => {
   if (!data.value) return
-  const tmdbId = data.value.tmdb_id
-  const mediaType = data.value.media_type === 'tv' ? 'tv' : 'movie'
-  const imdbId = data.value.imdb_id || null
+  const d = data.value
+  const tmdbId = d.tmdb_id
+  const mediaType = d.media_type === 'tv' ? 'tv' : 'movie'
+  const imdbId = d.imdb_id || null
+  const localTitle = d.title || null
+  const yr = (d.release_date || '').slice(0, 4)
+  const localYear = yr ? parseInt(yr) : null
   try {
-    const res = await ratingsApi.get(tmdbId, mediaType, imdbId)
+    const res = await ratingsApi.get(tmdbId, mediaType, imdbId, localTitle, localYear)
     rating.value = res.data
   } catch (e) {
     console.warn('评分加载失败', e)
@@ -289,7 +295,7 @@ const fetchRating = async () => {
     if (ratingPollTimer) clearTimeout(ratingPollTimer)
     ratingPollTimer = setTimeout(async () => {
       try {
-        const res = await ratingsApi.get(tmdbId, mediaType, imdbId)
+        const res = await ratingsApi.get(tmdbId, mediaType, imdbId, localTitle, localYear)
         rating.value = res.data
       } catch {}
     }, 6000)

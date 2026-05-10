@@ -388,9 +388,16 @@ export const discoverApi = {
 // 评分聚合 API（IMDB / RT / Metacritic / Trakt / Letterboxd / 豆瓣）
 export const ratingsApi = {
   // 单条：缓存外会同步取 MDB List + 异步排队豆瓣
-  get: (tmdb_id, media_type = 'movie', imdb_id = null) =>
+  // title / year 是可选的本地化提示（中文片名比英文更利于豆瓣命中）
+  get: (tmdb_id, media_type = 'movie', imdb_id = null, title = null, year = null) =>
     api.get('/api/ratings', {
-      params: { tmdb_id, media_type, imdb_id: imdb_id || undefined },
+      params: {
+        tmdb_id,
+        media_type,
+        imdb_id: imdb_id || undefined,
+        title: title || undefined,
+        year: year || undefined,
+      },
     }),
 
   // 批量：仅返回缓存命中部分，缺失的项后台异步拉取

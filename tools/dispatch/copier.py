@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -16,6 +17,15 @@ logger = logging.getLogger(__name__)
 
 # 复制缓冲：8MB 在 NVMe→HDD 上速率充足；大缓冲也无明显增益但占内存
 DEFAULT_BUFFER = 8 * 1024 * 1024
+
+# 续传安全阈值：dst.mtime 距今超过这个时间，视为来自不同种子的旧文件，拒绝 append
+# （来自当前种子的同一次复制 mtime 几乎都在 1 小时内；隔 1 小时仍未完成的极少见）
+RESUME_MTIME_GUARD_SECONDS = 3600
+
+
+class CrossTorrentCollisionError(Exception):
+    """目标文件存在但不像是当前种子的续传产物 —— 多半是另一个种子（D7 PROPER/REPACK 类）已经写过同一路径。
+    上层应该把这条 dispatch 标 needs_review，让用户决策（覆盖 / 跳过 / 改名）。"""
 
 
 def copy_file_with_progress(
@@ -31,7 +41,9 @@ def copy_file_with_progress(
 
     resume=True（默认）：
       - 目标已存在且 size 等于源 → 跳过整个复制（视为已完成，0 字节传输）
-      - 目标已存在但 size < 源 size → 从已写位置续传（append + 余下字节）
+      - 目标已存在但 size < 源 size 且 mtime 是新的 → 续传（append + 余下字节）
+      - 目标已存在但 size < 源 size 且 mtime 老于 RESUME_MTIME_GUARD_SECONDS →
+        视为跨种子冲突（D7 PROPER/REPACK），抛 CrossTorrentCollisionError，由上层决策
       - 目标已存在但 size > 源 size 或 mtime 异常 → 删除后从头复制（防文件损坏）
       - 目标不存在 → 从头复制
     """
@@ -45,9 +57,12 @@ def copy_file_with_progress(
 
     if resume and dst.exists():
         try:
-            dst_size = dst.stat().st_size
+            dst_stat = dst.stat()
+            dst_size = dst_stat.st_size
+            dst_mtime = dst_stat.st_mtime
         except OSError:
             dst_size = 0
+            dst_mtime = 0.0
         if dst_size == total:
             # 完整匹配 → 已复制过，跳过整个传输
             logger.info(f"resume: {dst.name} 已存在且 size 一致，跳过复制")
@@ -58,8 +73,18 @@ def copy_file_with_progress(
                     pass
             return 0
         if 0 < dst_size < total:
-            # partial → 续传
-            logger.info(f"resume: {dst.name} 续传，已有 {dst_size}/{total} bytes")
+            # partial → 续传，但要先确认这是当前种子的中断产物，不是别的种子留下的脏数据
+            age = time.time() - dst_mtime
+            if age > RESUME_MTIME_GUARD_SECONDS:
+                # 老文件 → 多半是另一个种子（D7 PROPER/REPACK / 同 TMDB 不同质量）写过这里
+                # 此时 append 会把新种子的内容追加到旧种子文件尾部 → 文件结构损坏
+                # 抛出明确错误让 organizer/pipeline 处理（建议: 备份旧文件到 trash 后重写）
+                raise CrossTorrentCollisionError(
+                    f"目标 {dst} 已存在 ({dst_size}/{total} bytes) 但 mtime 老于 "
+                    f"{int(age/60)} 分钟前 —— 多半是另一个种子的旧文件。"
+                    f"为防 append 损坏文件，已拒绝续传。请人工决策（覆盖/改名/跳过）。"
+                )
+            logger.info(f"resume: {dst.name} 续传，已有 {dst_size}/{total} bytes (age={int(age)}s)")
             skip = dst_size
             open_mode = 'ab'
         else:
