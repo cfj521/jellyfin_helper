@@ -356,6 +356,9 @@ export const discoverApi = {
   // 豆瓣条目页详情（剧情简介+演员+国家等），用户点"简介"时按需调用；30 天缓存
   doubanDetail: (douban_id) =>
     api.get('/api/discover/douban-detail', { params: { douban_id } }),
+  // AniList 单条番剧详情；7 天缓存
+  anilistDetail: (anilist_id) =>
+    api.get('/api/discover/anilist-detail', { params: { anilist_id } }),
   // 通用分类列表（电影/剧集 × Popular/NowPlaying/Upcoming/TopRated/AiringToday/OnTheAir）
   list: (params = {}) => api.get('/api/discover/list', { params }),
   detail: (mediaType, tmdbId, params = {}) =>

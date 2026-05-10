@@ -231,6 +231,42 @@ class DoubanClient:
         if s_el:
             summary = s_el.get_text('\n', strip=True) or None
 
+        # 海报：<a class="nbgnbg"><img src="..."></a> 或 <div id="mainpic"><img>
+        poster_url: Optional[str] = None
+        pic_el = soup.select_one('#mainpic img') or soup.select_one('a.nbgnbg img')
+        if pic_el:
+            poster_url = pic_el.get('src')
+
+        # 标题 / 年份
+        title: Optional[str] = None
+        title_el = soup.select_one('span[property="v:itemreviewed"]') or soup.select_one('h1 span')
+        if title_el:
+            title = title_el.get_text(strip=True)
+        year: Optional[int] = None
+        year_el = soup.select_one('h1 span.year') or soup.select_one('span.year')
+        if year_el:
+            ytext = year_el.get_text(strip=True).strip('()')
+            try:
+                year = int(ytext)
+            except ValueError:
+                year = None
+
+        # 评分 + 票数
+        rating: Optional[float] = None
+        votes: Optional[int] = None
+        rating_el = soup.select_one('strong.rating_num')
+        if rating_el:
+            try:
+                rating = float(rating_el.get_text(strip=True))
+            except (ValueError, TypeError):
+                pass
+        votes_el = soup.select_one('span[property="v:votes"]')
+        if votes_el:
+            try:
+                votes = int(votes_el.get_text(strip=True))
+            except (ValueError, TypeError):
+                pass
+
         # info 区域：<div id="info"> 内有"导演/编剧/主演/类型/制片国家/语言/上映日期/片长/IMDb"
         info_el = soup.select_one('#info')
         info_text = info_el.get_text('\n', strip=True) if info_el else ''
@@ -245,6 +281,7 @@ class DoubanClient:
         release_date = _grab('上映日期') or _grab('首播')
         duration = _grab('片长') or _grab('单集片长')
         imdb_id = _grab('IMDb')
+        director = _grab('导演')
 
         # 演员（最多 10 位）
         cast: List[str] = []
@@ -255,7 +292,13 @@ class DoubanClient:
 
         return {
             'douban_id': douban_id,
+            'title': title,
+            'year': year,
+            'poster_url': poster_url,
+            'rating': rating,
+            'votes': votes,
             'summary': summary,
+            'director': director,
             'cast': cast,
             'countries': [c.strip() for c in re.split(r'[/,，、]', countries)] if countries else [],
             'genres': [g.strip() for g in re.split(r'[/,，、]', genres_raw)] if genres_raw else [],
