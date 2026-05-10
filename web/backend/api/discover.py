@@ -361,14 +361,89 @@ def clear_tmdb_cache():
     return {"ok": True}
 
 
+_TITLE_EN_SCOPE = 'tmdb_title_en'
+_TITLE_EN_TTL = 30 * 24 * 60 * 60  # 30 天
+
+
+@router.get("/title-en")
+def get_english_title(media_type: str, tmdb_id: int):
+    """
+    单条英文标题查询。前端在用户点"搜种子"时调用，避免列表渲染时为每条 30 项各打一次 TMDB。
+    缓存 30 天（标题极少变）；命中缓存毫秒级返回。
+
+    没有 TMDB API Key / 没有英文标题时返回 english_title=None，前端自行兜底。
+    """
+    if media_type not in ('movie', 'tv'):
+        raise HTTPException(status_code=400, detail="media_type 必须是 movie / tv")
+    if not tmdb_id:
+        raise HTTPException(status_code=400, detail="缺少 tmdb_id")
+
+    cache_key = f"{media_type}:{tmdb_id}"
+    cached = _kv_get(_TITLE_EN_SCOPE, cache_key, ttl_seconds=_TITLE_EN_TTL)
+    if isinstance(cached, dict) and 'english_title' in cached:
+        return {"english_title": cached['english_title'], "cached": True}
+
+    if not settings.tmdb_api_key:
+        return {"english_title": None, "cached": False}
+
+    from common.tmdb_client import TMDBClient
+    client = TMDBClient(settings.tmdb_api_key, delay=0.0, language='en-US')
+    en_title = client.get_english_title(media_type, tmdb_id)
+
+    # 即使是 None 也写缓存，避免反复打 TMDB（缺英文翻译的条目存在）
+    _kv_set(_TITLE_EN_SCOPE, cache_key, {"english_title": en_title})
+    return {"english_title": en_title, "cached": False}
+
+
+# TMDB 风格映射缓存（id → 中文名）。/genre/movie/list 与 /genre/tv/list 各拉一次缓存 30 天。
+# TMDB 把 movie 和 tv 分两套 genre id 命名空间，所以按 media_type 各存一份。
+_TMDB_GENRE_SCOPE = 'tmdb_genre_map'
+_TMDB_GENRE_TTL = 30 * 86400
+
+
+def _get_tmdb_genre_map(media_type: str, lang: str) -> Dict[int, str]:
+    """取 TMDB genre id → name 映射，命中缓存就毫秒级。lang 决定返回中文名 / 英文名。"""
+    if media_type not in ('movie', 'tv'):
+        return {}
+    key = f"{media_type}:{lang}"
+    cached = _kv_get(_TMDB_GENRE_SCOPE, key, ttl_seconds=_TMDB_GENRE_TTL)
+    if isinstance(cached, dict) and cached:
+        # JSON 反序列化后键变 str，转回 int
+        try:
+            return {int(k): v for k, v in cached.items()}
+        except (ValueError, TypeError):
+            pass
+    if not settings.tmdb_api_key:
+        return {}
+    try:
+        from common.tmdb_client import TMDBClient
+        client = TMDBClient(settings.tmdb_api_key, delay=0.0, language=lang)
+        data = client._request(f'/genre/{media_type}/list', {'language': lang})
+        if not data:
+            return {}
+        gmap = {int(g['id']): g['name'] for g in (data.get('genres') or []) if g.get('id')}
+        _kv_set(_TMDB_GENRE_SCOPE, key, gmap)
+        return gmap
+    except Exception as e:
+        logger.warning(f"TMDB genre 映射拉取失败 {media_type}: {e}")
+        return {}
+
+
 def _normalize_tmdb(items: List[dict], default_type: Optional[str] = None) -> List[dict]:
     """把 TMDB 多种返回结构统一成一个简化格式给前端用。"""
+    lang = settings.tmdb_language or 'zh-CN'
+    movie_gmap = _get_tmdb_genre_map('movie', lang)
+    tv_gmap = _get_tmdb_genre_map('tv', lang)
+
     out = []
     for it in items:
         mt = it.get('media_type') or default_type or 'movie'
         title = it.get('title') or it.get('name')
         date = it.get('release_date') or it.get('first_air_date')
         poster = it.get('poster_path')
+        # genre_ids 是 TMDB 列表响应里的 id 数组；按 media_type 选对应映射
+        gmap = tv_gmap if mt == 'tv' else movie_gmap
+        genre_names = [gmap[g] for g in (it.get('genre_ids') or []) if g in gmap]
         out.append({
             "tmdb_id": it.get('id'),
             "media_type": mt,
@@ -380,6 +455,7 @@ def _normalize_tmdb(items: List[dict], default_type: Optional[str] = None) -> Li
             "vote_average": it.get('vote_average'),
             "popularity": it.get('popularity'),
             "poster_url": f"https://image.tmdb.org/t/p/w342{poster}" if poster else None,
+            "genres": genre_names,
         })
     return out
 
@@ -620,3 +696,41 @@ def get_douban_lists(
     if items:
         _kv_set(_DOUBAN_SCOPE, cache_key, result)
     return {**result, "cached": False}
+
+
+_DOUBAN_DETAIL_SCOPE = 'douban_detail'
+_DOUBAN_DETAIL_TTL = 30 * 86400  # 30 天：豆瓣条目元信息变化极少
+
+
+@router.get("/douban-detail")
+def get_douban_detail(douban_id: str, refresh: bool = False):
+    """
+    豆瓣条目页元信息（剧情简介 + 演员 + 国家/类型/语言/IMDb 等）。
+    用户在 doulist 列表点"简介"时调用 —— doulist 卡片只能爬到导演/类型/年份，正文要单独爬条目页。
+    缓存 30 天；豆瓣反爬严 → 命中缓存几乎是必须的。
+    """
+    cfg = settings.douban_lists  # 复用 douban 段配置
+    if not cfg.enabled:
+        raise HTTPException(status_code=400, detail="豆瓣模块已关闭")
+    if not douban_id or not str(douban_id).isdigit():
+        raise HTTPException(status_code=400, detail="缺少或非法的 douban_id")
+
+    cache_key = str(douban_id)
+    if not refresh:
+        cached = _strip_cache_meta(_kv_get(_DOUBAN_DETAIL_SCOPE, cache_key, ttl_seconds=_DOUBAN_DETAIL_TTL))
+        if cached is not None:
+            return {**cached, "cached": True}
+
+    from common.douban_client import DoubanClient
+    client = DoubanClient(
+        user_agent=settings.douban_user_agent,
+        delay=settings.douban_request_delay,
+    )
+    detail = client.fetch_subject_summary(str(douban_id))
+    if not detail:
+        raise HTTPException(status_code=404, detail="豆瓣条目页拉取失败（可能反爬或条目不存在）")
+
+    # 拉到正文才写缓存（避免反爬空结果占位）
+    if detail.get('summary'):
+        _kv_set(_DOUBAN_DETAIL_SCOPE, cache_key, detail)
+    return {**detail, "cached": False}

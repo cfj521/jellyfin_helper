@@ -353,10 +353,17 @@ export const discoverApi = {
   anilist: (params = {}) => api.get('/api/discover/anilist', { params }),
   // 豆瓣片单（不带 doulist_id 拿白名单；带了拿条目）
   doubanLists: (params = {}) => api.get('/api/discover/douban-lists', { params }),
+  // 豆瓣条目页详情（剧情简介+演员+国家等），用户点"简介"时按需调用；30 天缓存
+  doubanDetail: (douban_id) =>
+    api.get('/api/discover/douban-detail', { params: { douban_id } }),
   // 通用分类列表（电影/剧集 × Popular/NowPlaying/Upcoming/TopRated/AiringToday/OnTheAir）
   list: (params = {}) => api.get('/api/discover/list', { params }),
   detail: (mediaType, tmdbId, params = {}) =>
     api.get('/api/discover/detail', { params: { media_type: mediaType, tmdb_id: tmdbId, ...params } }),
+  // 单条英文标题查询（搜种子按钮用，避免 TMDB 列表当前语言为非英文时拿到本地化标题去搜种子搜不到）
+  // 30 天缓存；命中后毫秒级返回
+  titleEn: (mediaType, tmdbId) =>
+    api.get('/api/discover/title-en', { params: { media_type: mediaType, tmdb_id: tmdbId } }),
   clearCache: () => api.post('/api/discover/cache/clear'),
   search: (payload) => api.post('/api/resourcesearch/search', payload),
   push: (payload) => api.post('/api/downloadpipeline/download', payload),

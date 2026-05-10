@@ -49,8 +49,8 @@ class AniListItem:
         return self.__dict__.copy()
 
 
-# 列表查询（瘦身版，不含 description / bannerImage / externalLinks 这些大字段）
-# 列表场景只要"封面 + 标题 + 评分 + 集数"四件套，详情页另开请求
+# 列表查询：包含 description（前端"简介"按钮要展示）；继续不拉 bannerImage / externalLinks 减体积
+# 详情页用更完整的 query（暂未引入；想看 banner 等需要再加）
 _LIST_QUERY = """
 query ($page: Int, $perPage: Int, $sort: [MediaSort], $season: MediaSeason, $seasonYear: Int) {
   Page(page: $page, perPage: $perPage) {
@@ -58,6 +58,7 @@ query ($page: Int, $perPage: Int, $sort: [MediaSort], $season: MediaSeason, $sea
       id
       title { romaji english native }
       coverImage { large extraLarge }
+      description(asHtml: false)
       season
       seasonYear
       episodes

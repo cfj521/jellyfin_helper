@@ -182,14 +182,15 @@ anilist:
 # 豆瓣片单：白名单形式，每个 doulist_id 是 douban.com/doulist/<id>/ 的 ID 部分
 # 反爬严：豆瓣对未登录访问触发限速会拉黑半小时；片单内容变化慢（如 Top 250 一周改不了几条）
 # → cache_days 默认 3 天；空结果不写缓存（避免反爬被命中后长期返回空）
+# 失效时打开 douban.com 找新片单 URL 中的 ID 替换即可
 douban_lists:
   enabled: true
   cache_days: 3
   lists:
-    - { name: "豆瓣 Top 250",   doulist_id: "240962",  media_type: "movie" }
-    - { name: "高分华语电影",   doulist_id: "1518184", media_type: "movie" }
-    - { name: "高分日剧",       doulist_id: "1631879", media_type: "tv" }
-    - { name: "高分韩剧",       doulist_id: "1648104", media_type: "tv" }
+    - { name: "豆瓣 Top 250",      doulist_id: "240962",  media_type: "movie" }
+    - { name: "必看高分剧情片",     doulist_id: "1295618", media_type: "movie" }
+    - { name: "高分美剧",          doulist_id: "1462129", media_type: "tv" }
+    - { name: "一生必看的100部电影", doulist_id: "122224",  media_type: "movie" }
 
 # 成人内容配置（默认关闭）
 # enabled=false 时菜单不显示，相关 API 路由也不挂载

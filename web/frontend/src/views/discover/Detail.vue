@@ -305,9 +305,13 @@ const searchTorrents = () => {
     || (d.original_language === 'en' ? d.original_title : null)
     || d.original_title
     || d.title
+  // 附带年份消歧：种子站点 query "Title 2010" 命中率显著高于裸标题
+  // 后端响应不直接提供 year，用 release_date / first_air_date 的前 4 位
+  const yr = (d.release_date || '').slice(0, 4)
+  const q = yr ? `${name} ${yr}` : name
   router.push({
     path: '/resourcesearch',
-    query: { q: name, type: d.media_type === 'tv' ? 'tv' : 'movie' },
+    query: { q, type: d.media_type === 'tv' ? 'tv' : 'movie' },
   })
 }
 
