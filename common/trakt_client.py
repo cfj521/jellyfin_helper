@@ -38,6 +38,7 @@ class TraktItem:
     play_count: Optional[int] # popular 指标
     rating: Optional[float]   # Trakt 用户评分 0-10
     poster_url: Optional[str] # 通过 TMDB 拼（Trakt 不直接给图）
+    genres: List[str]         # extended=full 时返回；前端展示风格标签
 
     def to_dict(self) -> Dict:
         return {
@@ -53,6 +54,7 @@ class TraktItem:
             'play_count': self.play_count,
             'rating': self.rating,
             'poster_url': self.poster_url,
+            'genres': self.genres,
         }
 
 
@@ -181,4 +183,5 @@ class TraktClient:
             play_count=wrapper.get('play_count'),
             rating=inner.get('rating'),
             poster_url=None,    # Trakt 不给图，前端按 tmdb_id 自行从 TMDB 拼
+            genres=list(inner.get('genres') or []),
         )

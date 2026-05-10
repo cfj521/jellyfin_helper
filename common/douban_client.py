@@ -197,6 +197,74 @@ class DoubanClient:
             year=year,
         )
 
+    def fetch_subject_summary(self, douban_id: str) -> Optional[Dict]:
+        """
+        豆瓣条目页爬取：返回剧情简介 + 演员表 + 国家 + 类型等。
+        doulist 卡片 abstract 信息粒度太粗（只有导演/类型/年份），用户点开"简介"时再补这个。
+
+        返回 dict 字段（缺失的为 None）：
+            summary       剧情简介正文
+            cast          主演列表（最多 10 位）
+            countries     国家/地区
+            genres        类型
+            languages     语言
+            release_date  首播日期
+            duration      时长（电影分钟数 / 剧集每集分钟数）
+            imdb_id       IMDb ID（如有）
+        """
+        if not douban_id:
+            return None
+        url = SUBJECT_DETAIL_URL.format(id=douban_id)
+        html = self._get(url)
+        if not html:
+            return None
+        try:
+            soup = BeautifulSoup(html, 'lxml')
+        except Exception:
+            soup = BeautifulSoup(html, 'html.parser')
+
+        # 剧情简介：<span property="v:summary"> 或 <span class="all hidden">
+        summary: Optional[str] = None
+        s_el = soup.select_one('span[property="v:summary"]') or soup.select_one('span.all.hidden')
+        if not s_el:
+            s_el = soup.select_one('#link-report span')
+        if s_el:
+            summary = s_el.get_text('\n', strip=True) or None
+
+        # info 区域：<div id="info"> 内有"导演/编剧/主演/类型/制片国家/语言/上映日期/片长/IMDb"
+        info_el = soup.select_one('#info')
+        info_text = info_el.get_text('\n', strip=True) if info_el else ''
+
+        def _grab(label: str) -> Optional[str]:
+            m = re.search(rf'{label}[:：]\s*([^\n]+)', info_text)
+            return m.group(1).strip() if m else None
+
+        countries = _grab('制片国家/地区') or _grab('制片国家')
+        genres_raw = _grab('类型')
+        languages = _grab('语言')
+        release_date = _grab('上映日期') or _grab('首播')
+        duration = _grab('片长') or _grab('单集片长')
+        imdb_id = _grab('IMDb')
+
+        # 演员（最多 10 位）
+        cast: List[str] = []
+        for a in soup.select('span.actor a.rl, a[rel="v:starring"]')[:10]:
+            n = a.get_text(strip=True)
+            if n and n not in cast:
+                cast.append(n)
+
+        return {
+            'douban_id': douban_id,
+            'summary': summary,
+            'cast': cast,
+            'countries': [c.strip() for c in re.split(r'[/,，、]', countries)] if countries else [],
+            'genres': [g.strip() for g in re.split(r'[/,，、]', genres_raw)] if genres_raw else [],
+            'languages': [l.strip() for l in re.split(r'[/,，、]', languages)] if languages else [],
+            'release_date': release_date,
+            'duration': duration,
+            'imdb_id': imdb_id,
+        }
+
     # ---------- 片单（doulist）爬取 ----------
 
     def fetch_doulist(self, doulist_id: str, start: int = 0, limit: int = 25) -> List[Dict]:

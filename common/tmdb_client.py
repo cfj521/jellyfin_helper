@@ -309,6 +309,29 @@ class TMDBClient:
             logger.error(f"海报下载失败: {url} - {e}")
             return None
 
+    # ---------- 翻译（多语言标题） ----------
+
+    def get_english_title(self, media_type: str, tmdb_id: int) -> Optional[str]:
+        """
+        取条目的英文标题。优先用 /translations[en].data.title/name；
+        如果原始语言就是英文，直接返回 original_title。
+
+        端点：/movie/{id}/translations 或 /tv/{id}/translations
+        响应里 translations 数组每项含 iso_639_1 / data.title / data.name
+        """
+        if media_type not in ('movie', 'tv'):
+            return None
+        if not tmdb_id:
+            return None
+        data = self._request(f'/{media_type}/{tmdb_id}/translations')
+        if not data:
+            return None
+        for t in data.get('translations') or []:
+            if t.get('iso_639_1') == 'en':
+                td = t.get('data') or {}
+                return td.get('title') or td.get('name') or None
+        return None
+
     # ---------- Episode 缩略图 ----------
 
     def get_episode_still_path(

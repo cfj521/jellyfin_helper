@@ -159,6 +159,11 @@
               style="width: 100%; aspect-ratio: 2/3"
             />
             <div v-else class="no-poster">无海报</div>
+            <!-- 媒体类型徽标：左上角，pill 风格 + 类型色，对齐 Trakt 的视觉惯例 -->
+            <div class="media-type-pill" :class="`mt-${item.media_type}`">
+              <span class="mt-icon">{{ mediaTypeIcon(item.media_type) }}</span>
+              <span class="mt-label">{{ mediaTypeLabel(item.media_type) }}</span>
+            </div>
             <div class="rating" v-if="item.rating != null">
               <el-icon><Star /></el-icon>
               {{ item.rating.toFixed(1) }}
@@ -173,15 +178,25 @@
                 <el-icon><Close /></el-icon>
               </button>
               <div class="overview-content">
-                <div class="overview-title">{{ item.title }}</div>
-                <div class="overview-text">{{ item.overview || '暂无简介' }}</div>
+                <div class="overview-text">{{ item.overview || (item._overviewLoading ? '加载中…' : '暂无简介') }}</div>
               </div>
             </div>
           </div>
           <div class="info">
             <div class="title clickable" :title="item.title" @click="openDetail(item)">{{ item.title }}</div>
             <div class="meta">
-              <el-tag size="small">{{ mediaTypeLabel(item.media_type) }}</el-tag>
+              <!-- 风格标签：取前 2 个，太多会换行；类型徽标已在海报左上角 -->
+              <div class="genre-tags" v-if="(item.genres || []).length">
+                <el-tag
+                  v-for="g in item.genres.slice(0, 2)"
+                  :key="g"
+                  size="small"
+                  type="info"
+                  effect="plain"
+                  class="genre-tag"
+                >{{ g }}</el-tag>
+              </div>
+              <span v-else class="meta-placeholder"></span>
               <span class="year">{{ item.year || '' }}</span>
             </div>
             <RatingsBadges
@@ -278,7 +293,17 @@ const mediaTypeLabel = (mt) => {
   if (mt === 'tv') return '剧集'
   if (mt === 'anime') return '番剧'
   if (mt === 'person') return '人物'
+  if (mt === 'adult') return '成人'
   return '电影'
+}
+
+// 海报左上角小徽标用：emoji 简单直观，跟 Trakt 卡片视觉一致；后续要换 SVG 在这里改即可
+const mediaTypeIcon = (mt) => {
+  if (mt === 'tv') return '📺'
+  if (mt === 'anime') return '🎌'
+  if (mt === 'person') return '👤'
+  if (mt === 'adult') return '🔞'
+  return '🎬'
 }
 
 const emptyHint = computed(() => {
@@ -365,6 +390,7 @@ const displayItems = computed(() => {
         media_type: it.media_type,
         original_title: it.original_title,
         original_language: it.original_language,
+        genres: it.genres || [],
         badge: null,
       }
     }
@@ -380,6 +406,7 @@ const displayItems = computed(() => {
         rating: it.rating,
         overview: it.overview,
         media_type: it.media_type,
+        genres: it.genres || [],
         badge: it.watchers != null ? `${it.watchers} 关注` : (it.play_count != null ? `${it.play_count} 次播放` : null),
       }
     }
@@ -393,9 +420,10 @@ const displayItems = computed(() => {
         year: it.season_year,
         poster_url: it.cover_image,
         rating: it.average_score != null ? it.average_score / 10 : null,
-        overview: it.description || (it.genres?.length ? `类型: ${it.genres.join(' / ')}` : ''),
+        overview: it.description || '',
         media_type: 'anime',
         original_title: it.title_native,
+        genres: it.genres || [],
         badge: it.episodes ? `${it.episodes} 集` : (it.format || null),
       }
     }
@@ -404,6 +432,7 @@ const displayItems = computed(() => {
       const proxiedPoster = it.poster_url
         ? `/api/img-proxy?url=${encodeURIComponent(it.poster_url)}`
         : null
+      // 豆瓣 doulist 卡片只爬到导演 / 类型 / 年份；正式简介需用户点开后再 lazy fetch（toggleOverview）
       return {
         _key: `douban-${it.douban_id || idx}-${idx}`,
         douban_id: it.douban_id,
@@ -411,15 +440,13 @@ const displayItems = computed(() => {
         year: it.year,
         poster_url: proxiedPoster,
         rating: it.rating,
-        overview: [
-          it.director ? `导演：${it.director}` : null,
-          it.genres?.length ? `类型：${it.genres.join(' / ')}` : null,
-        ].filter(Boolean).join('\n'),
+        overview: it.director ? `导演：${it.director}` : '',
         media_type: 'movie',
+        genres: it.genres || [],
         badge: it.votes ? `${it.votes} 评价` : null,
       }
     }
-    return { _key: `unknown-${idx}`, title: '未知', media_type: 'movie' }
+    return { _key: `unknown-${idx}`, title: '未知', media_type: 'movie', genres: [] }
   })
 
   // 给每张真卡片一个连续 idx，CSS 用作错峰动画延迟（文字立即出 → 海报一张张冒出）
@@ -440,8 +467,29 @@ const displayItems = computed(() => {
   return real
 })
 
-const toggleOverview = (item) => {
-  overviewVisible[item._key] = !overviewVisible[item._key]
+const toggleOverview = async (item) => {
+  const willOpen = !overviewVisible[item._key]
+  overviewVisible[item._key] = willOpen
+  if (!willOpen) return
+  // 豆瓣条目：列表页爬不到真正的剧情简介（doulist 卡片只有导演/类型/年份），
+  // 用户点开时再去 /api/discover/douban-detail 拉一次（30 天缓存，命中后毫秒级）
+  if (source.value === 'douban' && item.douban_id && !item._overviewFetched) {
+    item._overviewLoading = true
+    try {
+      const r = await discoverApi.doubanDetail(item.douban_id)
+      const summary = r?.data?.summary
+      if (summary) {
+        const head = item.overview || ''
+        // 头部保留导演/类型行，再换行追加正式简介
+        item.overview = head ? `${head}\n\n${summary}` : summary
+      }
+    } catch (e) {
+      console.warn('豆瓣简介拉取失败', e)
+    } finally {
+      item._overviewLoading = false
+      item._overviewFetched = true
+    }
+  }
 }
 const hideOverview = (item) => {
   overviewVisible[item._key] = false
@@ -632,17 +680,39 @@ const loadDoubanLists = async () => {
 }
 
 // ---- 跳转 ----
-const pickSearchName = (item) => {
-  if (source.value === 'anilist') return item.original_title || item.title
+// 优先英文标题：种子站点（PT/海外公网）几乎都用英文标题归档，传中文/日文名搜不到。
+// 顺序：(1) 已注入的 english_title (TMDB 详情页有) → (2) 原语言为英文时的 original_title →
+//       (3) 后端 /title-en 端点（30 天缓存，TMDB translations[en]）→ (4) original_title → (5) title
+const resolveEnglishTitle = async (item) => {
+  if (item.english_title) return item.english_title
   if (item.original_language === 'en' && item.original_title) return item.original_title
+  // AniList: title 多半是 romaji（拉丁字母），可直接当英文使用
+  if (source.value === 'anilist') return item.original_title || item.title
+
+  if (item.tmdb_id && (item.media_type === 'movie' || item.media_type === 'tv')) {
+    try {
+      const r = await discoverApi.titleEn(item.media_type, item.tmdb_id)
+      const en = r?.data?.english_title
+      if (en) {
+        // 缓存到 item 上避免重复查
+        item.english_title = en
+        return en
+      }
+    } catch (e) {
+      console.warn('英文标题查询失败', e)
+    }
+  }
   return item.original_title || item.title
 }
 
-const searchTorrents = (item) => {
+const searchTorrents = async (item) => {
+  let q = await resolveEnglishTitle(item)
+  // 附带年份消歧：种子搜索引擎对 "Title 2010" 这种 query 命中率明显高于裸标题
+  if (item.year) q = `${q} ${item.year}`
   router.push({
     path: '/resourcesearch',
     query: {
-      q: pickSearchName(item),
+      q,
       type: item.media_type === 'tv' ? 'tv' : (item.media_type === 'anime' ? 'tv' : 'movie'),
     },
   })
@@ -1046,6 +1116,41 @@ onBeforeUnmount(() => {
       font-size: 11px;
       letter-spacing: 0.2px;
     }
+
+    // ============ 媒体类型徽标（海报左上角）============
+    // 半透明深色底 + 类型色边框，hover 不会跟海报主色冲突
+    // 不同 media_type 用不同 hue 区分，跟 Trakt 一致：电影偏冷蓝，剧集橙，番剧粉，成人红
+    .media-type-pill {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      line-height: 1.2;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      background: rgba(15, 23, 42, 0.78);
+      color: #fff;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      pointer-events: none;
+      z-index: 1;
+
+      .mt-icon { font-size: 12px; line-height: 1; }
+      .mt-label { font-size: 11px; }
+
+      // 类型色：用边框/侧边色条区分，避免主底色被海报背景吞掉
+      &.mt-movie  { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #60a5fa; }
+      &.mt-tv     { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #f59e0b; }
+      &.mt-anime  { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #ec4899; }
+      &.mt-adult  { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #ef4444; }
+      &.mt-person { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #94a3b8; }
+    }
   }
 
   .info {
@@ -1070,8 +1175,29 @@ onBeforeUnmount(() => {
       justify-content: space-between;
       align-items: center;
       margin-bottom: 8px;
+      min-height: 22px;
+      gap: 6px;
 
-      .year { color: #909399; font-size: 12px; }
+      .genre-tags {
+        display: flex;
+        gap: 4px;
+        flex-wrap: nowrap;
+        overflow: hidden;
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .genre-tag {
+        max-width: 100%;
+        // size=small 默认 22px，跟 .meta min-height 22px 对齐
+        :deep(.el-tag__content) {
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+      }
+      .meta-placeholder {
+        flex: 1 1 auto;
+      }
+      .year { color: #909399; font-size: 12px; flex: 0 0 auto; }
     }
 
     .ratings-row {

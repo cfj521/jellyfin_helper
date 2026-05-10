@@ -130,11 +130,12 @@ class DoubanListsConfig(BaseModel):
     """
     enabled: bool = True
     cache_days: int = 3              # 默认 3 天
-    # 默认列表：豆瓣每日热门 / 高分华语 / 高分日剧等。用户可自定义补充。
+    # 默认列表：豆瓣 Top 250 + 几个常见精选片单。用户可在 config.yaml 改 / 增。
     # 格式：[{name: "中文显示名", doulist_id: "123", media_type: "movie"|"tv"}, ...]
+    # 失效时打开 douban.com 找新片单 URL 中的 ID 替换即可。
     lists: List[Dict] = Field(default_factory=lambda: [
-        {'name': '豆瓣 Top 250', 'doulist_id': '240962',  'media_type': 'movie'},
-        {'name': '高分华语电影', 'doulist_id': '1518184', 'media_type': 'movie'},
-        {'name': '高分日剧',     'doulist_id': '1631879', 'media_type': 'tv'},
-        {'name': '高分韩剧',     'doulist_id': '1648104', 'media_type': 'tv'},
+        {'name': '豆瓣 Top 250',       'doulist_id': '240962',  'media_type': 'movie'},
+        {'name': '必看高分剧情片',     'doulist_id': '1295618', 'media_type': 'movie'},
+        {'name': '高分美剧',           'doulist_id': '1462129', 'media_type': 'tv'},
+        {'name': '一生必看的100部电影', 'doulist_id': '122224',  'media_type': 'movie'},
     ])
