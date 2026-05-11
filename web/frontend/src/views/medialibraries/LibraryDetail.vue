@@ -599,13 +599,8 @@
         </el-table-column>
       </el-table>
 
-      <!-- 无限滚动哨兵：进入视口（含 rootMargin 200px 提前量）→ loadMore -->
-      <div ref="sentinelRef" class="scroll-sentinel">
-        <span v-if="loadingMore" class="muted">
-          <el-icon class="spin"><Loading /></el-icon> 加载更多...
-        </span>
-        <span v-else-if="!hasMore && items.length" class="muted">— 已经到底了 —</span>
-      </div>
+      <!-- 无限滚动哨兵：仅作 getBoundingClientRect 的位置锚点，不显示任何文字 -->
+      <div ref="sentinelRef" class="scroll-sentinel" aria-hidden="true"></div>
 
       <el-empty v-if="!itemsLoading && !items.length" description="暂无内容" />
     </el-card>
@@ -3287,28 +3282,9 @@ onUnmounted(() => {
 
 // 无限滚动哨兵：默认极薄（仅作 IntersectionObserver 触发器），
 // 仅在加载中 / 到底时显示提示文字，避免列表底部出现一段莫名的空白
+// 无限滚动哨兵：仅作位置锚点，不可见
 .scroll-sentinel {
-  min-height: 1px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  // 只有有可见内容（loadingMore / 到底提示）时才撑开
-  &:has(.muted) {
-    min-height: 48px;
-    padding: 12px 0;
-  }
-
-  .muted {
-    color: #94a3b8;
-    font-size: 13px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .spin {
-    animation: spin 1s linear infinite;
-  }
+  height: 1px;
 }
 
 @keyframes spin {
