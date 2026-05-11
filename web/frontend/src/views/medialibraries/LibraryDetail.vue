@@ -2077,24 +2077,32 @@ const updateScrollRow = () => {
     }
     debugInfo.scrollRow = scrolledRows + visibleRows
   } else {
-    // 网格：grid 容器没逐行 DOM，但同一行的卡片 rect.top 相同 → 用 offsetTop 桶聚行
+    // 网格：按第一列卡迭代（CSS Grid 同行卡片 rect.left 相同），每行精确贡献一次计数
+    // 不用 Set 桶聚 —— 之前那版在 loadMore 触发 Vue 重渲染时，新挂载但尚未 CSS Grid 排版的
+    // 卡片 rect 短暂为 {0,0,0,0}，桶 key=0 偶发落进 viewport 区间 → 多算一行 → 来回闪
     const gridEl = document.querySelector('.items-card .grid-view')
     const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    const scrolledRowTops = new Set()  // 完全在 viewport 上方的行
-    const visibleRowTops = new Set()   // 跟 viewport 有重叠的行
-    for (const c of cards) {
-      const rect = c.getBoundingClientRect()
-      // 同一行卡的 rect.top 在亚像素层面可能差 1-2px，按 10px 桶聚合
-      const rowKey = Math.round(rect.top / 10)
-      if (rect.bottom <= viewportTop) {
-        scrolledRowTops.add(rowKey)
-      } else if (rect.top < viewportBottom) {
-        visibleRowTops.add(rowKey)
-      } else {
-        break  // 网格按 DOM 顺序填行 → 后面更靠下，直接 break
+    if (!cards.length) {
+      debugInfo.scrollRow = 0
+    } else {
+      // 找出"已排版的第一列卡"的 left 基准；未排版的卡 rect.height=0，过滤掉
+      let firstColLeft = null
+      for (const c of cards) {
+        const r = c.getBoundingClientRect()
+        if (r.height > 0) { firstColLeft = r.left; break }
       }
+      let scrolled = 0
+      let visible = 0
+      for (const c of cards) {
+        const rect = c.getBoundingClientRect()
+        if (rect.height < 1) continue              // 未排版，跳过
+        if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue  // 非第一列
+        if (rect.bottom <= viewportTop) scrolled++
+        else if (rect.top < viewportBottom) visible++
+        else break
+      }
+      debugInfo.scrollRow = scrolled + visible
     }
-    debugInfo.scrollRow = scrolledRowTops.size + visibleRowTops.size
   }
   writeDebug()
 }
