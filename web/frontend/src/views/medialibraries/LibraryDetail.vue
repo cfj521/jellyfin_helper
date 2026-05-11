@@ -2024,7 +2024,7 @@ const writeDebug = () => {
   debugInfo.enabled = true
   debugInfo.source = `library:${viewMode.value}`
   // 网格视图下行/列才有意义；列表视图固定 1 列
-  const cols = viewMode.value === 'grid' ? _gridColsEstimate() : 1
+  const cols = cardsPerRow()
   const visibleCount = sortedItems.value.length
   debugInfo.cols = cols
   debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visibleCount / cols)) : 0
@@ -2034,14 +2034,6 @@ const writeDebug = () => {
   debugInfo.wanted = wanted.value
 }
 
-// 网格列数：网格 CSS 用 auto-fill minmax(160px,1fr)，按容器宽度估算
-const _gridColsEstimate = () => {
-  const container = document.querySelector('.items-card .grid-view')
-  if (!container) return 0
-  const w = container.clientWidth || 0
-  const cardMin = 160 + 16  // minmax(160px,1fr) + gap
-  return Math.max(1, Math.floor(w / cardMin))
-}
 
 // 当前视口顶部对齐的是第几行（scrollRow），随 scroll 节流更新
 const updateScrollRow = () => {
