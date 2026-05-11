@@ -967,8 +967,8 @@ const expandedSet = ref(new Set())
 // 已懒加载的子节点：{ [parentId]: childrenArray }
 // el-table lazy 模式下 row._children 不可靠（取决于 store 内部），自管一份用于级联选择
 const childrenMap = ref({})
-// 后端单次拉取批量（数据池补给量）；wanted 推进步长见 stepSize()
-const FETCH_BATCH = 80
+// 后端单次拉取批量；wanted 推进步长见 stepSize()；预取阈值 = stepSize × 2 见 prefetchIfNeeded
+const FETCH_BATCH = 30
 const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模型）
 // reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
 let reqSeq = 0
