@@ -216,49 +216,64 @@
       </div>
 
       <!-- 网格视图：电影 / 剧集卡片（只显顶层项；树状子节点在 list 模式下展开） -->
-      <div v-else-if="viewMode === 'grid'" class="grid-view">
+      <div v-else-if="viewMode === 'grid'" ref="gridViewRef" class="grid-view">
+        <!-- 骨架卡片：wanted 推进了但数据池还没补到，先撑出占位行（Trending 同款 shimmer） -->
         <div
-          v-for="row in sortedItems"
+          v-for="row in displayItems"
           :key="row.id"
           class="grid-card"
-          :class="{ 'grid-card--problem': row.health?.level === 'error' }"
-          @click="onGridCardClick(row)"
+          :class="{
+            'grid-card--problem': !row._skeleton && row.health?.level === 'error',
+            'grid-card--skeleton': row._skeleton,
+          }"
+          @click="!row._skeleton && onGridCardClick(row)"
         >
-          <div class="grid-poster-wrap">
-            <!-- 网格视图用 16:9：优先 backdrop（Movie/Series 横版背景图）/ thumb（Episode 剧照）；
-                 没有则用 Primary 海报（2:3）裁剪填充——避免空缺，但视觉上会糊一点 -->
-            <el-image
-              v-if="row.backdrop_url || row.poster_url"
-              :src="row.backdrop_url || row.poster_url"
-              :alt="row.name"
-              fit="cover"
-              lazy
-              class="grid-poster"
-            >
-              <template #error>
-                <div class="grid-placeholder">{{ row.name?.slice(0, 2) || '?' }}</div>
-              </template>
-            </el-image>
-            <div v-else class="grid-placeholder">{{ row.name?.slice(0, 2) || '?' }}</div>
-            <span
-              v-if="row.health?.level && row.health.level !== 'ok'"
-              class="grid-health-dot"
-              :class="`grid-health-dot--${row.health.level}`"
-              :title="(row.health.issues || []).map(i => i.label).join('\n')"
-            />
-          </div>
-          <div class="grid-meta">
-            <div class="grid-title" :title="row.name">{{ row.name }}</div>
-            <div v-if="row.year" class="grid-year">{{ row.year }}</div>
-          </div>
+          <template v-if="row._skeleton">
+            <div class="grid-poster-wrap">
+              <div class="sk-block sk-poster" />
+            </div>
+            <div class="grid-meta">
+              <div class="sk-line sk-title" />
+              <div class="sk-line sk-year" />
+            </div>
+          </template>
+          <template v-else>
+            <div class="grid-poster-wrap">
+              <!-- 网格视图用 16:9：优先 backdrop（Movie/Series 横版背景图）/ thumb（Episode 剧照）；
+                   没有则用 Primary 海报（2:3）裁剪填充——避免空缺，但视觉上会糊一点 -->
+              <el-image
+                v-if="row.backdrop_url || row.poster_url"
+                :src="row.backdrop_url || row.poster_url"
+                :alt="row.name"
+                fit="cover"
+                lazy
+                class="grid-poster"
+              >
+                <template #error>
+                  <div class="grid-placeholder">{{ row.name?.slice(0, 2) || '?' }}</div>
+                </template>
+              </el-image>
+              <div v-else class="grid-placeholder">{{ row.name?.slice(0, 2) || '?' }}</div>
+              <span
+                v-if="row.health?.level && row.health.level !== 'ok'"
+                class="grid-health-dot"
+                :class="`grid-health-dot--${row.health.level}`"
+                :title="(row.health.issues || []).map(i => i.label).join('\n')"
+              />
+            </div>
+            <div class="grid-meta">
+              <div class="grid-title" :title="row.name">{{ row.name }}</div>
+              <div v-if="row.year" class="grid-year">{{ row.year }}</div>
+            </div>
+          </template>
         </div>
-        <el-empty v-if="!sortedItems.length" description="此库还没有内容" />
+        <el-empty v-if="!displayItems.length" description="此库还没有内容" />
       </div>
 
       <el-table
         v-else
         ref="itemsTable"
-        :data="sortedItems"
+        :data="displayItems"
         stripe
         size="small"
         row-key="id"
@@ -933,32 +948,34 @@ const dupTagType = (mt) => ({
   size_only: 'info',
 }[mt] || '')
 
-// 内容（无限滚动累积器）
-// items 是累积数组：首次 loadItems(reset=true) 清空 + 拉首批，loadMore 追加
-// itemsTotal 仍然由后端 /Items?TotalRecordCount 返回，用来显示"已加载 X / 共 Y"
+// 内容（无限滚动 + wanted 累加器，对齐 Trending.vue 的双层模型）
+// items     = 后端拉到的"数据池"（一次拿一批，比 wanted 大或一致）
+// wanted    = 当前"想要展示"的条数（按行累加），displayItems 切片到 wanted
+// itemsTotal = 后端汇报的总条数，工具栏 "已加载 X / 共 Y" 用
 const items = ref([])
 const itemsTotal = ref(0)
+const wanted = ref(0)                   // 从 initialLimit() 起步，每次 loadMore 累加 stepSize() 行
 const itemsLoading = ref(false)         // 首批/重置加载（清空 items 时显示骨架）
-const loadingMore = ref(false)          // 触底追加加载（不清 items）
-const hasMore = ref(true)               // 是否还有下一批
+const loadingMore = ref(false)          // 后台预取加载（不清 items；wanted 不被阻塞）
+const hasMore = ref(true)               // 后端还有下一批 = true
 const itemsTable = ref(null)
 const sentinelRef = ref(null)
+const gridViewRef = ref(null)           // <div.grid-view> 的 DOM ref，用于 cardsPerRow 实测
 const selectedItems = ref([])
 // 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
 const expandedSet = ref(new Set())
 // 已懒加载的子节点：{ [parentId]: childrenArray }
 // el-table lazy 模式下 row._children 不可靠（取决于 store 内部），自管一份用于级联选择
 const childrenMap = ref({})
-// 无限滚动游标 + 批量大小
-//   INITIAL_LIMIT 大一点（100）让首屏能塞满几行（库视图卡片是 16:9 不是海报，密度更高）
-//   BATCH_LIMIT 中等（50）平衡请求频率与单次延迟
-const INITIAL_LIMIT = 100
-const BATCH_LIMIT = 50
+// 后端单次拉取批量（数据池补给量）；wanted 推进步长见 stepSize()
+//   FETCH_BATCH 较大（80）→ 单次请求摊销，池子里至少留够 2 个 wanted 步长缓冲
+const FETCH_BATCH = 80
 const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模型）
 // reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
 let reqSeq = 0
 let observer = null                     // IntersectionObserver
 let skipNextIntersection = false        // 防 observe() 首次 fire 误触发（与 Trending 同款套路）
+let prefetchTimer = null                // 首屏后延迟启动后台预取的 timer，reset 时取消
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
@@ -1096,6 +1113,66 @@ const sortedItems = computed(() => {
     )
   })
   return arr
+})
+
+// ============ wanted / 行步长 / 视口测量（对齐 Trending.vue 同款套路）============
+// 网格卡片宽度（来自 CSS $grid-card-w）+ gap：cardsPerRow = floor((containerW + gap) / (cardW + gap))
+const GRID_CARD_W = 280
+const GRID_CARD_GAP = 18
+const GRID_POSTER_H = 158
+
+// 网格列数：list 模式恒为 1（el-table 单列），grid 用实测容器宽度
+const cardsPerRow = () => {
+  if (viewMode.value !== 'grid') return 1
+  const el = gridViewRef.value
+  // 容器没挂上时按 viewport - sidebar(220) - padding(40) 估
+  const containerW = el ? el.clientWidth : Math.max(0, window.innerWidth - 220 - 40)
+  return Math.max(1, Math.floor((containerW + GRID_CARD_GAP) / (GRID_CARD_W + GRID_CARD_GAP)))
+}
+
+// 每次 IntersectionObserver 触发 loadMore 时 wanted 推进的"行数"对应条数
+//   grid：一行卡片 = cardsPerRow（视觉上一次冒出一行）
+//   list：固定 10 行 —— 表格行高 ~80px，10 行 = ~800px 足以把 sentinel 推出视口避免反复 fire
+const stepSize = () => {
+  return viewMode.value === 'grid' ? cardsPerRow() : 10
+}
+
+// 首批想要展示的条数：viewport 可见行数 + 1 行（让用户略滚一点就触发下一行）
+const initialLimit = () => {
+  let usableH
+  const el = gridViewRef.value || itemsTable.value?.$el
+  if (el) {
+    const top = el.getBoundingClientRect().top
+    usableH = Math.max(300, window.innerHeight - top)
+  } else {
+    usableH = Math.max(300, window.innerHeight - 240)  // header + 工具栏占位估算
+  }
+  const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80  // grid 卡总高 ≈ poster + meta
+  const visibleRows = Math.max(1, Math.ceil(usableH / rowH))
+  return (visibleRows + 1) * cardsPerRow()
+}
+
+// displayItems：sortedItems 切到 wanted，gap 补 grid 骨架；list 模式不在表内插骨架（el-table tree-lazy 不兼容）
+// grid skeletonCount 上限 = perRow × 2（最多两行骨架），避免无限增长
+const displayItems = computed(() => {
+  const w = wanted.value || sortedItems.value.length
+  const sliced = sortedItems.value.slice(0, w)
+  // grid 模式：池子追不上 wanted 时用骨架补到 wanted 行末尾
+  if (viewMode.value === 'grid') {
+    const perRow = cardsPerRow()
+    // 仅在还有更多 / 正在加载 / 池子不够时才显示骨架
+    const fillingPool = items.value.length < w && (loadingMore.value || itemsLoading.value || hasMore.value)
+    if (fillingPool) {
+      const gap = Math.max(0, w - sliced.length)
+      const skeletonCount = Math.min(gap, perRow * 2)
+      const out = sliced.map((r) => ({ ...r, _skeleton: false }))
+      for (let i = 0; i < skeletonCount; i++) {
+        out.push({ id: `__sk__${i}_${Date.now()}`, _skeleton: true })
+      }
+      return out
+    }
+  }
+  return sliced
 })
 
 
@@ -1789,28 +1866,29 @@ const formatCacheAge = (seconds) => {
   return `${Math.floor(seconds / 3600)} 小时`
 }
 
-// 加载首批 / 重置（filter 变了 / 切库 / 强制刷新都走这条）
-// 清空 items 数组 + 重置游标 + 拉 INITIAL_LIMIT 条 + 启动 observer
+// ============ 数据池 + wanted 双层加载模型（对齐 Trending.vue）============
+// reset = 清池 + 重置 wanted = initialLimit() + 拉首批；filter 变 / 切库 / 强刷都走这条
 const loadItems = async () => {
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   const seq = ++reqSeq
   itemsLoading.value = true
   items.value = []
   itemsTotal.value = 0
   nextStartIndex.value = 0
   hasMore.value = true
+  wanted.value = initialLimit()
   // 清掉已展开 / 已加载的子节点缓存（行 id 跟新批不一定一一对应）
   expandedSet.value = new Set()
   childrenMap.value = {}
   selectedItems.value = []
   try {
-    const res = await jellyfinApi.libraryItems(id.value, _buildItemsParams(0, INITIAL_LIMIT))
-    if (seq !== reqSeq) return  // 期间又触发了一次新 load，丢弃
+    const res = await jellyfinApi.libraryItems(id.value, _buildItemsParams(0, FETCH_BATCH))
+    if (seq !== reqSeq) return
     const newItems = res.data.items || []
     items.value = newItems
     itemsTotal.value = res.data.total || 0
     nextStartIndex.value = newItems.length
-    // 后端的 has_more 字段不一定有；按 "本批返回数 < limit" OR "已拉到 total" 判定
-    hasMore.value = newItems.length >= INITIAL_LIMIT && nextStartIndex.value < itemsTotal.value
+    hasMore.value = newItems.length >= FETCH_BATCH && nextStartIndex.value < itemsTotal.value
     _fireBatchEnrichments()
   } catch (e) {
     ElMessage.error('加载内容失败: ' + (e.response?.data?.detail || e.message))
@@ -1818,40 +1896,60 @@ const loadItems = async () => {
   } finally {
     if (seq === reqSeq) {
       itemsLoading.value = false
-      // observer 可能还在观察旧 sentinel；DOM 稳定后重挂一次
-      // 不要在这里主动触发 loadMore —— 让用户实际滚动后再加载（无限滚动的本意）
       await nextTick()
       _observeSentinel()
+      // 首屏 1.5s 后启动后台预取（让首批先稳定渲染；用户切库会取消这个 timer）
+      prefetchTimer = setTimeout(() => {
+        prefetchTimer = null
+        prefetchIfNeeded()
+      }, 1500)
     }
   }
 }
 
-// 触底拉下一批（IntersectionObserver 调）
-// 不清 items，append 到累积数组尾部；防并发：loadingMore 锁
-const loadMore = async () => {
-  if (itemsLoading.value || loadingMore.value || !hasMore.value) return
+// 后台预取：数据池剩余不足 2 个 wanted 步长 → 拉下一批补给；不阻塞 wanted 推进
+// 设计目标：用户滚到末行时，items 池里已经有数据；首批后立即放出，看不到骨架占位时间
+// 自递归：上游一批数量小、用户滚得快 → 一次预取不够时继续预取
+const prefetchIfNeeded = async () => {
+  if (loadingMore.value || !hasMore.value) return
+  if (items.value.length - wanted.value >= stepSize() * 2) return
   const seq = reqSeq
   loadingMore.value = true
-  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
   try {
     const start = nextStartIndex.value
-    const res = await jellyfinApi.libraryItems(id.value, _buildItemsParams(start, BATCH_LIMIT))
-    if (seq !== reqSeq) return  // 期间换了 source/filter，丢弃
+    const res = await jellyfinApi.libraryItems(id.value, _buildItemsParams(start, FETCH_BATCH))
+    if (seq !== reqSeq) return
     const newItems = res.data.items || []
     items.value = [...items.value, ...newItems]
     if (res.data.total != null) itemsTotal.value = res.data.total
     nextStartIndex.value = start + newItems.length
-    hasMore.value = newItems.length >= BATCH_LIMIT && nextStartIndex.value < itemsTotal.value
+    hasMore.value = newItems.length >= FETCH_BATCH && nextStartIndex.value < itemsTotal.value
     _fireBatchEnrichments()
   } catch (e) {
-    console.warn('继续加载失败:', e)
+    console.warn('后台预取失败:', e)
     hasMore.value = false
   } finally {
-    if (seq === reqSeq) {
-      loadingMore.value = false
-      await nextTick()
-      _observeSentinel()  // 重新挂观察（observer 必 fire 首次状态，skipNextIntersection 跳过它）
-    }
+    loadingMore.value = false  // 强制重置（seq 守卫只防污染，标志位归位无论如何）
+  }
+  // 仍然池子不足 → 继续预取
+  if (seq === reqSeq && hasMore.value && items.value.length - wanted.value < stepSize() * 2) {
+    prefetchIfNeeded()
+  }
+}
+
+// 触底（IntersectionObserver 调）：wanted += stepSize；池子告急时后台预取（不 await）
+// 关键：wanted 推进永远立即，fetch 在后台跑；用户看到的是"滚到底立即一行新卡片，海报/文字陆续到位"
+const loadMore = async () => {
+  if (itemsLoading.value || !hasMore.value && items.value.length <= wanted.value) return
+  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
+  try {
+    // 严格一行：wanted 累加 stepSize（grid = cardsPerRow，list = 10）
+    wanted.value += stepSize()
+    // 池子够用就什么都不做；不够就后台预取（不 await）
+    prefetchIfNeeded()
+  } finally {
+    await nextTick()
+    _observeSentinel()  // 重新挂观察；skipNextIntersection 跳过 observe() 的首次 fire
   }
 }
 
@@ -1912,11 +2010,10 @@ const writeDebug = () => {
   const visibleCount = sortedItems.value.length
   debugInfo.cols = cols
   debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visibleCount / cols)) : 0
-  // items = 当前已加载到本地的条数（累积器大小）
-  // wanted 在 Trending 是逐行累加器；库视图没有"逐行展示"概念，跟 items 同步增长即可
-  // （库总数已在工具栏 "已加载 X / 共 Y" 处显示，这里不重复）
+  // items = 数据池大小（后端拉到本地的条数）
+  // wanted = 当前展示目标条数（loadMore 一步加 stepSize 行；items >= wanted 时池里足够）
   debugInfo.items = items.value.length
-  debugInfo.wanted = items.value.length
+  debugInfo.wanted = wanted.value
 }
 
 // 网格列数：网格 CSS 用 auto-fill minmax(160px,1fr)，按容器宽度估算
@@ -2326,8 +2423,8 @@ watch(() => id.value, async (newId) => {
   writeDebug()
 })
 
-// items 数量变化（loadItems / loadMore） / 视图模式切换 → 刷新 debug
-watch([() => items.value.length, viewMode], () => writeDebug())
+// items 数量 / wanted / 视图模式变化 → 刷新 debug
+watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 onUnmounted(() => {
   stopSubtitlePoll()
@@ -2335,6 +2432,7 @@ onUnmounted(() => {
     observer.disconnect()
     observer = null
   }
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
   // 离开本页时关掉侧边栏的 debug 显示
@@ -2932,6 +3030,36 @@ onUnmounted(() => {
       transform: translateY(-2px);
       box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
     }
+
+    // 骨架卡片：wanted 推进、数据池还没补到时撑出占位行；Trending 同款 shimmer
+    &.grid-card--skeleton {
+      pointer-events: none;
+      cursor: default;
+      &:hover { transform: none; box-shadow: none; }
+
+      .sk-block, .sk-line {
+        background: linear-gradient(90deg, #eef2f6 0%, #f7f9fb 50%, #eef2f6 100%);
+        background-size: 800px 100%;
+        animation: shimmer 1.4s linear infinite;
+        border-radius: 3px;
+      }
+      .sk-poster {
+        width: 100%;
+        height: $grid-poster-h;
+        border-radius: 0;
+      }
+      .grid-meta {
+        padding: 8px 10px;
+        .sk-title { height: 16px; width: 78%; margin-bottom: 6px; }
+        .sk-year  { height: 12px; width: 38%; }
+      }
+    }
+  }
+
+  // shimmer 动画：跟 Trending.vue 完全一致（反光带从左滑到右）
+  @keyframes shimmer {
+    0%   { background-position: -800px 0; }
+    100% { background-position:  800px 0; }
   }
   .grid-poster-wrap {
     position: relative;
