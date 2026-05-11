@@ -2077,18 +2077,24 @@ const updateScrollRow = () => {
     }
     debugInfo.scrollRow = scrolledRows + visibleRows
   } else {
-    // 网格：grid 是单个容器，没法逐行 DOM 元素；用第二张卡的高度做行高估算
+    // 网格：grid 容器没逐行 DOM，但同一行的卡片 rect.top 相同 → 用 offsetTop 桶聚行
     const gridEl = document.querySelector('.items-card .grid-view')
     const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    const sample = cards[1] || cards[0]
-    const rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
-    const viewportH = scrollerRect.height
-    const offset = gridEl
-      ? Math.max(0, scrollerRect.top - gridEl.getBoundingClientRect().top)
-      : scroller.scrollTop
-    const scrolledRows = Math.floor(offset / rowH)
-    const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
-    debugInfo.scrollRow = scrolledRows + visibleRows
+    const scrolledRowTops = new Set()  // 完全在 viewport 上方的行
+    const visibleRowTops = new Set()   // 跟 viewport 有重叠的行
+    for (const c of cards) {
+      const rect = c.getBoundingClientRect()
+      // 同一行卡的 rect.top 在亚像素层面可能差 1-2px，按 10px 桶聚合
+      const rowKey = Math.round(rect.top / 10)
+      if (rect.bottom <= viewportTop) {
+        scrolledRowTops.add(rowKey)
+      } else if (rect.top < viewportBottom) {
+        visibleRowTops.add(rowKey)
+      } else {
+        break  // 网格按 DOM 顺序填行 → 后面更靠下，直接 break
+      }
+    }
+    debugInfo.scrollRow = scrolledRowTops.size + visibleRowTops.size
   }
   writeDebug()
 }

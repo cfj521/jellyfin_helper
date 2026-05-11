@@ -712,17 +712,23 @@ const updateScrollRow = () => {
     }
     debugInfo.scrollRow = scrolledRows + visibleRows
   } else {
+    // 详见 LibraryDetail 同名块：按 rect.top 桶聚行
     const gridEl = document.querySelector('.adult-lib-view .grid-view')
     const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    const sample = cards[1] || cards[0]
-    const rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
-    const viewportH = scrollerRect.height
-    const offset = gridEl
-      ? Math.max(0, scrollerRect.top - gridEl.getBoundingClientRect().top)
-      : scroller.scrollTop
-    const scrolledRows = Math.floor(offset / rowH)
-    const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
-    debugInfo.scrollRow = scrolledRows + visibleRows
+    const scrolledRowTops = new Set()
+    const visibleRowTops = new Set()
+    for (const c of cards) {
+      const rect = c.getBoundingClientRect()
+      const rowKey = Math.round(rect.top / 10)
+      if (rect.bottom <= viewportTop) {
+        scrolledRowTops.add(rowKey)
+      } else if (rect.top < viewportBottom) {
+        visibleRowTops.add(rowKey)
+      } else {
+        break
+      }
+    }
+    debugInfo.scrollRow = scrolledRowTops.size + visibleRowTops.size
   }
   writeDebug()
 }
