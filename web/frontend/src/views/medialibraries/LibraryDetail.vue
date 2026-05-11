@@ -2036,7 +2036,7 @@ const writeDebug = () => {
 
 
 // 用户当前已经看到第几行 = 已滚过的行 + 当前视口内可见的行
-// 滚动容器是 .items-card .el-card__body（CSS overflow:auto），用它的 clientHeight 算视口
+// rowH 实测：从 DOM 第一个 grid-card / 表格行取真实高度，避免硬编码偏差累积
 const updateScrollRow = () => {
   const el = viewMode.value === 'grid'
     ? document.querySelector('.items-card .grid-view')
@@ -2045,12 +2045,21 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
+  // 真正的滚动容器 → 视口高度
   const scroller = document.querySelector('.items-card > .el-card__body')
   const viewportH = scroller ? scroller.clientHeight : window.innerHeight
+  // 实测行高：grid 取第一张卡 offsetHeight + gap；list 取第一行
+  let rowH
+  if (viewMode.value === 'grid') {
+    const firstCard = el.querySelector('.grid-card')
+    rowH = firstCard ? firstCard.offsetHeight + GRID_CARD_GAP : 240
+  } else {
+    const firstRow = el.querySelector('tr')
+    rowH = firstRow ? firstRow.offsetHeight : 80
+  }
+  if (rowH < 1) rowH = viewMode.value === 'grid' ? 240 : 80
   const rect = el.getBoundingClientRect()
   const offset = Math.max(0, -rect.top)
-  // grid 行高靠 grid-card 高度（估 240px 含 meta + gap）；list 行高约 80px
-  const rowH = viewMode.value === 'grid' ? 240 : 80
   const scrolledRows = Math.floor(offset / rowH)
   const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
   debugInfo.scrollRow = scrolledRows + visibleRows

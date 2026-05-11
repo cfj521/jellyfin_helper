@@ -782,19 +782,18 @@ const onWindowResize = () => {
 }
 
 // DEBUG: 计算"用户当前已经看到第几行" = 已滚过的行 + 当前视口内可见的行
-// 之前只算滚过的行（首屏 scrollRow=1），用户的直觉是"viewport 里这 4 行也算我看过了" → 改为加上
+// rowH 实测：取第一张 poster-card offsetHeight + col gutter，避免 cardHeightPx() 公式估算误差累积
 const updateScrollRow = () => {
   const gridEl = getGridEl()
   if (!gridEl) return
   const top = gridEl.getBoundingClientRect().top
-  const ch = cardHeightPx()
-  // window 视口顶端在 grid 内的相对位置 = -top（top<=0 时已往上滚了）
+  // 实测一张 poster-card 高度（poster + meta + actions）；找不到时退回公式估算
+  const firstCard = gridEl.querySelector('.poster-card')
+  const ch = firstCard ? (firstCard.offsetHeight + 16) : cardHeightPx()  // 16 = el-row gutter
   const offsetIntoGrid = Math.max(0, -top)
   const scrolledRows = Math.floor(offsetIntoGrid / ch)
-  // 视口里 currently 可见的行数（向上取整：半行也算"看到了"）
   const visibleRows = Math.max(1, Math.ceil(window.innerHeight / ch))
   debugInfo.scrollRow = scrolledRows + visibleRows
-  // scroll/resize 顺手刷新其它字段（cols/items/wanted 也可能变）
   writeDebug()
 }
 
