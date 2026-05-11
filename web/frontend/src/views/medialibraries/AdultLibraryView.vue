@@ -712,23 +712,29 @@ const updateScrollRow = () => {
     }
     debugInfo.scrollRow = scrolledRows + visibleRows
   } else {
-    // 详见 LibraryDetail 同名块：按 rect.top 桶聚行
+    // 详见 LibraryDetail 同名块：按第一列卡迭代，过滤未排版的卡
     const gridEl = document.querySelector('.adult-lib-view .grid-view')
     const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    const scrolledRowTops = new Set()
-    const visibleRowTops = new Set()
-    for (const c of cards) {
-      const rect = c.getBoundingClientRect()
-      const rowKey = Math.round(rect.top / 10)
-      if (rect.bottom <= viewportTop) {
-        scrolledRowTops.add(rowKey)
-      } else if (rect.top < viewportBottom) {
-        visibleRowTops.add(rowKey)
-      } else {
-        break
+    if (!cards.length) {
+      debugInfo.scrollRow = 0
+    } else {
+      let firstColLeft = null
+      for (const c of cards) {
+        const r = c.getBoundingClientRect()
+        if (r.height > 0) { firstColLeft = r.left; break }
       }
+      let scrolled = 0
+      let visible = 0
+      for (const c of cards) {
+        const rect = c.getBoundingClientRect()
+        if (rect.height < 1) continue
+        if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
+        if (rect.bottom <= viewportTop) scrolled++
+        else if (rect.top < viewportBottom) visible++
+        else break
+      }
+      debugInfo.scrollRow = scrolled + visible
     }
-    debugInfo.scrollRow = scrolledRowTops.size + visibleRowTops.size
   }
   writeDebug()
 }
