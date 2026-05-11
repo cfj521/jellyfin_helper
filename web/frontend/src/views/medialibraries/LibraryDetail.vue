@@ -959,7 +959,7 @@ const itemsLoading = ref(false)         // 首批/重置加载（清空 items �
 const loadingMore = ref(false)          // 后台预取加载（不清 items；wanted 不被阻塞）
 const hasMore = ref(true)               // 后端还有下一批 = true
 const itemsTable = ref(null)
-const sentinelRef = ref(null)           // IntersectionObserver 观察元素
+const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示行（仅视觉，不再做 IO 观察）
 const gridViewRef = ref(null)           // <div.grid-view> 的 DOM ref，用于 cardsPerRow 实测
 const selectedItems = ref([])
 // 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
@@ -968,15 +968,18 @@ const expandedSet = ref(new Set())
 // el-table lazy 模式下 row._children 不可靠（取决于 store 内部），自管一份用于级联选择
 const childrenMap = ref({})
 // 后端单次拉取批量（数据池补给量）；wanted 推进步长见 stepSize()
-//   FETCH_BATCH 较大（80）→ 单次请求摊销，池子里至少留够 2 个 wanted 步长缓冲
 const FETCH_BATCH = 80
 const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模型）
 // reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
 let reqSeq = 0
-let observer = null                     // IntersectionObserver
-let skipNextIntersection = false        // 防 observe() 首次 fire 误触发（Trending 同款套路）
 let prefetchTimer = null                // 首屏后延迟启动后台预取的 timer，reset 时取消
-const ROOT_MARGIN_PX = 200              // rootMargin '200px 0px' —— Trending 同款，pre-fetch 200px 提前量
+// 滚动监听：直接挂在 .items-card > .el-card__body（真正的滚动容器，CSS overflow:auto）
+// 不用 IntersectionObserver —— root 设了 el-card__body 也调不通（多次实战验证），
+// 改为最朴素的 scroll 事件 + scrollHeight/scrollTop/clientHeight 数学判定，最稳
+let scrollContainer = null
+let _scrollAttached = false
+let _loadMoreFiredAt = 0                // 节流：300ms 内不重复触发
+const SCROLL_TRIGGER_PX = 400           // 距底部 ≤ 400px 触发 loadMore
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
@@ -1138,22 +1141,13 @@ const stepSize = () => {
   return viewMode.value === 'grid' ? cardsPerRow() : 10
 }
 
-// 首批想要展示的条数。关键约束：
-//   content 高度必须 > usableH + ROOT_MARGIN_PX + 余量
-// 否则 sentinel 一开始就处于 IO 的 rootMargin 虚拟视口内，首次 observe fire 被
-// skipNextIntersection 吞掉后，state 不变化就再也不触发 loadMore → 滚不动。
-//
-// usableH = 真正的滚动容器 clientHeight，不是 window.innerHeight：
-// 库视图的滚动发生在 .items-card .el-card__body 内（CSS overflow:auto），
-// 用 window 高度去算会偏大很多。
+// 首批展示条数：内容塞满滚动容器再加一行余量。usableH = 滚动容器 clientHeight。
 const initialLimit = () => {
-  const root = _getScrollRoot()
+  const root = _getScrollContainer()
   const usableH = root ? root.clientHeight : Math.max(300, window.innerHeight - 240)
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
-  const SAFETY = 40
-  const minContentH = Math.max(300, usableH) + ROOT_MARGIN_PX + SAFETY
-  const rowsNeeded = Math.max(1, Math.ceil(minContentH / rowH))
-  return rowsNeeded * cardsPerRow()
+  const visibleRows = Math.max(1, Math.ceil(Math.max(300, usableH) / rowH))
+  return (visibleRows + 1) * cardsPerRow()
 }
 
 // displayItems：sortedItems 切到 wanted，gap 补 grid 骨架；list 模式不在表内插骨架（el-table tree-lazy 不兼容）
@@ -1901,7 +1895,7 @@ const loadItems = async () => {
     if (seq === reqSeq) {
       itemsLoading.value = false
       await nextTick()
-      _observeSentinel()
+      _attachScrollListener()  // DOM 稳定后挂滚动监听（v-if 切库可能重建容器）
       // 首屏 1.5s 后启动后台预取（让首批先稳定渲染；用户切库会取消这个 timer）
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -1941,20 +1935,12 @@ const prefetchIfNeeded = async () => {
   }
 }
 
-// 触底（IntersectionObserver 调）：wanted += stepSize；池子告急时后台预取（不 await）
-// 关键：wanted 推进永远立即，fetch 在后台跑；用户看到的是"滚到底立即一行新卡片，海报/文字陆续到位"
-// 跟 Trending.vue loadMore 完全一致的套路：unobserve → 改 wanted → 重新 observe（skip 首发）
-const loadMore = async () => {
+// 触底（scroll 监听调）：wanted += stepSize；池子告急时后台预取（不 await）
+const loadMore = () => {
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
-  try {
-    wanted.value += stepSize()
-    prefetchIfNeeded()
-  } finally {
-    await nextTick()
-    _observeSentinel()
-  }
+  wanted.value += stepSize()
+  prefetchIfNeeded()
 }
 
 // 公共 params 构造：filter / search 共用
@@ -1982,34 +1968,44 @@ const _fireBatchEnrichments = () => {
   fetchSubtitleLangsForItems()
 }
 
-// ============ IntersectionObserver 无限滚动 ============
-// !!! 关键 !!! 库视图的真正滚动容器是 .items-card .el-card__body（CSS overflow:auto），
-// 不是 window 也不是 .app-main。IO 默认 root=null 用 window viewport，sentinel 相对 window
-// 永远不动（el-card 在视口里位置固定，内部滚动不改变 sentinel 的 window 坐标），
-// 所以 IO 永远收不到事件 → loadMore 永远不触发 = "滚不了"。
-// 修复：把 root 指向 el-card__body 本身，让 IO 监听容器内的滚动。
-// Trending 没踩这个坑是因为它直接在 .app-main 里展开，没有 internal scroll 容器。
-const _getScrollRoot = () => document.querySelector('.items-card > .el-card__body')
+// ============ 直接监听滚动容器的 scroll 事件 ============
+// 库视图的真正滚动容器是 .items-card > .el-card__body（CSS overflow:auto），
+// 不是 window 也不是 .app-main。原本的 IntersectionObserver root 路径多次验证
+// 调不通（事件不触发 / 触发位置不对），直接读 scrollTop 做距底部判定最稳。
+const _getScrollContainer = () => document.querySelector('.items-card > .el-card__body')
 
-const _setupObserver = () => {
-  if (observer) observer.disconnect()
-  const root = _getScrollRoot()
-  observer = new IntersectionObserver((entries) => {
-    if (skipNextIntersection) {
-      skipNextIntersection = false
-      return
-    }
-    for (const e of entries) {
-      if (e.isIntersecting) loadMore()
-    }
-  }, { root, rootMargin: `${ROOT_MARGIN_PX}px 0px` })
-  _observeSentinel()
+const _attachScrollListener = () => {
+  const el = _getScrollContainer()
+  if (!el) return
+  if (scrollContainer === el && _scrollAttached) return
+  // 旧容器换了（v-if / 切库导致 DOM 重建）→ 解绑旧的
+  if (scrollContainer && _scrollAttached) {
+    scrollContainer.removeEventListener('scroll', _onContainerScroll)
+  }
+  scrollContainer = el
+  scrollContainer.addEventListener('scroll', _onContainerScroll, { passive: true })
+  _scrollAttached = true
 }
 
-const _observeSentinel = () => {
-  if (!observer || !sentinelRef.value) return
-  skipNextIntersection = true  // observe() 立刻 fire 一次当前状态，跳过它
-  observer.observe(sentinelRef.value)
+const _detachScrollListener = () => {
+  if (scrollContainer && _scrollAttached) {
+    scrollContainer.removeEventListener('scroll', _onContainerScroll)
+  }
+  scrollContainer = null
+  _scrollAttached = false
+}
+
+const _onContainerScroll = () => {
+  if (!scrollContainer) return
+  if (itemsLoading.value) return
+  if (!hasMore.value && items.value.length <= wanted.value) return
+  const remaining = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight
+  if (remaining > SCROLL_TRIGGER_PX) return
+  // 节流：每 300ms 最多 fire 一次（避免一直贴底时每帧都 fire）
+  const now = Date.now()
+  if (now - _loadMoreFiredAt < 300) return
+  _loadMoreFiredAt = now
+  loadMore()
 }
 
 // ============ DEBUG（事后删）：写共享 debugInfo，由 App.vue 侧边栏读取展示 ============
@@ -2418,19 +2414,19 @@ const formatSize = (bytes) => {
 onMounted(async () => {
   loadStatsPrefs(id.value)
   await loadAll()
-  // DOM 稳定后挂 observer + scroll 监听（scroll 只为 debug scrollRow，IO 负责触发）
+  // DOM 稳定后挂滚动监听 + window-scroll（后者仅为 debug scrollRow）
   await nextTick()
-  _setupObserver()
+  _attachScrollListener()
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
-// 切换不同库（router 复用同组件）：observer 也要重挂（sentinel ref 可能仍是同一个，但保险起见）
+// 切换不同库（router 复用同组件）：el-card__body 可能仍是同一个 DOM 节点，但保险起见重挂
 watch(() => id.value, async (newId) => {
   loadStatsPrefs(newId)
   await nextTick()
-  _setupObserver()
+  _attachScrollListener()
   writeDebug()
 })
 
@@ -2439,10 +2435,7 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 onUnmounted(() => {
   stopSubtitlePoll()
-  if (observer) {
-    observer.disconnect()
-    observer = null
-  }
+  _detachScrollListener()
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
