@@ -678,7 +678,7 @@ const writeDebug = () => {
 }
 
 
-// 用户当前已经看到第几行 = 已滚过的行 + 视口内可见的行（详见 LibraryDetail 同名注释）
+// 用户当前已经看到第几行 = 已滚过的行 + 视口内可见的行；rowH 实测 DOM 避免硬编码偏差
 const updateScrollRow = () => {
   const el = viewMode.value === 'grid'
     ? document.querySelector('.adult-lib-view .grid-view')
@@ -689,9 +689,17 @@ const updateScrollRow = () => {
   }
   const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
   const viewportH = scroller ? scroller.clientHeight : window.innerHeight
+  let rowH
+  if (viewMode.value === 'grid') {
+    const firstCard = el.querySelector('.grid-card')
+    rowH = firstCard ? firstCard.offsetHeight + GRID_CARD_GAP : 240
+  } else {
+    const firstRow = el.querySelector('tr')
+    rowH = firstRow ? firstRow.offsetHeight : 80
+  }
+  if (rowH < 1) rowH = viewMode.value === 'grid' ? 240 : 80
   const rect = el.getBoundingClientRect()
   const offset = Math.max(0, -rect.top)
-  const rowH = viewMode.value === 'grid' ? 240 : 80
   const scrolledRows = Math.floor(offset / rowH)
   const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
   debugInfo.scrollRow = scrolledRows + visibleRows
