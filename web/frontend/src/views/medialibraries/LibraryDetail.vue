@@ -1946,10 +1946,9 @@ const prefetchIfNeeded = async (force = false) => {
   }
 }
 
-// 触底（scroll 监听调）：wanted = max(wanted, 滚动位置目标值)
-// 旧逻辑 `wanted += stepSize` 在快速滚动时每帧都被触发，wanted 远超当前视口需要 → 错。
-// 新逻辑：按"已滚过行数 + 视口行数 + 1 行缓冲"算 target，wanted 只增不减；
-// 即使一次滚动事件触发多次 loadMore，wanted 也只长到当前应该的位置为止。
+// 触底（scroll 监听调）：wanted = max(wanted, 当前 scrollRow + 1 行缓冲) × 列数
+// 单一来源原则：_currentScrollRow() 跟 debug 面板用同一份实测逻辑（rect-walk），
+// 不再做坐标系不一致的"window viewport vs scroller scrollTop"那种除法估算
 const loadMore = () => {
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
@@ -1957,19 +1956,66 @@ const loadMore = () => {
   if (target > wanted.value) {
     wanted.value = target
     prefetchIfNeeded()
+  } else {
+    // target 没增长，但 items 池剩余可能不足 stepSize×2 → 也要给 prefetch 一次机会
+    prefetchIfNeeded()
   }
 }
 
+// 用 rect-walk 实测的"已滚过 + 可见"总行数。与 updateScrollRow 完全一致；
+// 把它单独抽出来给 _computeWantedFromScroll 复用
+const _currentScrollRow = () => {
+  const scroller = document.querySelector('.items-card > .el-card__body')
+  if (!scroller) return 0
+  const scrollerRect = scroller.getBoundingClientRect()
+  let viewportTop = scrollerRect.top
+  if (viewMode.value === 'list') {
+    const header = document.querySelector('.items-card .el-table__header-wrapper')
+    if (header) viewportTop += header.offsetHeight
+  }
+  const viewportBottom = scrollerRect.bottom
+
+  let total = 0
+  if (viewMode.value === 'list') {
+    const bodyEl = document.querySelector('.items-card .el-table__body')
+    const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
+    let sawVisible = false
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect()
+      if (rect.bottom <= viewportTop) {
+        if (!sawVisible) total++
+      } else if (rect.top < viewportBottom) {
+        sawVisible = true
+        total++
+      } else {
+        break
+      }
+    }
+  } else {
+    const gridEl = document.querySelector('.items-card .grid-view')
+    const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
+    if (!cards.length) return 0
+    let firstColLeft = null
+    for (const c of cards) {
+      const r = c.getBoundingClientRect()
+      if (r.height > 0) { firstColLeft = r.left; break }
+    }
+    for (const c of cards) {
+      const rect = c.getBoundingClientRect()
+      if (rect.height < 1) continue
+      if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
+      if (rect.bottom <= viewportTop) total++
+      else if (rect.top < viewportBottom) total++
+      else break
+    }
+  }
+  return total
+}
+
 const _computeWantedFromScroll = () => {
-  const el = gridViewRef.value || itemsTable.value?.$el
-  if (!el) return wanted.value + stepSize()  // fallback：DOM 还没就绪时退回累加
-  const rect = el.getBoundingClientRect()
-  const scrolledPast = Math.max(0, -rect.top)
-  const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 80) : 80
-  const scrolledRows = Math.floor(scrolledPast / rowH)
-  const viewportRows = Math.ceil(window.innerHeight / rowH)
-  // 视口行 + 1 行缓冲（让用户略滚一点就能看到下一行）
-  return (scrolledRows + viewportRows + 1) * cardsPerRow()
+  const row = _currentScrollRow()
+  // 用户当前看到第 row 行 → wanted 至少 row+1 行（多一行让滚一点就能看到下一行）
+  return Math.max(1, row + 1) * cardsPerRow()
 }
 
 // 公共 params 构造：filter / search 共用
@@ -2039,71 +2085,9 @@ const writeDebug = () => {
 // offset 用 (scrollerRect.top - elRect.top) —— 两个 boundingClientRect 都在 window 坐标系，
 // 相减消掉了滚动容器自身的 window 偏移，得到的是"基准元素的顶被推出滚动容器顶部多少 px"，
 // 跟 viewportH = scroller.clientHeight 同坐标系
+// 写 debug 面板的 scrollRow。实测逻辑跟 _currentScrollRow 共享，避免两边算法漂移
 const updateScrollRow = () => {
-  const scroller = document.querySelector('.items-card > .el-card__body')
-  if (!scroller) {
-    debugInfo.scrollRow = 0
-    return
-  }
-  const scrollerRect = scroller.getBoundingClientRect()
-  // header-wrapper（list 模式）不算"可放数据行"的区域：把视口顶部基准下移它的高度
-  let viewportTop = scrollerRect.top
-  if (viewMode.value === 'list') {
-    const header = document.querySelector('.items-card .el-table__header-wrapper')
-    if (header) viewportTop += header.offsetHeight
-  }
-  const viewportBottom = scrollerRect.bottom
-
-  if (viewMode.value === 'list') {
-    // 列表：直接遍历每个 tr 判定其与 viewport 的关系，比除法估算精确
-    const bodyEl = document.querySelector('.items-card .el-table__body')
-    const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
-    let scrolledRows = 0       // 完全在 viewport 上方（已滚过）
-    let visibleRows = 0        // 跟 viewport 有任意重叠
-    let sawVisible = false
-    for (const r of rows) {
-      const rect = r.getBoundingClientRect()
-      if (rect.bottom <= viewportTop) {
-        // 完全在上方
-        if (!sawVisible) scrolledRows++
-      } else if (rect.top >= viewportBottom) {
-        // 完全在下方 → 后面的也都在下方，break
-        break
-      } else {
-        // 有重叠 → 可见
-        sawVisible = true
-        visibleRows++
-      }
-    }
-    debugInfo.scrollRow = scrolledRows + visibleRows
-  } else {
-    // 网格：按第一列卡迭代（CSS Grid 同行卡片 rect.left 相同），每行精确贡献一次计数
-    // 不用 Set 桶聚 —— 之前那版在 loadMore 触发 Vue 重渲染时，新挂载但尚未 CSS Grid 排版的
-    // 卡片 rect 短暂为 {0,0,0,0}，桶 key=0 偶发落进 viewport 区间 → 多算一行 → 来回闪
-    const gridEl = document.querySelector('.items-card .grid-view')
-    const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    if (!cards.length) {
-      debugInfo.scrollRow = 0
-    } else {
-      // 找出"已排版的第一列卡"的 left 基准；未排版的卡 rect.height=0，过滤掉
-      let firstColLeft = null
-      for (const c of cards) {
-        const r = c.getBoundingClientRect()
-        if (r.height > 0) { firstColLeft = r.left; break }
-      }
-      let scrolled = 0
-      let visible = 0
-      for (const c of cards) {
-        const rect = c.getBoundingClientRect()
-        if (rect.height < 1) continue              // 未排版，跳过
-        if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue  // 非第一列
-        if (rect.bottom <= viewportTop) scrolled++
-        else if (rect.top < viewportBottom) visible++
-        else break
-      }
-      debugInfo.scrollRow = scrolled + visible
-    }
-  }
+  debugInfo.scrollRow = _currentScrollRow()
   writeDebug()
 }
 
