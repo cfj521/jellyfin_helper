@@ -833,6 +833,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { jellyfinApi, mediaApi, taskApi, ratingsApi, metadataApi } from '@/api'
+import { debugInfo } from '@/composables/useDebugInfo'
 import ViewModeToggle from '@/components/ViewModeToggle.vue'
 import SubtitleDownloadDialog from '@/components/SubtitleDownloadDialog.vue'
 import { useViewMode } from '@/composables/useViewMode'
@@ -1901,6 +1902,55 @@ const _observeSentinel = () => {
   observer.observe(sentinelRef.value)
 }
 
+// ============ DEBUG（事后删）：写共享 debugInfo，由 App.vue 侧边栏读取展示 ============
+// 跟 Trending.vue 用同一套字段；source 区分页面来源
+const writeDebug = () => {
+  debugInfo.enabled = true
+  debugInfo.source = `library:${viewMode.value}`
+  // 网格视图下行/列才有意义；列表视图固定 1 列
+  const cols = viewMode.value === 'grid' ? _gridColsEstimate() : 1
+  const visibleCount = sortedItems.value.length
+  debugInfo.cols = cols
+  debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visibleCount / cols)) : 0
+  debugInfo.items = items.value.length        // 已拉到的总数（无限滚动累积器大小）
+  debugInfo.wanted = itemsTotal.value         // 后端给的总数（== 库内符合 filter 的总数）
+}
+
+// 网格列数：网格 CSS 用 auto-fill minmax(160px,1fr)，按容器宽度估算
+const _gridColsEstimate = () => {
+  const container = document.querySelector('.items-card .grid-view')
+  if (!container) return 0
+  const w = container.clientWidth || 0
+  const cardMin = 160 + 16  // minmax(160px,1fr) + gap
+  return Math.max(1, Math.floor(w / cardMin))
+}
+
+// 当前视口顶部对齐的是第几行（scrollRow），随 scroll 节流更新
+const updateScrollRow = () => {
+  const el = viewMode.value === 'grid'
+    ? document.querySelector('.items-card .grid-view')
+    : document.querySelector('.items-card .el-table__body')
+  if (!el) {
+    debugInfo.scrollRow = 0
+    return
+  }
+  const rect = el.getBoundingClientRect()
+  const offset = Math.max(0, -rect.top)
+  // grid 行高靠 grid-card 高度（估 240px 含 meta）；list 行高约 80px
+  const rowH = viewMode.value === 'grid' ? 240 : 80
+  debugInfo.scrollRow = Math.floor(offset / rowH) + (offset > 0 ? 1 : 0)
+  writeDebug()
+}
+
+let _scrollRaf = null
+const onWindowScroll = () => {
+  if (_scrollRaf) return
+  _scrollRaf = requestAnimationFrame(() => {
+    updateScrollRow()
+    _scrollRaf = null
+  })
+}
+
 /**
  * 当前页所有 Movie / Episode 行的字幕语言批量补齐。
  * 原因：jellyfin /Items 列表接口对 Fields=MediaStreams 经常只返回精简版（不含 streams
@@ -2259,6 +2309,10 @@ onMounted(async () => {
   // 首批渲染完成后挂哨兵 observer：等 DOM 稳定再绑，避免观察空容器误 fire
   await nextTick()
   _setupObserver()
+  // debug：监听滚动 + 初始化一次 scrollRow
+  window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
+  writeDebug()
+  updateScrollRow()
 })
 
 // 切换不同库时重新加载该库的显示偏好；observer 也要重挂（router 复用同组件）
@@ -2266,7 +2320,11 @@ watch(() => id.value, async (newId) => {
   loadStatsPrefs(newId)
   await nextTick()
   _setupObserver()
+  writeDebug()
 })
+
+// items 数量变化（loadItems / loadMore） / 视图模式切换 → 刷新 debug
+watch([() => items.value.length, viewMode], () => writeDebug())
 
 onUnmounted(() => {
   stopSubtitlePoll()
@@ -2274,6 +2332,10 @@ onUnmounted(() => {
     observer.disconnect()
     observer = null
   }
+  window.removeEventListener('scroll', onWindowScroll, { capture: true })
+  if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
+  // 离开本页时关掉侧边栏的 debug 显示
+  debugInfo.enabled = false
 })
 </script>
 
