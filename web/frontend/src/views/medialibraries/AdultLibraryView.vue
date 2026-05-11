@@ -179,15 +179,10 @@
             </el-select>
           </div>
 
-          <el-pagination
-            v-model:current-page="pagination.page"
-            v-model:page-size="pagination.size"
-            :total="pagination.total"
-            :page-sizes="[20, 50, 100, 200]"
-            layout="total, sizes, prev, pager, next"
-            small
-            @change="reload"
-          />
+          <!-- 无限滚动模式：替代原分页器 -->
+          <span v-if="itemsTotal > 0" class="items-progress">
+            已加载 {{ items.length }} / 共 {{ itemsTotal }}
+          </span>
           <ViewModeToggle v-model="viewMode" />
         </div>
       </template>
@@ -374,6 +369,14 @@
         </el-table-column>
       </el-table>
 
+      <!-- 无限滚动哨兵：进入视口（含 rootMargin 200px 提前量）→ loadMore -->
+      <div ref="sentinelRef" class="scroll-sentinel">
+        <span v-if="loadingMore" class="muted">
+          <el-icon class="spin"><Loading /></el-icon> 加载更多...
+        </span>
+        <span v-else-if="!hasMore && items.length" class="muted">— 已经到底了 —</span>
+      </div>
+
       <el-empty v-if="!loading && !items.length" description="此库还没识别到内容；点「本地库重扫」启动扫描" />
     </el-card>
 
@@ -396,13 +399,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import {
   Search, MagicStick, Picture, Refresh, Loading,
   Check, Close, Operation, CaretTop, CaretBottom, DocumentCopy, Delete,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adultApi } from '@/api'
+import { debugInfo } from '@/composables/useDebugInfo'
 import AdultPosterCell from '@/components/adult/AdultPosterCell.vue'
 import TitleCell from '@/components/adult/TitleCell.vue'
 import HealthCell from '@/components/adult/HealthCell.vue'
@@ -433,7 +437,17 @@ const filters = reactive({
   show_excluded: false,    // 默认隐藏 excluded 条目（用户标记为无效番号的）
   use_jellyfin_db: false,  // ON = data_source=jellyfin（按 Jellyfin 视角列）
 })
-const pagination = reactive({ page: 1, size: 50, total: 0 })
+// 无限滚动：items 累加，nextOffset 跟踪下一批起点；itemsTotal 替代 pagination.total
+const INITIAL_LIMIT = 100
+const BATCH_LIMIT = 50
+const itemsTotal = ref(0)
+const nextOffset = ref(0)
+const hasMore = ref(true)
+const loadingMore = ref(false)
+const sentinelRef = ref(null)
+let observer = null
+let skipNextIntersection = false
+let reqSeq = 0
 
 const scanning = ref(false)
 const repairing = reactive({ covers: false, meta: false })
@@ -505,40 +519,152 @@ const loadStats = async () => {
   }
 }
 
-// ---- 列表加载 ----
+// ---- 列表加载（无限滚动版本）----
+// reload = 重置 + 首批；filter / library 切换都走这条
 const reload = async () => {
+  const seq = ++reqSeq
   loading.value = true
+  items.value = []
+  itemsTotal.value = 0
+  nextOffset.value = 0
+  hasMore.value = true
+  selected.value = []
   try {
-    const params = {
-      library_id: props.library.id,
-      limit: pagination.size,
-      offset: (pagination.page - 1) * pagination.size,
-    }
-    if (filters.use_jellyfin_db) {
-      // Jellyfin 视角：行从 Jellyfin /Items 拉，反查 AdultItem 做 cross-ref
-      params.data_source = 'jellyfin'
-    } else {
-      // 默认 AdultItem 视图：默认隐藏未识别（改成开关 = 显示未识别 = show_unrecognized）
-      // 当前简化：默认显示全部，让用户用过滤器自行筛选
-      params.show_unrecognized = true
-    }
-    // 显示排除项开关：默认 false → 后端隐藏 excluded 条目
-    params.show_excluded = !!filters.show_excluded
-    if (filters.search) params.search = filters.search
-    if (filters.actresses?.length) params.actresses = filters.actresses
-    if (filters.uncensored !== null && filters.uncensored !== '') {
-      params.uncensored = filters.uncensored
-    }
-    const res = await adultApi.list(params)
-    items.value = res.data.items || []
-    pagination.total = res.data.total || 0
-    resolveActressesForCurrentPage(items.value)
+    const res = await adultApi.list(_buildListParams(0, INITIAL_LIMIT))
+    if (seq !== reqSeq) return
+    const newItems = res.data.items || []
+    items.value = newItems
+    itemsTotal.value = res.data.total || 0
+    nextOffset.value = newItems.length
+    hasMore.value = newItems.length >= INITIAL_LIMIT && nextOffset.value < itemsTotal.value
+    resolveActressesForCurrentPage(newItems)
   } catch (e) {
     console.error(e)
     ElMessage.error('加载失败：' + (e.response?.data?.detail || e.message))
+    hasMore.value = false
   } finally {
-    loading.value = false
+    if (seq === reqSeq) {
+      loading.value = false
+      await nextTick()
+      _observeSentinel()
+      writeDebug()
+    }
   }
+}
+
+// loadMore = sentinel 进入视口时的触发；累加到 items 尾部，不清空
+const loadMore = async () => {
+  if (loading.value || loadingMore.value || !hasMore.value) return
+  const seq = reqSeq
+  loadingMore.value = true
+  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
+  try {
+    const start = nextOffset.value
+    const res = await adultApi.list(_buildListParams(start, BATCH_LIMIT))
+    if (seq !== reqSeq) return
+    const newItems = res.data.items || []
+    items.value = [...items.value, ...newItems]
+    if (res.data.total != null) itemsTotal.value = res.data.total
+    nextOffset.value = start + newItems.length
+    hasMore.value = newItems.length >= BATCH_LIMIT && nextOffset.value < itemsTotal.value
+    resolveActressesForCurrentPage(newItems)
+  } catch (e) {
+    console.warn('继续加载失败:', e)
+    hasMore.value = false
+  } finally {
+    if (seq === reqSeq) {
+      loadingMore.value = false
+      await nextTick()
+      _observeSentinel()
+      writeDebug()
+    }
+  }
+}
+
+// 共用 params 构造（filter / search / library 都汇聚到这里）
+const _buildListParams = (offset, limit) => {
+  const params = {
+    library_id: props.library.id,
+    limit,
+    offset,
+  }
+  if (filters.use_jellyfin_db) {
+    params.data_source = 'jellyfin'
+  } else {
+    params.show_unrecognized = true
+  }
+  params.show_excluded = !!filters.show_excluded
+  if (filters.search) params.search = filters.search
+  if (filters.actresses?.length) params.actresses = filters.actresses
+  if (filters.uncensored !== null && filters.uncensored !== '') {
+    params.uncensored = filters.uncensored
+  }
+  return params
+}
+
+// ============ IntersectionObserver 无限滚动 ============
+const _setupObserver = () => {
+  if (observer) observer.disconnect()
+  observer = new IntersectionObserver((entries) => {
+    if (skipNextIntersection) {
+      skipNextIntersection = false
+      return
+    }
+    for (const e of entries) {
+      if (e.isIntersecting) loadMore()
+    }
+  }, { rootMargin: '200px 0px' })
+  _observeSentinel()
+}
+
+const _observeSentinel = () => {
+  if (!observer || !sentinelRef.value) return
+  skipNextIntersection = true
+  observer.observe(sentinelRef.value)
+}
+
+// ============ DEBUG（共享 debugInfo / 侧边栏展示）============
+const writeDebug = () => {
+  debugInfo.enabled = true
+  debugInfo.source = `adult-lib:${viewMode.value}`
+  const cols = viewMode.value === 'grid' ? _gridColsEstimate() : 1
+  const visible = sortedItems.value.length
+  debugInfo.cols = cols
+  debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visible / cols)) : 0
+  debugInfo.items = items.value.length
+  debugInfo.wanted = itemsTotal.value
+}
+
+const _gridColsEstimate = () => {
+  const el = document.querySelector('.adult-lib-view .grid-view')
+  if (!el) return 0
+  const w = el.clientWidth || 0
+  // 成人卡片宽度 ~180px + 12 gap
+  return Math.max(1, Math.floor(w / 192))
+}
+
+const updateScrollRow = () => {
+  const el = viewMode.value === 'grid'
+    ? document.querySelector('.adult-lib-view .grid-view')
+    : document.querySelector('.adult-lib-view .el-table__body')
+  if (!el) {
+    debugInfo.scrollRow = 0
+    return
+  }
+  const rect = el.getBoundingClientRect()
+  const offset = Math.max(0, -rect.top)
+  const rowH = viewMode.value === 'grid' ? 280 : 80
+  debugInfo.scrollRow = Math.floor(offset / rowH) + (offset > 0 ? 1 : 0)
+  writeDebug()
+}
+
+let _scrollRaf = null
+const onWindowScroll = () => {
+  if (_scrollRaf) return
+  _scrollRaf = requestAnimationFrame(() => {
+    updateScrollRow()
+    _scrollRaf = null
+  })
 }
 
 const resolveActressesForCurrentPage = async (rows) => {
@@ -594,7 +720,7 @@ const actressLabel = (a) => {
 }
 
 const onFilterChange = () => {
-  pagination.page = 1
+  // 无限滚动模式：reload() 自身重置游标 + items，等同于回到 page 1
   reload()
 }
 
@@ -926,7 +1052,9 @@ const resetAndRescan = async () => {
     ElMessage.success(r.data?.message || '已启动')
     // 立即清空当前页表格让用户视觉感知"已清空"
     items.value = []
-    pagination.total = 0
+    itemsTotal.value = 0
+    nextOffset.value = 0
+    hasMore.value = true
     loadStats()
   } catch (e) {
     ElMessage.error('启动失败：' + (e.response?.data?.detail || e.message))
@@ -1059,19 +1187,36 @@ const onOpenActress = (payload) => {
 }
 
 // ---- 生命周期 ----
-watch(() => props.library?.id, () => {
-  pagination.page = 1
+watch(() => props.library?.id, async () => {
   selected.value = []
-  reload()
+  await reload()
   loadStats()
 })
 
-onMounted(() => {
+// items 数量 / 视图模式变化 → 刷新 debug 面板
+watch([() => items.value.length, viewMode], () => writeDebug())
+
+onMounted(async () => {
   loadAllActresses()
   if (props.library?.id) {
-    reload()
+    await reload()
     loadStats()
   }
+  await nextTick()
+  _setupObserver()
+  window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
+  writeDebug()
+  updateScrollRow()
+})
+
+onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
+  window.removeEventListener('scroll', onWindowScroll, { capture: true })
+  if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
+  debugInfo.enabled = false
 })
 </script>
 
@@ -1564,6 +1709,40 @@ onMounted(() => {
       background-color: var(--el-color-primary);
       border-color: var(--el-color-primary);
     }
+  }
+
+  // 无限滚动进度文字（替代原 el-pagination）
+  .items-progress {
+    color: #6b7280;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  // 无限滚动哨兵：闲置时极薄，仅在显示提示文字时撑开
+  .scroll-sentinel {
+    min-height: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    &:has(.muted) {
+      min-height: 48px;
+      padding: 12px 0;
+    }
+    .muted {
+      color: #94a3b8;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .spin {
+      animation: spin 1s linear infinite;
+    }
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 }
 </style>
