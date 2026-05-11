@@ -678,28 +678,33 @@ const writeDebug = () => {
 }
 
 
-// 用户当前已经看到第几行 = 已滚过的行 + 视口内可见的行；rowH 实测 DOM 避免硬编码偏差
+// 详见 LibraryDetail.vue 同名注释
 const updateScrollRow = () => {
-  const el = viewMode.value === 'grid'
-    ? document.querySelector('.adult-lib-view .grid-view')
-    : document.querySelector('.adult-lib-view .el-table__body')
-  if (!el) {
+  const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
+  if (!scroller) {
     debugInfo.scrollRow = 0
     return
   }
-  const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
-  const viewportH = scroller ? scroller.clientHeight : window.innerHeight
-  let rowH
+  const viewportH = scroller.clientHeight
+
+  let rowH = 0
+  let el = null
   if (viewMode.value === 'grid') {
-    const firstCard = el.querySelector('.grid-card')
-    rowH = firstCard ? firstCard.offsetHeight + GRID_CARD_GAP : 240
+    el = document.querySelector('.adult-lib-view .grid-view')
+    const cards = el ? el.querySelectorAll('.grid-card') : []
+    const sample = cards[1] || cards[0]
+    rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
   } else {
-    const firstRow = el.querySelector('tr')
+    el = document.querySelector('.adult-lib-view .el-table__body')
+    const firstRow = el ? el.querySelector('tr') : null
     rowH = firstRow ? firstRow.offsetHeight : 80
   }
   if (rowH < 1) rowH = viewMode.value === 'grid' ? 240 : 80
-  const rect = el.getBoundingClientRect()
-  const offset = Math.max(0, -rect.top)
+
+  const offset = el
+    ? Math.max(0, scroller.getBoundingClientRect().top - el.getBoundingClientRect().top)
+    : scroller.scrollTop
+
   const scrolledRows = Math.floor(offset / rowH)
   const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
   debugInfo.scrollRow = scrolledRows + visibleRows
