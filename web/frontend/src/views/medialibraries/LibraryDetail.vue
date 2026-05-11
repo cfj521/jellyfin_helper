@@ -283,6 +283,13 @@
         :indent="32"
         :row-class-name="rowClassName"
       >
+        <!-- 行号列：仅顶层行（Series/Movie）显示序号，Season/Episode 子行留空 -->
+        <el-table-column label="#" width="56" align="center" class-name="col-row-index">
+          <template #default="{ row, $index }">
+            <span v-if="(row.level || 0) === 0" class="row-index">{{ $index + 1 }}</span>
+          </template>
+        </el-table-column>
+
         <!--
           ============ 左侧大 cell（合并 选择/展开/海报/标题）============
           整行内容用一个 div 包起来，padding-left 按 row.level 缩进
@@ -3285,6 +3292,13 @@ onUnmounted(() => {
 // 无限滚动哨兵：仅作位置锚点，不可见
 .scroll-sentinel {
   height: 1px;
+}
+
+// 行号列：弱化展示
+.row-index {
+  color: #94a3b8;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes spin {

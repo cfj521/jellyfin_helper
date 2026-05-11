@@ -253,6 +253,12 @@
       >
         <el-table-column type="selection" width="44" />
 
+        <el-table-column label="#" width="56" align="center" class-name="col-row-index">
+          <template #default="{ $index }">
+            <span class="row-index">{{ $index + 1 }}</span>
+          </template>
+        </el-table-column>
+
         <el-table-column label="封面" width="180">
           <template #default="{ row }">
             <AdultPosterCell :item="row" />
@@ -1818,6 +1824,13 @@ onUnmounted(() => {
   // 无限滚动哨兵：仅作位置锚点，不可见
   .scroll-sentinel {
     height: 1px;
+  }
+
+  // 行号列：弱化展示
+  .row-index {
+    color: #94a3b8;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
   }
 }
 </style>
