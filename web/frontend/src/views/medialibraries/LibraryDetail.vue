@@ -2035,7 +2035,8 @@ const writeDebug = () => {
 }
 
 
-// 当前视口顶部对齐的是第几行（scrollRow），随 scroll 节流更新
+// 用户当前已经看到第几行 = 已滚过的行 + 当前视口内可见的行
+// 滚动容器是 .items-card .el-card__body（CSS overflow:auto），用它的 clientHeight 算视口
 const updateScrollRow = () => {
   const el = viewMode.value === 'grid'
     ? document.querySelector('.items-card .grid-view')
@@ -2044,11 +2045,15 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
+  const scroller = document.querySelector('.items-card > .el-card__body')
+  const viewportH = scroller ? scroller.clientHeight : window.innerHeight
   const rect = el.getBoundingClientRect()
   const offset = Math.max(0, -rect.top)
-  // grid 行高靠 grid-card 高度（估 240px 含 meta）；list 行高约 80px
+  // grid 行高靠 grid-card 高度（估 240px 含 meta + gap）；list 行高约 80px
   const rowH = viewMode.value === 'grid' ? 240 : 80
-  debugInfo.scrollRow = Math.floor(offset / rowH) + (offset > 0 ? 1 : 0)
+  const scrolledRows = Math.floor(offset / rowH)
+  const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
+  debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }
 
