@@ -669,7 +669,7 @@ const _maybeLoadMoreOnScroll = () => {
 const writeDebug = () => {
   debugInfo.enabled = true
   debugInfo.source = `adult-lib:${viewMode.value}`
-  const cols = viewMode.value === 'grid' ? _gridColsEstimate() : 1
+  const cols = cardsPerRow()
   const visible = sortedItems.value.length
   debugInfo.cols = cols
   debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visible / cols)) : 0
@@ -677,13 +677,6 @@ const writeDebug = () => {
   debugInfo.wanted = wanted.value
 }
 
-const _gridColsEstimate = () => {
-  const el = document.querySelector('.adult-lib-view .grid-view')
-  if (!el) return 0
-  const w = el.clientWidth || 0
-  // 成人卡片宽度 ~180px + 12 gap
-  return Math.max(1, Math.floor(w / 192))
-}
 
 const updateScrollRow = () => {
   const el = viewMode.value === 'grid'
