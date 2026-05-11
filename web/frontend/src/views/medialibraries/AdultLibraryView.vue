@@ -459,13 +459,13 @@ const nextOffset = ref(0)
 const hasMore = ref(true)
 const loadingMore = ref(false)
 const wanted = ref(0)
-const sentinelRef = ref(null)           // 仅做"加载更多/已到底"提示展示，不再 IO 观察
+const sentinelRef = ref(null)           // IntersectionObserver 观察元素
 const gridViewRef = ref(null)
 let reqSeq = 0
+let observer = null                     // IntersectionObserver
+let skipNextIntersection = false        // 防 observe() 首次 fire 误触发（Trending 同款套路）
 let prefetchTimer = null
-// 滚动触发：阈值穿越判定（remaining 从 >400 跌到 ≤400 才触发一次 loadMore）
-let _prevRemaining = Infinity
-const SCROLL_TRIGGER_PX = 400
+const ROOT_MARGIN_PX = 200              // rootMargin '200px 0px' —— Trending 同款
 
 const scanning = ref(false)
 const repairing = reactive({ covers: false, meta: false })
@@ -565,7 +565,8 @@ const reload = async () => {
   } finally {
     if (seq === reqSeq) {
       loading.value = false
-      _resetScrollGuard()
+      await nextTick()
+      _observeSentinel()
       writeDebug()
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -603,12 +604,18 @@ const prefetchIfNeeded = async () => {
   }
 }
 
-// loadMore：wanted += stepSize；池子告急时后台预取（不 await）
-const loadMore = () => {
+// loadMore（IntersectionObserver 调）：wanted += stepSize；池子告急时后台预取
+const loadMore = async () => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  wanted.value += stepSize()
-  prefetchIfNeeded()
+  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
+  try {
+    wanted.value += stepSize()
+    prefetchIfNeeded()
+  } finally {
+    await nextTick()
+    _observeSentinel()
+  }
 }
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
@@ -632,24 +639,26 @@ const _buildListParams = (offset, limit) => {
   return params
 }
 
-// ============ 滚动触发：距底部 SCROLL_TRIGGER_PX 阈值穿越调 loadMore ============
-const _getScroller = () => {
-  return document.querySelector('.app-main') || document.scrollingElement || document.documentElement
+// ============ IntersectionObserver 无限滚动（Trending 同款）============
+const _setupObserver = () => {
+  if (observer) observer.disconnect()
+  observer = new IntersectionObserver((entries) => {
+    if (skipNextIntersection) {
+      skipNextIntersection = false
+      return
+    }
+    for (const e of entries) {
+      if (e.isIntersecting) loadMore()
+    }
+  }, { rootMargin: `${ROOT_MARGIN_PX}px 0px` })
+  _observeSentinel()
 }
 
-const _maybeLoadMoreOnScroll = () => {
-  if (loading.value) return
-  if (!hasMore.value && items.value.length <= wanted.value) return
-  const scroller = _getScroller()
-  if (!scroller) return
-  const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
-  if (_prevRemaining > SCROLL_TRIGGER_PX && remaining <= SCROLL_TRIGGER_PX) {
-    loadMore()
-  }
-  _prevRemaining = remaining
+const _observeSentinel = () => {
+  if (!observer || !sentinelRef.value) return
+  skipNextIntersection = true
+  observer.observe(sentinelRef.value)
 }
-
-const _resetScrollGuard = () => { _prevRemaining = Infinity }
 
 // ============ DEBUG（共享 debugInfo / 侧边栏展示）============
 const writeDebug = () => {
@@ -691,7 +700,6 @@ const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
     updateScrollRow()
-    _maybeLoadMoreOnScroll()
     _scrollRaf = null
   })
 }
@@ -847,6 +855,8 @@ const stepSize = () => {
   return viewMode.value === 'grid' ? cardsPerRow() : 10
 }
 
+// 强制 content 高度 > usableH + ROOT_MARGIN_PX + 余量，确保 sentinel 一开始在 IO 虚拟视口外
+// 否则首次 observe 就 intersecting → skipNextIntersection 吞掉首发 → 滚不动（详见 LibraryDetail 同名注释）
 const initialLimit = () => {
   let usableH
   const el = gridViewRef.value
@@ -857,8 +867,10 @@ const initialLimit = () => {
     usableH = Math.max(300, window.innerHeight - 240)
   }
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
-  const visibleRows = Math.max(1, Math.ceil(usableH / rowH))
-  return (visibleRows + 1) * cardsPerRow()
+  const SAFETY = 40
+  const minContentH = usableH + ROOT_MARGIN_PX + SAFETY
+  const rowsNeeded = Math.max(1, Math.ceil(minContentH / rowH))
+  return rowsNeeded * cardsPerRow()
 }
 
 // displayItems：sortedItems 切到 wanted，gap 用 grid 骨架补；list 不在表内插骨架
@@ -1281,12 +1293,18 @@ onMounted(async () => {
     await reload()
     loadStats()
   }
+  await nextTick()
+  _setupObserver()
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
 onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
