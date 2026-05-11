@@ -459,13 +459,15 @@ const nextOffset = ref(0)
 const hasMore = ref(true)
 const loadingMore = ref(false)
 const wanted = ref(0)
-const sentinelRef = ref(null)           // IntersectionObserver 观察元素
+const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示行
 const gridViewRef = ref(null)
 let reqSeq = 0
-let observer = null                     // IntersectionObserver
-let skipNextIntersection = false        // 防 observe() 首次 fire 误触发（Trending 同款套路）
 let prefetchTimer = null
-const ROOT_MARGIN_PX = 200              // rootMargin '200px 0px' —— Trending 同款
+// 滚动监听：直接挂在真正的滚动容器 .items-card > .el-card__body（CSS overflow:auto）
+let scrollContainer = null
+let _scrollAttached = false
+let _loadMoreFiredAt = 0
+const SCROLL_TRIGGER_PX = 400
 
 const scanning = ref(false)
 const repairing = reactive({ covers: false, meta: false })
@@ -566,7 +568,7 @@ const reload = async () => {
     if (seq === reqSeq) {
       loading.value = false
       await nextTick()
-      _observeSentinel()
+      _attachScrollListener()
       writeDebug()
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -604,18 +606,12 @@ const prefetchIfNeeded = async () => {
   }
 }
 
-// loadMore（IntersectionObserver 调）：wanted += stepSize；池子告急时后台预取
-const loadMore = async () => {
+// loadMore：wanted += stepSize；池子告急时后台预取
+const loadMore = () => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
-  try {
-    wanted.value += stepSize()
-    prefetchIfNeeded()
-  } finally {
-    await nextTick()
-    _observeSentinel()
-  }
+  wanted.value += stepSize()
+  prefetchIfNeeded()
 }
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
@@ -639,30 +635,40 @@ const _buildListParams = (offset, limit) => {
   return params
 }
 
-// ============ IntersectionObserver 无限滚动 ============
-// !!! 关键 !!! 真正的滚动容器是 .items-card .el-card__body（CSS overflow:auto），
-// 不是 window。详见 LibraryDetail.vue 同名函数的注释。
-const _getScrollRoot = () => document.querySelector('.adult-lib-view .items-card > .el-card__body')
+// ============ 直接监听滚动容器（.items-card > .el-card__body）的 scroll 事件 ============
+// 详见 LibraryDetail.vue 同名函数的设计理由
+const _getScrollContainer = () => document.querySelector('.adult-lib-view .items-card > .el-card__body')
 
-const _setupObserver = () => {
-  if (observer) observer.disconnect()
-  const root = _getScrollRoot()
-  observer = new IntersectionObserver((entries) => {
-    if (skipNextIntersection) {
-      skipNextIntersection = false
-      return
-    }
-    for (const e of entries) {
-      if (e.isIntersecting) loadMore()
-    }
-  }, { root, rootMargin: `${ROOT_MARGIN_PX}px 0px` })
-  _observeSentinel()
+const _attachScrollListener = () => {
+  const el = _getScrollContainer()
+  if (!el) return
+  if (scrollContainer === el && _scrollAttached) return
+  if (scrollContainer && _scrollAttached) {
+    scrollContainer.removeEventListener('scroll', _onContainerScroll)
+  }
+  scrollContainer = el
+  scrollContainer.addEventListener('scroll', _onContainerScroll, { passive: true })
+  _scrollAttached = true
 }
 
-const _observeSentinel = () => {
-  if (!observer || !sentinelRef.value) return
-  skipNextIntersection = true
-  observer.observe(sentinelRef.value)
+const _detachScrollListener = () => {
+  if (scrollContainer && _scrollAttached) {
+    scrollContainer.removeEventListener('scroll', _onContainerScroll)
+  }
+  scrollContainer = null
+  _scrollAttached = false
+}
+
+const _onContainerScroll = () => {
+  if (!scrollContainer) return
+  if (loading.value) return
+  if (!hasMore.value && items.value.length <= wanted.value) return
+  const remaining = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight
+  if (remaining > SCROLL_TRIGGER_PX) return
+  const now = Date.now()
+  if (now - _loadMoreFiredAt < 300) return
+  _loadMoreFiredAt = now
+  loadMore()
 }
 
 // ============ DEBUG（共享 debugInfo / 侧边栏展示）============
@@ -860,15 +866,13 @@ const stepSize = () => {
   return viewMode.value === 'grid' ? cardsPerRow() : 10
 }
 
-// usableH 来自滚动容器 clientHeight（el-card__body），不是 window —— 详见 LibraryDetail 同名注释
+// usableH 来自真正的滚动容器 clientHeight（el-card__body）
 const initialLimit = () => {
-  const root = _getScrollRoot()
+  const root = _getScrollContainer()
   const usableH = root ? root.clientHeight : Math.max(300, window.innerHeight - 240)
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
-  const SAFETY = 40
-  const minContentH = Math.max(300, usableH) + ROOT_MARGIN_PX + SAFETY
-  const rowsNeeded = Math.max(1, Math.ceil(minContentH / rowH))
-  return rowsNeeded * cardsPerRow()
+  const visibleRows = Math.max(1, Math.ceil(Math.max(300, usableH) / rowH))
+  return (visibleRows + 1) * cardsPerRow()
 }
 
 // displayItems：sortedItems 切到 wanted，gap 用 grid 骨架补；list 不在表内插骨架
@@ -1292,17 +1296,14 @@ onMounted(async () => {
     loadStats()
   }
   await nextTick()
-  _setupObserver()
+  _attachScrollListener()
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
 onUnmounted(() => {
-  if (observer) {
-    observer.disconnect()
-    observer = null
-  }
+  _detachScrollListener()
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
