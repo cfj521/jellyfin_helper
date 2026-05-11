@@ -638,6 +638,8 @@ const _buildListParams = (offset, limit) => {
 }
 
 // ============ IntersectionObserver 无限滚动 ============
+// rootMargin=0：详见 LibraryDetail 同名函数注释；列表模式 80px 行高下 200px rootMargin
+// 会让 sentinel 一开始就"虚拟相交"被 skipNextIntersection 吞掉首次 fire 后永不再 fire
 const _setupObserver = () => {
   if (observer) observer.disconnect()
   observer = new IntersectionObserver((entries) => {
@@ -648,7 +650,7 @@ const _setupObserver = () => {
     for (const e of entries) {
       if (e.isIntersecting) loadMore()
     }
-  }, { rootMargin: '200px 0px' })
+  }, { rootMargin: '0px' })
   _observeSentinel()
 }
 

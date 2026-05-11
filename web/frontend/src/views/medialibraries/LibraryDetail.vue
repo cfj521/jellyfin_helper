@@ -1979,7 +1979,10 @@ const _fireBatchEnrichments = () => {
 }
 
 // ============ IntersectionObserver 无限滚动 ============
-// 设计跟 Trending.vue 一致：sentinel 在列表/网格之后；rootMargin 200px 提前量
+// rootMargin 故意设 0：库视图列表模式行高 80px，配合首批 visibleRows+1 行后，
+// sentinel 刚好落在视口下方一两个像素 —— 用 200px rootMargin 会让 sentinel 一开始就
+// 处于"虚拟相交"状态，被 skipNextIntersection 吞掉首次 fire 后再无事件，造成"滚不动"
+// Trending 没事是因为卡片高 300px，加 1 行就把 sentinel 推出 200px rootMargin 了
 const _setupObserver = () => {
   if (observer) observer.disconnect()
   observer = new IntersectionObserver((entries) => {
@@ -1990,7 +1993,7 @@ const _setupObserver = () => {
     for (const e of entries) {
       if (e.isIntersecting) loadMore()
     }
-  }, { rootMargin: '200px 0px' })
+  }, { rootMargin: '0px' })
   _observeSentinel()
 }
 
