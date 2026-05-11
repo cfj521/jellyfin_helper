@@ -188,54 +188,66 @@
       </template>
 
       <!-- 网格视图：海报卡片 grid -->
-      <div v-if="viewMode === 'grid'" v-loading="loading" class="grid-view">
+      <div v-if="viewMode === 'grid'" ref="gridViewRef" v-loading="loading" class="grid-view">
         <div
-          v-for="row in sortedItems"
+          v-for="row in displayItems"
           :key="row.id"
           class="grid-card"
           :class="{
-            'grid-card--excluded': row.excluded,
-            'grid-card--cooling': row.cooldown_until && new Date(row.cooldown_until).getTime() > Date.now(),
+            'grid-card--excluded': !row._skeleton && row.excluded,
+            'grid-card--cooling': !row._skeleton && row.cooldown_until && new Date(row.cooldown_until).getTime() > Date.now(),
+            'grid-card--skeleton': row._skeleton,
           }"
-          @click="onGridCardClick(row)"
+          @click="!row._skeleton && onGridCardClick(row)"
         >
-          <div class="grid-poster">
-            <AdultPosterCell :item="row" />
-            <el-tooltip
-              :content="gridHealthLabel(row)"
-              placement="top"
-              :show-after="200"
-            >
-              <span class="grid-health" :class="`grid-health--${gridHealthState(row)}`" />
-            </el-tooltip>
-            <span
-              v-if="row.is_uncensored === true"
-              class="grid-cen cen-badge cen-badge--uncensored"
-            >无码</span>
-          </div>
-          <div class="grid-meta">
-            <div class="grid-code">{{ row.code || '未识别' }}</div>
-            <div class="grid-title" :title="row.title || row.file_name">
-              {{ row.title || row.file_name || '—' }}
+          <template v-if="row._skeleton">
+            <div class="grid-poster">
+              <div class="sk-block sk-poster" />
             </div>
-            <!-- 健康度状态行：圆点 + 文字，始终可见 -->
-            <div class="grid-health-row" :class="`grid-health-row--${gridHealthState(row)}`">
-              <span class="grid-health-dot" />
-              <span class="grid-health-text">{{ gridHealthLabel(row) }}</span>
+            <div class="grid-meta">
+              <div class="sk-line sk-code" />
+              <div class="sk-line sk-title" />
+              <div class="sk-line sk-health" />
             </div>
-          </div>
+          </template>
+          <template v-else>
+            <div class="grid-poster">
+              <AdultPosterCell :item="row" />
+              <el-tooltip
+                :content="gridHealthLabel(row)"
+                placement="top"
+                :show-after="200"
+              >
+                <span class="grid-health" :class="`grid-health--${gridHealthState(row)}`" />
+              </el-tooltip>
+              <span
+                v-if="row.is_uncensored === true"
+                class="grid-cen cen-badge cen-badge--uncensored"
+              >无码</span>
+            </div>
+            <div class="grid-meta">
+              <div class="grid-code">{{ row.code || '未识别' }}</div>
+              <div class="grid-title" :title="row.title || row.file_name">
+                {{ row.title || row.file_name || '—' }}
+              </div>
+              <!-- 健康度状态行：圆点 + 文字，始终可见 -->
+              <div class="grid-health-row" :class="`grid-health-row--${gridHealthState(row)}`">
+                <span class="grid-health-dot" />
+                <span class="grid-health-text">{{ gridHealthLabel(row) }}</span>
+              </div>
+            </div>
+          </template>
         </div>
-        <el-empty v-if="!loading && !sortedItems.length" description="此库还没识别到内容" />
+        <el-empty v-if="!loading && !displayItems.length" description="此库还没识别到内容" />
       </div>
 
-      <!-- 列表视图：原 el-table（默认） -->
+      <!-- 列表视图：原 el-table（默认）；移除 max-height 让页面级滚动驱动无限滚动 -->
       <el-table
         v-else
-        :data="sortedItems"
+        :data="displayItems"
         v-loading="loading"
         stripe
         size="small"
-        max-height="700"
         @selection-change="onSelectionChange"
         :row-class-name="rowClassName"
       >
@@ -437,17 +449,22 @@ const filters = reactive({
   show_excluded: false,    // 默认隐藏 excluded 条目（用户标记为无效番号的）
   use_jellyfin_db: false,  // ON = data_source=jellyfin（按 Jellyfin 视角列）
 })
-// 无限滚动：items 累加，nextOffset 跟踪下一批起点；itemsTotal 替代 pagination.total
-const INITIAL_LIMIT = 100
-const BATCH_LIMIT = 50
+// 无限滚动 + wanted 累加器（对齐 Trending.vue / LibraryDetail.vue 双层模型）
+//   items     = 后端数据池（一次拉 FETCH_BATCH 条，比 wanted 大）
+//   wanted    = 当前展示目标数（按 stepSize 行累加），displayItems 切片
+//   itemsTotal = 库内符合 filter 的总数（toolbar "已加载 X / 共 Y" 用）
+const FETCH_BATCH = 80
 const itemsTotal = ref(0)
 const nextOffset = ref(0)
 const hasMore = ref(true)
 const loadingMore = ref(false)
+const wanted = ref(0)
 const sentinelRef = ref(null)
+const gridViewRef = ref(null)
 let observer = null
 let skipNextIntersection = false
 let reqSeq = 0
+let prefetchTimer = null
 
 const scanning = ref(false)
 const repairing = reactive({ covers: false, meta: false })
@@ -519,24 +536,26 @@ const loadStats = async () => {
   }
 }
 
-// ---- 列表加载（无限滚动版本）----
-// reload = 重置 + 首批；filter / library 切换都走这条
+// ============ 数据池 + wanted 双层加载模型 ============
+// reload = 重置 + 首批；filter / library 切换 / resetAndRescan 都走这条
 const reload = async () => {
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   const seq = ++reqSeq
   loading.value = true
   items.value = []
   itemsTotal.value = 0
   nextOffset.value = 0
   hasMore.value = true
+  wanted.value = initialLimit()
   selected.value = []
   try {
-    const res = await adultApi.list(_buildListParams(0, INITIAL_LIMIT))
+    const res = await adultApi.list(_buildListParams(0, FETCH_BATCH))
     if (seq !== reqSeq) return
     const newItems = res.data.items || []
     items.value = newItems
     itemsTotal.value = res.data.total || 0
     nextOffset.value = newItems.length
-    hasMore.value = newItems.length >= INITIAL_LIMIT && nextOffset.value < itemsTotal.value
+    hasMore.value = newItems.length >= FETCH_BATCH && nextOffset.value < itemsTotal.value
     resolveActressesForCurrentPage(newItems)
   } catch (e) {
     console.error(e)
@@ -548,36 +567,52 @@ const reload = async () => {
       await nextTick()
       _observeSentinel()
       writeDebug()
+      prefetchTimer = setTimeout(() => {
+        prefetchTimer = null
+        prefetchIfNeeded()
+      }, 1500)
     }
   }
 }
 
-// loadMore = sentinel 进入视口时的触发；累加到 items 尾部，不清空
-const loadMore = async () => {
-  if (loading.value || loadingMore.value || !hasMore.value) return
+// 后台预取：池子剩余不足 2 步长 → 拉下一批；自递归直到足够
+const prefetchIfNeeded = async () => {
+  if (loadingMore.value || !hasMore.value) return
+  if (items.value.length - wanted.value >= stepSize() * 2) return
   const seq = reqSeq
   loadingMore.value = true
-  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
   try {
     const start = nextOffset.value
-    const res = await adultApi.list(_buildListParams(start, BATCH_LIMIT))
+    const res = await adultApi.list(_buildListParams(start, FETCH_BATCH))
     if (seq !== reqSeq) return
     const newItems = res.data.items || []
     items.value = [...items.value, ...newItems]
     if (res.data.total != null) itemsTotal.value = res.data.total
     nextOffset.value = start + newItems.length
-    hasMore.value = newItems.length >= BATCH_LIMIT && nextOffset.value < itemsTotal.value
+    hasMore.value = newItems.length >= FETCH_BATCH && nextOffset.value < itemsTotal.value
     resolveActressesForCurrentPage(newItems)
   } catch (e) {
-    console.warn('继续加载失败:', e)
+    console.warn('后台预取失败:', e)
     hasMore.value = false
   } finally {
-    if (seq === reqSeq) {
-      loadingMore.value = false
-      await nextTick()
-      _observeSentinel()
-      writeDebug()
-    }
+    loadingMore.value = false
+    writeDebug()
+  }
+  if (seq === reqSeq && hasMore.value && items.value.length - wanted.value < stepSize() * 2) {
+    prefetchIfNeeded()
+  }
+}
+
+// loadMore：wanted += stepSize；池子告急时后台预取（不 await）
+const loadMore = async () => {
+  if (loading.value || (!hasMore.value && items.value.length <= wanted.value)) return
+  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
+  try {
+    wanted.value += stepSize()
+    prefetchIfNeeded()
+  } finally {
+    await nextTick()
+    _observeSentinel()
   }
 }
 
@@ -631,10 +666,8 @@ const writeDebug = () => {
   const visible = sortedItems.value.length
   debugInfo.cols = cols
   debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visible / cols)) : 0
-  // 跟 LibraryDetail 同步：wanted 与 items 同步增长（库视图无"逐行展示"概念，
-  // 总数在工具栏"已加载/共"处显示，debug 面板不重复）
   debugInfo.items = items.value.length
-  debugInfo.wanted = items.value.length
+  debugInfo.wanted = wanted.value
 }
 
 const _gridColsEstimate = () => {
@@ -803,6 +836,56 @@ const onSelectionChange = (rows) => { selected.value = rows }
 
 // 视图模式（list 表格 / grid 网格），用户偏好持久化在 localStorage
 const viewMode = useViewMode('adult-library', 'list')
+
+// ============ wanted / 行步长 / 视口测量（对齐 LibraryDetail.vue）============
+const GRID_CARD_W = 280
+const GRID_CARD_GAP = 18
+const GRID_POSTER_H = 158
+
+const cardsPerRow = () => {
+  if (viewMode.value !== 'grid') return 1
+  const el = gridViewRef.value
+  const containerW = el ? el.clientWidth : Math.max(0, window.innerWidth - 220 - 40)
+  return Math.max(1, Math.floor((containerW + GRID_CARD_GAP) / (GRID_CARD_W + GRID_CARD_GAP)))
+}
+
+const stepSize = () => {
+  return viewMode.value === 'grid' ? cardsPerRow() : 10
+}
+
+const initialLimit = () => {
+  let usableH
+  const el = gridViewRef.value
+  if (el) {
+    const top = el.getBoundingClientRect().top
+    usableH = Math.max(300, window.innerHeight - top)
+  } else {
+    usableH = Math.max(300, window.innerHeight - 240)
+  }
+  const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
+  const visibleRows = Math.max(1, Math.ceil(usableH / rowH))
+  return (visibleRows + 1) * cardsPerRow()
+}
+
+// displayItems：sortedItems 切到 wanted，gap 用 grid 骨架补；list 不在表内插骨架
+const displayItems = computed(() => {
+  const w = wanted.value || sortedItems.value.length
+  const sliced = sortedItems.value.slice(0, w)
+  if (viewMode.value === 'grid') {
+    const perRow = cardsPerRow()
+    const fillingPool = items.value.length < w && (loadingMore.value || loading.value || hasMore.value)
+    if (fillingPool) {
+      const gap = Math.max(0, w - sliced.length)
+      const skeletonCount = Math.min(gap, perRow * 2)
+      const out = sliced.map((r) => ({ ...r, _skeleton: false }))
+      for (let i = 0; i < skeletonCount; i++) {
+        out.push({ id: `__sk__${i}_${Date.now()}`, _skeleton: true })
+      }
+      return out
+    }
+  }
+  return sliced
+})
 
 // 网格视图圆点状态：复用 HealthCell 的判定逻辑
 const gridHealthState = (row) => {
@@ -1195,8 +1278,8 @@ watch(() => props.library?.id, async () => {
   loadStats()
 })
 
-// items 数量 / 视图模式变化 → 刷新 debug 面板
-watch([() => items.value.length, viewMode], () => writeDebug())
+// items 数量 / wanted / 视图模式变化 → 刷新 debug 面板
+watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 onMounted(async () => {
   loadAllActresses()
@@ -1216,6 +1299,7 @@ onUnmounted(() => {
     observer.disconnect()
     observer = null
   }
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
   debugInfo.enabled = false
@@ -1506,6 +1590,36 @@ onUnmounted(() => {
 
     &--excluded { opacity: 0.55; }
     &--cooling  { background: #faf5ff; }
+
+    // 骨架卡片：wanted 推进但池子还没补到时撑出占位行（Trending 同款 shimmer）
+    &.grid-card--skeleton {
+      pointer-events: none;
+      cursor: default;
+      &:hover { transform: none; box-shadow: none; }
+
+      .sk-block, .sk-line {
+        background: linear-gradient(90deg, #eef2f6 0%, #f7f9fb 50%, #eef2f6 100%);
+        background-size: 800px 100%;
+        animation: shimmer 1.4s linear infinite;
+        border-radius: 3px;
+      }
+      .sk-poster {
+        width: 100%;
+        height: $grid-poster-h;
+        border-radius: 0;
+      }
+      .grid-meta {
+        padding: 8px 10px;
+        .sk-code   { height: 14px; width: 42%; margin-bottom: 6px; }
+        .sk-title  { height: 16px; width: 78%; margin-bottom: 6px; }
+        .sk-health { height: 12px; width: 56%; }
+      }
+    }
+  }
+
+  @keyframes shimmer {
+    0%   { background-position: -800px 0; }
+    100% { background-position:  800px 0; }
   }
 
   .grid-poster {
