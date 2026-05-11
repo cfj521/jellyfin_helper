@@ -1911,13 +1911,14 @@ const loadItems = async () => {
   }
 }
 
-// 后台预取：数据池剩余不足 2 个 wanted 步长 → 拉下一批补给；不阻塞 wanted 推进
+// 后台预取：数据池剩余不足 3 个 wanted 步长 → 拉下一批补给；不阻塞 wanted 推进
+// 库视图卡片偏矮（grid ~210px，list ~80px），一次视口能放 4-7 行 → 阈值用 3 步长才有余量
 // 设计目标：用户滚到末行时，items 池里已经有数据；首批后立即放出，看不到骨架占位时间
 // 自递归：上游一批数量小、用户滚得快 → 一次预取不够时继续预取
 // force=true：跳过 buffer 阈值检查（首次 1.5s 延迟预取专用，保证 items 池一定能长起来）
 const prefetchIfNeeded = async (force = false) => {
   if (loadingMore.value || !hasMore.value) return
-  if (!force && items.value.length - wanted.value >= stepSize() * 2) return
+  if (!force && items.value.length - wanted.value >= stepSize() * 3) return
   const seq = reqSeq
   loadingMore.value = true
   try {
@@ -1937,7 +1938,7 @@ const prefetchIfNeeded = async (force = false) => {
     loadingMore.value = false  // 强制重置（seq 守卫只防污染，标志位归位无论如何）
   }
   // 仍然池子不足 → 继续预取
-  if (seq === reqSeq && hasMore.value && items.value.length - wanted.value < stepSize() * 2) {
+  if (seq === reqSeq && hasMore.value && items.value.length - wanted.value < stepSize() * 3) {
     prefetchIfNeeded()
   }
 }
