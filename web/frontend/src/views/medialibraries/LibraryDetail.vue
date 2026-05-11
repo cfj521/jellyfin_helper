@@ -1818,10 +1818,10 @@ const loadItems = async () => {
     if (seq === reqSeq) {
       itemsLoading.value = false
       // observer 可能还在观察旧 sentinel；DOM 稳定后重挂一次
-      // 同时如果首批没填满视口，重挂会立刻 fire 一次 IntersectionObserver
-      // 但 skipNextIntersection 会跳过那一次；用户滚一行就能触发下一批
       await nextTick()
       _observeSentinel()
+      // 容器没被首批填满（或用户已滚到底）→ 主动触发一次 loadMore
+      _maybeAutoTrigger()
     }
   }
 }
@@ -1851,6 +1851,8 @@ const loadMore = async () => {
       loadingMore.value = false
       await nextTick()
       _observeSentinel()  // 重新挂观察（observer 必 fire 首次状态，下方有 skip 保护）
+      // 新批数据如果太少没让 sentinel 离开视口 → 继续触发下一批
+      _maybeAutoTrigger()
     }
   }
 }
@@ -1900,6 +1902,21 @@ const _observeSentinel = () => {
   if (!observer || !sentinelRef.value) return
   skipNextIntersection = true  // observe() 会立刻 fire 一次当前状态，跳过它
   observer.observe(sentinelRef.value)
+}
+
+// 防御性补充：observe() 的首次 fire 被 skipNextIntersection 吞掉了，
+// 但首批加载后用户可能直接处于"能看到 sentinel"的滚动位置（容器短 / 已滚到底）。
+// 这种情况后续不会再有 intersection 状态变化，loadMore 不会被触发。
+// 这个 helper 用 getBoundingClientRect 显式检测一下，命中就主动 loadMore 一次。
+const _maybeAutoTrigger = () => {
+  if (itemsLoading.value || loadingMore.value || !hasMore.value) return
+  if (!sentinelRef.value) return
+  const rect = sentinelRef.value.getBoundingClientRect()
+  const viewportBottom = window.innerHeight || document.documentElement.clientHeight
+  // rootMargin=200 的等效检测：sentinel 顶端在视口底部以下 200px 内就触发
+  if (rect.top - viewportBottom < 200) {
+    loadMore()
+  }
 }
 
 /**
@@ -2612,7 +2629,10 @@ onUnmounted(() => {
     display: none !important;
   }
   // 收掉 cell 默认 padding，我们自己在 .row-content 上控
-  :deep(.el-table__row > td:first-child .cell) {
+  // 数据行 AND 表头行第一列都要收，否则表头里的"全选"checkbox 会因 el-table 默认 12px padding
+  // 比数据行整体右偏 12px（数据行 .row-content padding-left 16，表头同样 16，但表头 cell 还多 12 默认）
+  :deep(.el-table__row > td:first-child .cell),
+  :deep(.el-table__header-wrapper th:first-child .cell) {
     padding-left: 0;
     padding-right: 0;
   }
@@ -3105,13 +3125,18 @@ onUnmounted(() => {
   }
 }
 
-// 无限滚动哨兵：底部空白区域 + 居中提示（"加载更多..." / "— 已经到底了 —"）
+// 无限滚动哨兵：默认极薄（仅作 IntersectionObserver 触发器），
+// 仅在加载中 / 到底时显示提示文字，避免列表底部出现一段莫名的空白
 .scroll-sentinel {
-  min-height: 60px;
+  min-height: 1px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px 0;
+  // 只有有可见内容（loadingMore / 到底提示）时才撑开
+  &:has(.muted) {
+    min-height: 48px;
+    padding: 12px 0;
+  }
 
   .muted {
     color: #94a3b8;
