@@ -45,6 +45,28 @@ _EPISODE_PATTERNS = [
 
 _YEAR_RE = re.compile(r'\b(19\d{2}|20\d{2})\b')
 
+# 发布站前缀：剥掉名字开头的 "www.XXX.org   -   "/"[Site.com]"/"(www.SiteName.cc)" 等
+# 主流公网种子站会在 release name 前加这类水印（UIndex / 1337x / TGx / RARBG / EZTV 等都有变体）
+# 不剥的话 extract_movie_info 会把这段当 title 的一部分 → TMDB 反查匹配不到 → 走低置信回退或污染 title
+_SITE_PREFIX_PATTERNS = [
+    # www.xxx.tld 或 [www.xxx.tld] 或 (xxx.tld) 后接连字符/空格
+    re.compile(
+        r'^\s*[\[\(]?\s*(?:www\.)?[\w-]+\.(?:com|org|net|info|me|io|to|cc|tv|biz|club|li|lol|app|nz)\s*[\]\)]?\s*[-—–_]+\s*',
+        re.IGNORECASE,
+    ),
+    # 单纯 [Site] 前缀（不带 tld 的字幕组类已被 _ANIME_GROUP_PREFIX 处理；这里只抓常见公网站点字面前缀）
+    re.compile(r'^\s*\[\s*(?:RARBG|YTS|EZTV|TGx|1337x|UIndex|RuTracker|FitGirl)\s*[^\]]*\]\s*[-—–_]?\s*', re.IGNORECASE),
+]
+
+
+def _strip_site_prefix(name: str) -> str:
+    """剥发布站水印前缀；不动后缀的发布组（-OFT/-GROUP）—— 那是 release 工具识别用的"""
+    if not name:
+        return name
+    for pat in _SITE_PREFIX_PATTERNS:
+        name = pat.sub('', name, count=1)
+    return name.strip()
+
 # 动漫单集格式：' - 12' / '[01]' / '_12_' 等
 _ANIME_EP_PATTERNS = [
     re.compile(r'-\s*(\d{1,3})\s*[\[\(]'),       # ' - 12 ['
@@ -222,17 +244,73 @@ def identify_media(
     返回识别结果。source 字段标记是哪条规则命中：
       user_hint / regex_avcode / regex_episode / regex_anime / tmdb_search /
       llm_with_tmdb / llm_only / unknown
+
+    user_hint 是"用户已断言"的字段（典型来自 qB category alias 映射，或前端 AddTorrentDialog 的下拉）。
+    它**仅用于覆盖识别链路的结果**，不能短路识别链——历史 bug：只有 media_type 的 hint 早期 return 会
+    让 title/year 全 None，adopt 调用方直接写库 → 'Z:/videos/movie/ ()' 这种垃圾路径。
     """
     files = files or []
 
-    # ① 用户提示
-    if user_hint and user_hint.get('media_type'):
-        return {
-            **user_hint,
-            'source': 'user_hint',
-            'confidence': 1.0,
-        }
+    # 预处理：剥发布站水印前缀，避免污染后续标题提取（番号 / SxxExx / 年份 regex 都受益）
+    # 例：'www.UIndex.org    -    Schindlers List 1993 ...' → 'Schindlers List 1993 ...'
+    cleaned_name = _strip_site_prefix(torrent_name) if torrent_name else torrent_name
+    if cleaned_name != torrent_name:
+        logger.info(f"剥发布站前缀: {torrent_name!r} → {cleaned_name!r}")
+    torrent_name = cleaned_name
 
+    # 跑完整识别链路拿到 title/year/series_name 等，再让 user_hint 后置覆盖（如有）
+    result = _identify_chain(torrent_name, files)
+
+    # user_hint 后置覆盖：用户断言的字段优先；链路抽出的字段留下来
+    if user_hint:
+        user_set = {k: v for k, v in user_hint.items() if v is not None}
+        if user_set:
+            base_source = result.get('source') or 'unknown'
+            result = {**result, **user_set}
+            result['source'] = f"user_hint+{base_source}" if base_source != 'unknown' else 'user_hint'
+            # 用户断言后置信度提升，但不上 1.0（title/year 等仍是启发式抽的）
+            result['confidence'] = max(float(result.get('confidence') or 0), 0.85)
+
+    # 出口诊断日志：记录关键字段 + source。出问题时直接捞日志就能定位是哪条链路抽空了什么字段
+    _log_identify_result(torrent_name, user_hint, result)
+    return result
+
+
+def _log_identify_result(torrent_name: str, user_hint: Optional[Dict], result: Dict) -> None:
+    """统一记录 identify_media 的最终结果。对结果不完整的情况升到 WARNING。"""
+    mt = result.get('media_type')
+    title = result.get('title')
+    year = result.get('year')
+    series = result.get('series_name')
+    source = result.get('source')
+    conf = result.get('confidence')
+
+    # 判定是否"看起来不对"：media_type 已定但缺关键标题字段 → 后续 _resolve_target 会兜底拦截，
+    # 但日志里要先看见，免得再出现"没日志可查"的 bug
+    suspicious = False
+    if mt == 'movie' and not title:
+        suspicious = True
+    elif mt == 'tv' and not series and not title:
+        suspicious = True
+    elif mt == 'anime' and not series and not title:
+        suspicious = True
+    elif mt == 'adult' and not result.get('code') and not title:
+        suspicious = True
+
+    log_msg = (
+        f"identify_media: name={torrent_name[:80]!r} "
+        f"hint={user_hint!r} → "
+        f"media_type={mt!r} title={title!r} year={year!r} "
+        f"series_name={series!r} source={source!r} conf={conf}"
+    )
+    if suspicious:
+        logger.warning(f"识别结果不完整（关键字段缺失）：{log_msg}")
+    else:
+        logger.info(log_msg)
+
+
+def _identify_chain(torrent_name: str, files: List[Dict]) -> Dict:
+    """完整识别链路（无 user_hint 影响）。任一规则命中即返回，否则走 LLM / unknown。"""
     # ② 番号
     av = match_av_code(torrent_name, files)
     if av:

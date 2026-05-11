@@ -154,7 +154,7 @@ def scan_once() -> Dict:
     # 有种子推到 download_done → 唤醒 pipeline
     if advanced_to_done:
         try:
-            from tools.dispatch.pipeline import trigger as pipeline_trigger
+            from tools.dispatch.pipeline_worker import trigger as pipeline_trigger
             pipeline_trigger.set()
         except Exception:
             pass

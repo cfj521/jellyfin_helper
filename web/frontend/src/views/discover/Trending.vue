@@ -90,20 +90,14 @@
         </template>
 
         <template v-else-if="source === 'douban'">
-          <el-select
-            v-model="doubanDoulistId"
-            placeholder="选择片单"
-            size="small"
-            style="width: 240px"
-            @change="reload()"
-          >
-            <el-option
+          <!-- 4 个豆瓣源做成 radio button 组，跟其它 source 的 el-radio-group 视觉一致 -->
+          <el-radio-group v-model="doubanDoulistId" @change="reload()">
+            <el-radio-button
               v-for="d in doubanLists"
               :key="d.doulist_id"
-              :label="d.name"
-              :value="d.doulist_id"
-            />
-          </el-select>
+              :label="d.doulist_id"
+            >{{ d.name }}</el-radio-button>
+          </el-radio-group>
         </template>
       </div>
     </div>
@@ -161,10 +155,32 @@
               style="width: 100%; aspect-ratio: 2/3"
             />
             <div v-else class="no-poster">无海报</div>
-            <!-- 媒体类型徽标：左上角，pill 风格 + 类型色，对齐 Trakt 的视觉惯例 -->
-            <div class="media-type-pill" :class="`mt-${item.media_type}`">
-              <span class="mt-icon">{{ mediaTypeIcon(item.media_type) }}</span>
-              <span class="mt-label">{{ mediaTypeLabel(item.media_type) }}</span>
+            <!-- 媒体类型徽标：左上角，纯图标 + drop-shadow，对齐 Trakt 风格（无背景） -->
+            <div
+              class="media-type-badge"
+              :class="`mt-${item.media_type}`"
+              :title="mediaTypeLabel(item.media_type)"
+            >
+              <!-- 电影：film 卷盘 -->
+              <svg v-if="item.media_type === 'movie'" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 2v2h2V6H5Zm12 0v2h2V6h-2ZM5 10v2h2v-2H5Zm12 0v2h2v-2h-2ZM5 14v2h2v-2H5Zm12 0v2h2v-2h-2ZM5 18v1h2v-1H5Zm12 0v1h2v-1h-2ZM9 6v12h6V6H9Z"/>
+              </svg>
+              <!-- 剧集：电视机 -->
+              <svg v-else-if="item.media_type === 'tv'" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6v2H7v2h10v-2h-2v-2h6a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm0 14H3V5h18v12Z"/>
+              </svg>
+              <!-- 番剧：浪花/海浪（致敬神奈川冲浪里，番剧通用视觉） -->
+              <svg v-else-if="item.media_type === 'anime'" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M2 17.5c1.5 0 1.5-1 3-1s1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1v2c-1.5 0-1.5 1-3 1s-1.5-1-3-1-1.5 1-3 1-1.5-1-3-1-1.5 1-3 1-1.5-1-3-1-1.5 1-3 1v-2Zm0-5c1.5 0 1.5-1 3-1s1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1v2c-1.5 0-1.5 1-3 1s-1.5-1-3-1-1.5 1-3 1-1.5-1-3-1-1.5 1-3 1-1.5-1-3-1-1.5 1-3 1v-2ZM12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/>
+              </svg>
+              <!-- 成人：禁止 18 标志（圆圈 + 18） -->
+              <svg v-else-if="item.media_type === 'adult'" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 0 1 8 8c0 1.85-.63 3.55-1.69 4.9L7.1 5.69A7.96 7.96 0 0 1 12 4Zm0 16a8 8 0 0 1-8-8c0-1.85.63-3.55 1.69-4.9L16.9 18.31A7.96 7.96 0 0 1 12 20Z"/>
+              </svg>
+              <!-- 人物：人像 -->
+              <svg v-else-if="item.media_type === 'person'" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-3.33 0-10 1.67-10 5v3h20v-3c0-3.33-6.67-5-10-5Z"/>
+              </svg>
             </div>
             <div class="rating" v-if="item.rating != null">
               <el-icon><Star /></el-icon>
@@ -180,7 +196,12 @@
                 <el-icon><Close /></el-icon>
               </button>
               <div class="overview-content">
-                <div class="overview-text">{{ item.overview || (item._overviewLoading ? '加载中…' : '暂无简介') }}</div>
+                <div class="overview-text">{{ item.overview || '暂无简介' }}</div>
+                <!-- 豆瓣条目首次打开：导演行已显示，下面挂 spin 表示剧情简介正在抓取 -->
+                <div v-if="loadingOverviewKeys.has(item._key)" class="overview-loading">
+                  <el-icon class="spin"><Loading /></el-icon>
+                  <span>加载剧情简介…</span>
+                </div>
               </div>
             </div>
           </div>
@@ -208,8 +229,15 @@
               class="ratings-row"
             />
             <div class="actions-row">
-              <el-button size="small" type="primary" plain class="action-btn" @click.stop="searchTorrents(item)">
-                <el-icon><Search /></el-icon>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                class="action-btn"
+                :loading="searchingKeys.has(item._key)"
+                @click.stop="searchTorrents(item)"
+              >
+                <template #icon><el-icon><Search /></el-icon></template>
                 搜种子
               </el-button>
               <el-button size="small" type="primary" plain class="action-btn" @click.stop="toggleOverview(item)">
@@ -232,13 +260,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Star, Search, Document, Close, Loading } from '@element-plus/icons-vue'
 import { discoverApi, ratingsApi } from '@/api'
 import RatingsBadges from '@/components/RatingsBadges.vue'
 import { debugInfo } from '@/composables/useDebugInfo'
+
+// 让 App.vue 的 <keep-alive :include="[...]"> 能命中：用户从详情页返回时保留 tab/筛选/滚动位置
+defineOptions({ name: 'Trending' })
 
 const router = useRouter()
 
@@ -269,6 +300,15 @@ const loadingMore = ref(false)    // 触底追加 loading（不清 items）
 const cached = ref(false)
 const overviewVisible = reactive({})
 const ratingsByKey = reactive({})
+// "搜种子"按钮 in-flight：豆瓣分支要先 detail → titleEnByImdb，期间这张卡的按钮转 spin
+// 用 Set + reactive，按 item._key 跟踪；用户狂连点也只触发一次（在 set 里的 key 不会重复)
+const searchingKeys = reactive(new Set())
+// "简介"按钮 in-flight：豆瓣分支首次点击要去抓 detail，期间转 spin
+const loadingOverviewKeys = reactive(new Set())
+// 豆瓣条目剧情简介缓存：douban_id → summary 文本（'' = 已尝试但拉空，避免反复重抓）
+// 用独立 map 而不是直接 mutation `item.overview`：displayItems 每次重算会按 mapper 重建
+// item 的 overview 字段，mutation 会丢；从外部 map 在 mapper 里读，重算就能跟着同步
+const overviewCache = reactive({})
 const sentinelRef = ref(null)
 const gridRowRef = ref(null)        // <el-row> ref，用 getBoundingClientRect 实测网格起点
 let observer = null
@@ -297,15 +337,6 @@ const mediaTypeLabel = (mt) => {
   if (mt === 'person') return '人物'
   if (mt === 'adult') return '成人'
   return '电影'
-}
-
-// 海报左上角小徽标用：emoji 简单直观，跟 Trakt 卡片视觉一致；后续要换 SVG 在这里改即可
-const mediaTypeIcon = (mt) => {
-  if (mt === 'tv') return '📺'
-  if (mt === 'anime') return '🎌'
-  if (mt === 'person') return '👤'
-  if (mt === 'adult') return '🔞'
-  return '🎬'
 }
 
 const emptyHint = computed(() => {
@@ -434,7 +465,14 @@ const displayItems = computed(() => {
       const proxiedPoster = it.poster_url
         ? `/api/img-proxy?url=${encodeURIComponent(it.poster_url)}`
         : null
-      // 豆瓣 doulist 卡片只爬到导演 / 类型 / 年份；正式简介需用户点开后再 lazy fetch（toggleOverview）
+      // 豆瓣 doulist 卡片只爬到导演 / 类型 / 年份；剧情简介需用户点"简介"时才去 lazy fetch
+      // overview = [导演行] + (overviewCache 里的剧情简介，如已抓过)
+      // 通过 mapper 注入而不是 mutation item.overview —— 后者在 displayItems 重算时会被覆盖
+      const base = it.director ? `导演：${it.director}` : ''
+      const cachedSummary = it.douban_id ? overviewCache[it.douban_id] : undefined
+      const overview = cachedSummary
+        ? (base ? `${base}\n\n${cachedSummary}` : cachedSummary)
+        : base
       return {
         _key: `douban-${it.douban_id || idx}-${idx}`,
         douban_id: it.douban_id,
@@ -442,10 +480,11 @@ const displayItems = computed(() => {
         year: it.year,
         poster_url: proxiedPoster,
         rating: it.rating,
-        overview: it.director ? `导演：${it.director}` : '',
+        overview,
         media_type: 'movie',
         genres: it.genres || [],
-        badge: it.votes ? `${it.votes} 评价` : null,
+        // votes_label 区分语义：评价人数 vs 想看人数（/coming 即将上映用"想看"）
+        badge: it.votes ? `${it.votes} ${it.votes_label || '评价'}` : null,
       }
     }
     return { _key: `unknown-${idx}`, title: '未知', media_type: 'movie', genres: [] }
@@ -469,29 +508,37 @@ const displayItems = computed(() => {
   return real
 })
 
-const toggleOverview = async (item) => {
-  const willOpen = !overviewVisible[item._key]
-  overviewVisible[item._key] = willOpen
-  if (!willOpen) return
-  // 豆瓣条目：列表页爬不到真正的剧情简介（doulist 卡片只有导演/类型/年份），
-  // 用户点开时再去 /api/discover/douban-detail 拉一次（30 天缓存，命中后毫秒级）
-  if (source.value === 'douban' && item.douban_id && !item._overviewFetched) {
-    item._overviewLoading = true
+const toggleOverview = (item) => {
+  // 已经打开 → 直接关闭
+  if (overviewVisible[item._key]) {
+    overviewVisible[item._key] = false
+    return
+  }
+  // 立即打开 overlay（导演行已经在 item.overview 里），同时后台抓剧情简介
+  overviewVisible[item._key] = true
+
+  // 豆瓣条目首次打开 → 后台拉 detail；overlay 内 spin 提示进行中
+  // overviewCache[douban_id] 已存在（包括空串）→ 视为已尝试，不再重抓
+  const needsFetch = (
+    source.value === 'douban' &&
+    item.douban_id &&
+    !(item.douban_id in overviewCache)
+  )
+  if (!needsFetch) return
+
+  loadingOverviewKeys.add(item._key)
+  ;(async () => {
     try {
       const r = await discoverApi.doubanDetail(item.douban_id)
-      const summary = r?.data?.summary
-      if (summary) {
-        const head = item.overview || ''
-        // 头部保留导演/类型行，再换行追加正式简介
-        item.overview = head ? `${head}\n\n${summary}` : summary
-      }
+      // 即便 summary 为空也写 cache（'' 防止反复重抓）
+      overviewCache[item.douban_id] = r?.data?.summary || ''
     } catch (e) {
       console.warn('豆瓣简介拉取失败', e)
+      overviewCache[item.douban_id] = ''
     } finally {
-      item._overviewLoading = false
-      item._overviewFetched = true
+      loadingOverviewKeys.delete(item._key)
     }
-  }
+  })()
 }
 const hideOverview = (item) => {
   overviewVisible[item._key] = false
@@ -556,9 +603,17 @@ const reload = async (forceRefresh = false) => {
   // wanted 重置为视口可见行数 + 1 行（首屏所需）
   wanted.value = initialLimit()
   for (const k of Object.keys(overviewVisible)) overviewVisible[k] = false
+  // 切 source / 改筛选时回顶部（用户停留在第 50 条时换 tab，不该还停在第 50 条的位置）
+  // 滚动容器是 .app-main，不是 window
+  const scroller = document.querySelector('.app-main')
+  if (scroller) scroller.scrollTop = 0
+  // keep-alive 保存的 scrollTop 也要清掉，免得 onActivated 又把页面跳回去
+  _savedScrollTop = 0
   await load(forceRefresh, /*append*/ false)
   // 首批渲染后立刻预取下一页（async 不阻塞 DOM 渲染），不再延迟
   prefetchIfNeeded()
+  // 切到豆瓣源且仍有海报缺失 → 启动 poll 让后台 enrich 进度能反映到 UI；其它 source 自动停
+  startPosterPollIfNeeded()
 }
 
 const load = async (forceRefresh = false, append = false) => {
@@ -679,11 +734,45 @@ const loadDoubanLists = async () => {
 // 优先英文标题：种子站点（PT/海外公网）几乎都用英文标题归档，传中文/日文名搜不到。
 // 顺序：(1) 已注入的 english_title (TMDB 详情页有) → (2) 原语言为英文时的 original_title →
 //       (3) 后端 /title-en 端点（30 天缓存，TMDB translations[en]）→ (4) original_title → (5) title
+const resolveEnglistTitleByImdb = async (imdbId) => {
+  try {
+    const r = await discoverApi.titleEnByImdb(imdbId)
+    return {
+      title: r?.data?.english_title || null,
+      mediaType: r?.data?.media_type || null,
+    }
+  } catch (e) {
+    console.warn('IMDb → TMDB 英文标题解析失败', e)
+    return { title: null, mediaType: null }
+  }
+}
+
+// 返回 { title, mediaType? }；mediaType 来自 TMDB find 的优先 movie/tv 判定（豆瓣场景下用得到）
 const resolveEnglishTitle = async (item) => {
-  if (item.english_title) return item.english_title
-  if (item.original_language === 'en' && item.original_title) return item.original_title
+  if (item.english_title) return { title: item.english_title }
+  if (item.original_language === 'en' && item.original_title) return { title: item.original_title }
   // AniList: title 多半是 romaji（拉丁字母），可直接当英文使用
-  if (source.value === 'anilist') return item.original_title || item.title
+  if (source.value === 'anilist') return { title: item.original_title || item.title }
+
+  // 豆瓣分支：列表 item 上只有 douban_id，没有 imdb_id —— 拉一次详情拿 imdb_id 再走 IMDb 路径
+  // douban-detail 后端缓存 30 天，命中后毫秒；首次约 1-2s（豆瓣页爬取）
+  if (source.value === 'douban' && item.douban_id) {
+    try {
+      const det = await discoverApi.doubanDetail(item.douban_id)
+      const imdb = det?.data?.imdb_id
+      if (imdb) {
+        const { title: en, mediaType } = await resolveEnglistTitleByImdb(imdb)
+        if (en) {
+          item.english_title = en  // 缓存到 item 上，避免反复触发链路
+          return { title: en, mediaType }
+        }
+      }
+    } catch (e) {
+      console.warn('豆瓣 → IMDb 链路失败，退回中文标题', e)
+    }
+    // 没 imdb / 解析失败 → 中文标题兜底（搜出率极低，但比空 query 强）
+    return { title: item.title }
+  }
 
   if (item.tmdb_id && (item.media_type === 'movie' || item.media_type === 'tv')) {
     try {
@@ -692,26 +781,37 @@ const resolveEnglishTitle = async (item) => {
       if (en) {
         // 缓存到 item 上避免重复查
         item.english_title = en
-        return en
+        return { title: en }
       }
     } catch (e) {
       console.warn('英文标题查询失败', e)
     }
   }
-  return item.original_title || item.title
+  return { title: item.original_title || item.title }
 }
 
 const searchTorrents = async (item) => {
-  let q = await resolveEnglishTitle(item)
-  // 附带年份消歧：种子搜索引擎对 "Title 2010" 这种 query 命中率明显高于裸标题
-  if (item.year) q = `${q} ${item.year}`
-  router.push({
-    path: '/resourcesearch',
-    query: {
-      q,
-      type: item.media_type === 'tv' ? 'tv' : (item.media_type === 'anime' ? 'tv' : 'movie'),
-    },
-  })
+  // 已经在转 spin 中（用户连点）→ 短路。Set.add 同 key 也是幂等的，这里早 return 避免再起一遍异步
+  if (searchingKeys.has(item._key)) return
+  searchingKeys.add(item._key)
+  try {
+    const { title: enTitle, mediaType: resolvedMt } = await resolveEnglishTitle(item)
+    let q = enTitle
+    // 附带年份消歧：种子搜索引擎对 "Title 2010" 这种 query 命中率明显高于裸标题
+    if (item.year) q = `${q} ${item.year}`
+    // 豆瓣 item 的 media_type 默认硬编码 'movie'（doulist 卡片没区分）；
+    // 走 IMDb→TMDB 链路时拿到的 mediaType 更准确，优先用它
+    const finalMt = resolvedMt || item.media_type
+    router.push({
+      path: '/resourcesearch',
+      query: {
+        q,
+        type: finalMt === 'tv' ? 'tv' : (finalMt === 'anime' ? 'tv' : 'movie'),
+      },
+    })
+  } finally {
+    searchingKeys.delete(item._key)
+  }
 }
 
 const openDetail = (item) => {
@@ -813,26 +913,107 @@ const onWindowScroll = () => {
   })
 }
 
+// 豆瓣源海报回填 poll：后端 enrich 流程异步进行，前端不会自动感知。
+// 这里在豆瓣源且仍有 item 缺海报时每 20s 静默拉一次列表，把后台已 enrich 的字段合并进来。
+// 全部 item 都拿到海报后停止，避免无意义 polling。
+let posterPollTimer = null
+const POSTER_POLL_INTERVAL_MS = 20_000
+const startPosterPollIfNeeded = () => {
+  stopPosterPoll()
+  if (source.value !== 'douban') return
+  const incomplete = items.value.some(it => !it.poster_url)
+  if (!incomplete) return
+  posterPollTimer = setInterval(pollPosters, POSTER_POLL_INTERVAL_MS)
+}
+const stopPosterPoll = () => {
+  if (posterPollTimer) {
+    clearInterval(posterPollTimer)
+    posterPollTimer = null
+  }
+}
+const pollPosters = async () => {
+  if (source.value !== 'douban') { stopPosterPoll(); return }
+  const incomplete = items.value.some(it => !it.poster_url)
+  if (!incomplete) { stopPosterPoll(); return }
+  try {
+    const desc = buildParams(false, 1)
+    if (!desc) return
+    const [kind, params] = desc
+    const res = await callApi(kind, params)
+    const newItems = res?.data?.items || []
+    if (!newItems.length) return
+    // 按 douban_id 合并：只接收"补全字段"，不动其它（避免覆盖用户已展开的 overview 等）
+    const byId = new Map(newItems.map(it => [String(it.douban_id), it]))
+    let updated = 0
+    items.value.forEach((it, idx) => {
+      const ni = byId.get(String(it.douban_id))
+      if (!ni) return
+      const patch = {}
+      if (!it.poster_url && ni.poster_url) { patch.poster_url = ni.poster_url; updated++ }
+      if (it.rating == null && ni.rating != null) patch.rating = ni.rating
+      if (!it.director && ni.director) patch.director = ni.director
+      if (!it.imdb_id && ni.imdb_id) patch.imdb_id = ni.imdb_id
+      if (Object.keys(patch).length) {
+        // Vue 3 ref 数组项整体替换更稳：保留引用还在但触发响应
+        items.value[idx] = { ...it, ...patch }
+      }
+    })
+    if (updated) console.debug(`[douban poster poll] +${updated} 张海报已回填`)
+    // 全部齐了就停
+    if (!items.value.some(it => !it.poster_url)) stopPosterPoll()
+  } catch (e) {
+    console.warn('海报回填 poll 失败', e)
+  }
+}
+
+// 首次挂载只负责"拉数据"。监听 / observer / debug 切换全交给 onActivated/onDeactivated
+// —— 这样组件被 keep-alive 缓存（用户从详情页返回）时也能正确地装/卸滚动监听
 onMounted(async () => {
   await reload()
+})
+
+// keep-alive 不会自动恢复滚动位置：滚动容器是 .app-main（el-main），Vue Router 默认的 scrollBehavior
+// 只管 window 滚动。所以这里手动记录/恢复 .app-main.scrollTop
+let _savedScrollTop = 0
+
+// 进入页面（首次挂载 + 后续 keep-alive 激活都会触发）：装监听 + 重观察 sentinel + 恢复滚动位置
+const _attachRuntime = async () => {
   await nextTick()
   setupObserver()
   window.addEventListener('resize', onWindowResize)
   // 监 grid 内容滚动（多数情况主体滚动是 .app-main 内部，加 capture 兜底）
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
+  // 恢复 scrollTop：必须等 DOM 重新挂回 + 浏览器布局完成；用第二个 nextTick + rAF 兜底
+  if (_savedScrollTop > 0) {
+    await nextTick()
+    requestAnimationFrame(() => {
+      const scroller = document.querySelector('.app-main')
+      if (scroller) scroller.scrollTop = _savedScrollTop
+    })
+  }
   writeDebug()
   updateScrollRow()
-})
+  // 回到页面时，如果豆瓣源还有海报缺失，恢复 poll（_detachRuntime 时停了）
+  startPosterPollIfNeeded()
+}
 
-onBeforeUnmount(() => {
+// 离开页面（被 keep-alive deactivate 或真正卸载）：拆监听 + 断 observer + 关侧边栏 debug + 记录 scrollTop
+const _detachRuntime = () => {
+  const scroller = document.querySelector('.app-main')
+  if (scroller) _savedScrollTop = scroller.scrollTop
   if (observer) observer.disconnect()
   window.removeEventListener('resize', onWindowResize)
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (resizeTimer) clearTimeout(resizeTimer)
   if (scrollTimer) cancelAnimationFrame(scrollTimer)
-  // 离开本页时关掉侧边栏的 debug 显示
+  // 离开页面停掉海报 poll，避免后台无意义占资源
+  stopPosterPoll()
   debugInfo.enabled = false
-})
+}
+
+onActivated(_attachRuntime)
+onDeactivated(_detachRuntime)
+onBeforeUnmount(_detachRuntime)
 </script>
 
 <style lang="scss" scoped>
@@ -1091,6 +1272,20 @@ onBeforeUnmount(() => {
           word-break: break-word;
           white-space: pre-wrap;
         }
+        // 简介加载中：导演行下方一小段，spinner + 文字（居中）
+        .overview-loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          margin-top: 10px;
+          color: rgba(255, 255, 255, 0.65);
+          font-size: 11px;
+          .spin {
+            animation: spin 1s linear infinite;
+            font-size: 13px;
+          }
+        }
       }
     }
 
@@ -1132,38 +1327,33 @@ onBeforeUnmount(() => {
     }
 
     // ============ 媒体类型徽标（海报左上角）============
-    // 半透明深色底 + 类型色边框，hover 不会跟海报主色冲突
-    // 不同 media_type 用不同 hue 区分，跟 Trakt 一致：电影偏冷蓝，剧集橙，番剧粉，成人红
-    .media-type-pill {
+    // Trakt 风格：白色 glyph + drop-shadow，无背景；不同 media_type 用不同色调（蓝/橙/粉/红/灰）
+    .media-type-badge {
       position: absolute;
-      top: 8px;
-      left: 8px;
-      display: inline-flex;
+      top: 6px;
+      left: 6px;
+      width: 22px;
+      height: 22px;
+      display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 3px 8px;
-      border-radius: 12px;
-      font-size: 11px;
-      line-height: 1.2;
-      font-weight: 600;
-      letter-spacing: 0.3px;
-      background: rgba(15, 23, 42, 0.78);
+      justify-content: center;
       color: #fff;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85)) drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
       pointer-events: none;
       z-index: 1;
 
-      .mt-icon { font-size: 12px; line-height: 1; }
-      .mt-label { font-size: 11px; }
+      svg {
+        width: 18px;
+        height: 18px;
+        display: block;
+      }
 
-      // 类型色：用边框/侧边色条区分，避免主底色被海报背景吞掉
-      &.mt-movie  { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #60a5fa; }
-      &.mt-tv     { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #f59e0b; }
-      &.mt-anime  { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #ec4899; }
-      &.mt-adult  { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #ef4444; }
-      &.mt-person { box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 2px 0 0 #94a3b8; }
+      // 不同类型用不同颜色 hue（白色 fallback 已设在 color）
+      &.mt-movie  { color: #e0f2fe; }
+      &.mt-tv     { color: #fef3c7; }
+      &.mt-anime  { color: #fce7f3; }
+      &.mt-adult  { color: #fecaca; }
+      &.mt-person { color: #e2e8f0; }
     }
   }
 

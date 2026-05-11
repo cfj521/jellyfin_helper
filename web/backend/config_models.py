@@ -130,12 +130,17 @@ class DoubanListsConfig(BaseModel):
     """
     enabled: bool = True
     cache_days: int = 3              # 默认 3 天
-    # 默认列表：豆瓣 Top 250 + 几个常见精选片单。用户可在 config.yaml 改 / 增。
-    # 格式：[{name: "中文显示名", doulist_id: "123", media_type: "movie"|"tv"}, ...]
-    # 失效时打开 douban.com 找新片单 URL 中的 ID 替换即可。
+    # 默认列表：豆瓣 Top 250 + 豆瓣官方排行/上映两个动态页。用户可在 config.yaml 改 / 增。
+    # 格式：[{name: "中文显示名", doulist_id: "<ID 或保留字>", media_type: "movie"|"tv"}, ...]
+    #   doulist_id 取值：
+    #     纯数字       → 经典 /doulist/<id>/ 片单
+    #     "chart"      → 豆瓣电影排行榜（/chart 默认 section）
+    #     "nowplaying" → 正在上映（/cinema/nowplaying/ 的 nowplaying section）
+    #     "upcoming"   → 即将上映（/cinema/nowplaying/ 的 upcoming section）
+    # 失效时打开 douban.com 找新 doulist URL 中的 ID 替换即可。
     lists: List[Dict] = Field(default_factory=lambda: [
-        {'name': '豆瓣 Top 250',       'doulist_id': '240962',  'media_type': 'movie'},
-        {'name': '必看高分剧情片',     'doulist_id': '1295618', 'media_type': 'movie'},
-        {'name': '高分美剧',           'doulist_id': '1462129', 'media_type': 'tv'},
-        {'name': '一生必看的100部电影', 'doulist_id': '122224',  'media_type': 'movie'},
+        {'name': '豆瓣 Top 250', 'doulist_id': '240962',     'media_type': 'movie'},
+        {'name': '豆瓣排行榜',   'doulist_id': 'chart',      'media_type': 'movie'},
+        {'name': '正在上映',     'doulist_id': 'nowplaying', 'media_type': 'movie'},
+        {'name': '即将上映',     'doulist_id': 'upcoming',   'media_type': 'movie'},
     ])

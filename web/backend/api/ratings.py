@@ -495,6 +495,9 @@ def refresh_rating(
     db: Session = Depends(get_db),
 ):
     """强制重取（绕过 TTL，用于管理或用户主动刷新）。"""
+    logger.info(
+        f"/ratings/{tmdb_id}/refresh: media_type={media_type!r} imdb_id={imdb_id!r}"
+    )
     if media_type not in ('movie', 'tv'):
         raise HTTPException(status_code=400, detail="media_type 必须是 movie 或 tv")
 

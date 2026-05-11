@@ -155,6 +155,9 @@ def list_items(
     data_source: str = 'adult',
     limit: int = 50,
     offset: int = 0,
+    sort_by: str = 'code',         # code / title / release_date
+    sort_order: str = 'asc',       # asc / desc
+    has_health_issue: bool = False, # 只看健康有问题（未识别/未刮削/封面或NFO缺失）
     db: Session = Depends(get_db),
 ):
     """番号库列表
@@ -239,13 +242,40 @@ def list_items(
     if tag:
         query = query.filter(AdultItem.tags.contains(tag))
 
+    # 派生字段过滤「仅看健康有问题」：等价于前端 gridHealthState != 'green'/'excluded'/'cooldown'
+    # 即不是完全完整的条目（缺 code / 缺 title / 没刮削 / cover 或 nfo 本地缺失）
+    # 用 SQL OR 表达；isnot(True) 在 PG 上是 'IS NOT TRUE'，包含 NULL+False
+    if has_health_issue:
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            AdultItem.code.is_(None),
+            AdultItem.title.is_(None),
+            AdultItem.source.is_(None),
+            AdultItem.source.in_(['not_found', 'pending']),
+            AdultItem.cover_local_ok.isnot(True),
+            AdultItem.nfo_local_ok.isnot(True),
+        ))
+
+    # 排序下推：之前 hard-code 按 code 排，前端切换无效；现在支持 code/title/release_date
+    # 派生字段（health）不在表里——已改成上面的 has_health_issue filter，不再作为排序维度
+    _SORT_COL_MAP = {
+        'code': AdultItem.code,
+        'title': AdultItem.title,
+        'release_date': AdultItem.release_date,
+    }
+    _sort_col = _SORT_COL_MAP.get(sort_by, AdultItem.code)
+    if sort_order == 'desc':
+        _sort_col = _sort_col.desc().nullslast()
+    else:
+        _sort_col = _sort_col.asc().nullslast()
+
     # 不过滤 Jellyfin 时直接 SQL 翻页
     # **关键**：先把 ORM 对象 snapshot 成 dict 释放 db；
     # _to_dict_with_jellyfin 内部会调 lookup_jellyfin_item（缓存过期时触发 Jellyfin HTTP，
     # 1-3s 不等），不能一边持 db 一边等 HTTP，否则连接池在 Jellyfin 慢时会被吃完
     if in_jellyfin is None:
         total = query.count()
-        items = query.order_by(AdultItem.code).offset(offset).limit(limit).all()
+        items = query.order_by(_sort_col).offset(offset).limit(limit).all()
         snapshot = [_to_dict(i) for i in items]
         # 显式 commit 释放 PG 连接（入参 db 是 Depends 给的，FastAPI finally 还会调 close，幂等）
         db.commit()
@@ -257,7 +287,7 @@ def list_items(
 
     # in_jellyfin 过滤需要每条反查
     from web.backend.api.medialibraries import lookup_jellyfin_item, jellyfin_web_url
-    all_items = query.order_by(AdultItem.code).all()
+    all_items = query.order_by(_sort_col).all()
     filtered = []
     for i in all_items:
         jf = lookup_jellyfin_item(i.file_path) if i.file_path else None
@@ -493,9 +523,11 @@ def clear_all_items(confirm: str = "", db: Session = Depends(get_db)):
     清空番号库（仅 DB 记录，不动磁盘文件）。需要 confirm=YES 防误调。
     """
     if confirm != "YES":
+        logger.warning(f"/items/_all 拒绝：缺少 confirm=YES (got {confirm!r})")
         raise HTTPException(status_code=400, detail="需要 confirm=YES 确认清空")
     n = db.query(AdultItem).delete()
     db.commit()
+    logger.warning(f"/items/_all 清空番号库 DB 记录：{n} 行已删除（磁盘文件保留）")
     return {"ok": True, "deleted": n}
 
 
@@ -656,6 +688,12 @@ def delete_item(
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
 
+    logger.warning(
+        f"/adult/items/delete: id={item_id} code={item.code!r} "
+        f"file_path={item.file_path!r} delete_files={delete_files} "
+        f"delete_in_jellyfin={delete_in_jellyfin}"
+    )
+
     deleted_files: List[str] = []
     failed_deletes: List[str] = []
     jellyfin_deleted = False
@@ -705,6 +743,11 @@ def delete_item(
     db.delete(item)
     db.commit()
 
+    logger.warning(
+        f"/adult/items/delete 完成: id={item_id} jellyfin_deleted={jellyfin_deleted} "
+        f"files_deleted={len(deleted_files)} failed={len(failed_deletes)}"
+    )
+
     return {
         "ok": True,
         "jellyfin_deleted": jellyfin_deleted,
@@ -734,17 +777,20 @@ def reset_and_rescan(library_id: str):
 
     任务进度：5% 解析路径 → 15% 找到 N 视频 → 90% 识别完成 → 92% 刮削 → 100% 完成
     """
+    logger.warning(f"/adult/reset-and-rescan: library_id={library_id!r}")
     if not library_id:
         raise HTTPException(status_code=400, detail="必须指定 library_id")
 
     cond = _library_path_filter(library_id)
     if cond is None:
+        logger.warning(f"/adult/reset-and-rescan: 无法解析 library {library_id} 的路径")
         raise HTTPException(status_code=400, detail=f"无法解析 library {library_id} 的路径")
 
     # 1. 清表（仅该库范围）
     with SessionLocal() as db:
         deleted = db.query(AdultItem).filter(cond).delete(synchronize_session=False)
         db.commit()
+    logger.warning(f"/adult/reset-and-rescan: 清空 {deleted} 条 AdultItem (library {library_id})")
 
     # 2. 触发 watcher 扫描+刮削（同一任务，扫完衔接刮削）
     from web.backend.services.adult_watcher import watcher
@@ -755,11 +801,18 @@ def reset_and_rescan(library_id: str):
     )
     task_id = scheduled.get(library_id)
     if not task_id:
+        logger.warning(
+            f"/adult/reset-and-rescan: 已清空 {deleted} 条，"
+            f"但库 {library_id} 已有任务在跑，未启动新任务"
+        )
         raise HTTPException(
             status_code=409,
             detail=f"已清空 {deleted} 条，但库 {library_id} 已有任务在跑，未启动新任务",
         )
 
+    logger.info(
+        f"/adult/reset-and-rescan: 启动任务 #{task_id} (library {library_id}, deleted={deleted})"
+    )
     return {
         "ok": True,
         "deleted": deleted,

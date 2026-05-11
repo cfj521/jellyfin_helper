@@ -82,8 +82,13 @@
 
             <!-- 操作按钮 -->
             <div class="actions">
-              <el-button type="primary" size="large" @click="searchTorrents">
-                <el-icon><Search /></el-icon>
+              <el-button
+                type="primary"
+                size="large"
+                :loading="searching"
+                @click="searchTorrents"
+              >
+                <template #icon><el-icon><Search /></el-icon></template>
                 搜种子下载
               </el-button>
               <el-link v-if="data.imdb_url" :href="data.imdb_url" target="_blank" type="warning" :underline="false">
@@ -302,23 +307,30 @@ const fetchRating = async () => {
   }
 }
 
-const searchTorrents = () => {
-  if (!data.value) return
-  // 种子站点大多用英文/原始语言命名，中文搜不到
-  // 优先级：english_title（从 translations 抽出）→ original_title（如果原片就是英文）→ title
-  const d = data.value
-  const name = d.english_title
-    || (d.original_language === 'en' ? d.original_title : null)
-    || d.original_title
-    || d.title
-  // 附带年份消歧：种子站点 query "Title 2010" 命中率显著高于裸标题
-  // 后端响应不直接提供 year，用 release_date / first_air_date 的前 4 位
-  const yr = (d.release_date || '').slice(0, 4)
-  const q = yr ? `${name} ${yr}` : name
-  router.push({
-    path: '/resourcesearch',
-    query: { q, type: d.media_type === 'tv' ? 'tv' : 'movie' },
-  })
+const searching = ref(false)
+const searchTorrents = async () => {
+  if (!data.value || searching.value) return
+  searching.value = true
+  try {
+    // 种子站点大多用英文/原始语言命名，中文搜不到
+    // 优先级：english_title（从 translations 抽出）→ original_title（如果原片就是英文）→ title
+    const d = data.value
+    const name = d.english_title
+      || (d.original_language === 'en' ? d.original_title : null)
+      || d.original_title
+      || d.title
+    // 附带年份消歧：种子站点 query "Title 2010" 命中率显著高于裸标题
+    // 后端响应不直接提供 year，用 release_date / first_air_date 的前 4 位
+    const yr = (d.release_date || '').slice(0, 4)
+    const q = yr ? `${name} ${yr}` : name
+    // await router.push 让 spin 持续到路由切换完成，视觉反馈更明确
+    await router.push({
+      path: '/resourcesearch',
+      query: { q, type: d.media_type === 'tv' ? 'tv' : 'movie' },
+    })
+  } finally {
+    searching.value = false
+  }
 }
 
 const goDetail = (item) => {

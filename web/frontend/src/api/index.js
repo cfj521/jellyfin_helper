@@ -367,6 +367,10 @@ export const discoverApi = {
   // 30 天缓存；命中后毫秒级返回
   titleEn: (mediaType, tmdbId) =>
     api.get('/api/discover/title-en', { params: { media_type: mediaType, tmdb_id: tmdbId } }),
+  // 豆瓣条目专用：IMDb ID → TMDB find → 英文标题。豆瓣中文标题搜种子命中率极低。
+  // 30 天缓存。返回 { english_title, tmdb_id, media_type }
+  titleEnByImdb: (imdbId) =>
+    api.get('/api/discover/title-en-by-imdb', { params: { imdb_id: imdbId } }),
   clearCache: () => api.post('/api/discover/cache/clear'),
   search: (payload) => api.post('/api/resourcesearch/search', payload),
   push: (payload) => api.post('/api/downloadpipeline/download', payload),

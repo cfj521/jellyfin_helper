@@ -198,6 +198,12 @@ def default_track_action(
         )
 
     mode_label = "执行" if req.apply else "预览"
+    logger.info(
+        f"/audio/default-track: scope={target['label']!r} mode={target.get('mode')!r} "
+        f"apply={req.apply} recursive={req.recursive} "
+        f"preferred_langs={req.preferred_langs or settings.preferred_audio_langs} "
+        f"skip_single_track={req.skip_single_track} refresh_jellyfin={req.refresh_jellyfin}"
+    )
     task = create_task(db, "audio_default_track", f"{mode_label}音轨修复: {target['label']}")
 
     refresh_library_ids = _resolve_refresh_libraries(req) if req.refresh_jellyfin else []
@@ -453,10 +459,20 @@ def run_default_track_task(
             progress_cb=_progress,
         )
 
+        # 完成 summary：扫了多少 / 改了多少 / 失败多少
+        scan_info = result.get('scan') or {}
+        apply_info = result.get('apply') or {}
+        logger.info(
+            f"run_default_track_task 完成: task={task_id} apply={apply} "
+            f"total={scan_info.get('total')} skipped={scan_info.get('skipped')} "
+            f"already_ok={scan_info.get('already_ok')} candidates={scan_info.get('candidates')} "
+            f"applied_success={apply_info.get('success')} applied_failed={apply_info.get('failed')}"
+        )
+
         with SessionLocal() as db:
             complete_task(db, task_id, result)
 
     except Exception as e:
-        logger.exception("音轨任务失败")
+        logger.exception(f"音轨任务失败: task={task_id}")
         with SessionLocal() as db:
             complete_task(db, task_id, {"error": str(e)}, success=False)

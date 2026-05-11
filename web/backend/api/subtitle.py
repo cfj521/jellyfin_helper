@@ -233,6 +233,10 @@ def scan_subtitles(
     expected_langs = request.expected_langs or settings.preferred_langs
 
     library_ids_list = list(scope_lib_ids or [])
+    logger.info(
+        f"/subtitle/scan: scope={label!r} paths={len(paths)} recursive={recursive} "
+        f"expected_langs={expected_langs} library_ids={library_ids_list}"
+    )
     task = create_task(
         db,
         "subtitle_scan",
@@ -345,6 +349,12 @@ def run_subtitle_scan(
         with SessionLocal() as db:
             update_task_progress(db, task_id, pct, msg, result_patch=patch)
 
+    import time
+    t0 = time.time()
+    logger.info(
+        f"run_subtitle_scan 开始: task={task_id} paths={len(paths)} "
+        f"recursive={recursive} expected_langs={expected_langs}"
+    )
     try:
         scanner = SubtitleScanner(preferred_langs=expected_langs)
         # 短事务读取硬字幕标注
@@ -463,8 +473,14 @@ def run_subtitle_scan(
                 ),
             )
 
+        logger.info(
+            f"run_subtitle_scan 完成: task={task_id} videos={total_videos} "
+            f"with_sub={total_with} without_sub={total_without} "
+            f"without_required={total_without_required} elapsed={time.time()-t0:.1f}s"
+        )
+
     except Exception as e:
-        logger.exception("字幕扫描任务失败")
+        logger.exception(f"字幕扫描任务失败: task={task_id}")
         with SessionLocal() as db:
             complete_task(db, task_id, {"error": str(e)}, success=False)
 
@@ -487,6 +503,11 @@ def rename_subtitles(
     recursive = recursive_override if recursive_override is not None else request.recursive
 
     mode = "执行" if request.execute else "预览"
+    logger.info(
+        f"/subtitle/rename: scope={label!r} paths={len(paths)} "
+        f"execute={request.execute} force_lang={request.force_lang!r} "
+        f"refresh_jellyfin={request.refresh_jellyfin}"
+    )
     task = create_task(db, "subtitle_rename", f"{mode}重命名: {label}（{len(paths)} 路径）")
 
     background_tasks.add_task(
@@ -664,6 +685,10 @@ def download_subtitles(
         raise HTTPException(status_code=400, detail="该报告不是字幕扫描报告")
 
     mode = "预览" if request.dry_run else "执行"
+    logger.info(
+        f"/subtitle/download: report_id={request.report_id} "
+        f"languages={request.languages} dry_run={request.dry_run} limit={request.limit}"
+    )
     task = create_task(
         db,
         "subtitle_download",
@@ -803,6 +828,12 @@ def auto_fix_subtitles(
     expected_langs = request.expected_langs or settings.preferred_langs
 
     mode = "预览" if request.dry_run else "执行"
+    logger.info(
+        f"/subtitle/auto-fix: scope={label!r} paths={len(paths)} "
+        f"dry_run={request.dry_run} rename={request.rename} "
+        f"expected_langs={expected_langs} refresh_jellyfin={request.refresh_jellyfin} "
+        f"limit={request.limit}"
+    )
     task = create_task(db, "subtitle_auto_fix", f"{mode}自动修复: {label}（{len(paths)} 路径）")
 
     background_tasks.add_task(
@@ -1260,6 +1291,11 @@ def multi_search(request: MultiSearchRequest):
     每条结果带 source 字段，前端下载时根据 source 路由到对应 download endpoint。
     """
     query = (request.query or '').strip()
+    logger.info(
+        f"/subtitle/multi-search: query={query!r} imdb_id={request.imdb_id!r} "
+        f"tmdb_id={request.tmdb_id!r} year={request.year!r} "
+        f"sources={request.sources!r} cnt={request.cnt} langs={request.preferred_langs!r}"
+    )
     if len(query) < 3:
         raise HTTPException(status_code=400, detail="query 长度需 ≥ 3 字符")
 
@@ -1471,6 +1507,11 @@ def multi_search(request: MultiSearchRequest):
 
     out = [pair[0] for pair in raw_pairs[:request.cnt]]
 
+    logger.info(
+        f"/subtitle/multi-search 完成: query={query!r} sources_used={sorted(enabled)} "
+        f"results={len(out)}/{len(raw_pairs)}（含 top-{request.cnt} 截断前）"
+    )
+
     return {
         'video': str(video_path) if video_path else None,
         'video_info': {
@@ -1500,6 +1541,11 @@ class MultiDownloadRequest(BaseModel):
 @router.post("/multi-download")
 def multi_download(request: MultiDownloadRequest):
     """统一下载入口：按 source 路由到对应实现。"""
+    logger.info(
+        f"/subtitle/multi-download: source={request.source!r} sub_id={request.sub_id!r} "
+        f"video_path={request.video_path!r} overwrite={request.overwrite} "
+        f"preferred_langs={request.preferred_langs!r}"
+    )
     if request.source == 'assrt':
         # 路径翻译：前端传 jellyfin 视角路径，转成本机
         from web.backend.path_translator import translate_path_with_settings
@@ -1889,8 +1935,10 @@ def delete_annotation(req: AnnotationDelete, db: Session = Depends(get_db)):
     key = _normalize_path(req.file_path)
     existing = db.query(VideoAnnotation).filter(VideoAnnotation.file_path == key).first()
     if not existing:
+        logger.info(f"/annotations/delete: 未找到 file_path={req.file_path!r}")
         return {'deleted': False, 'reason': 'not_found'}
     db.delete(existing)
     db.commit()
+    logger.info(f"/annotations/delete: 删除 file_path={req.file_path!r}")
     return {'deleted': True}
 

@@ -74,7 +74,7 @@
       <el-main class="app-main">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
-            <keep-alive :include="['TorrentSearch']">
+            <keep-alive :include="['TorrentSearch', 'Trending']">
               <component :is="Component" />
             </keep-alive>
           </transition>

@@ -281,6 +281,10 @@ def cleanup_samples(
     """
     target = _resolve_scope(req)
     mode_label = "预览" if req.dry_run else "执行"
+    logger.warning(
+        f"/maintenance/cleanup-samples: scope={target['label']!r} "
+        f"paths={len(target['paths'])} dry_run={req.dry_run}"
+    )
     task = create_task(db, "cleanup_samples", f"{mode_label}清理 sample: {target['label']}")
     background_tasks.add_task(
         run_cleanup_samples,
@@ -536,6 +540,10 @@ def auto_identify(
     """
     target = _resolve_scope(req)
     mode_label = "预览" if req.dry_run else "执行"
+    logger.info(
+        f"/maintenance/auto-identify: scope={target['label']!r} "
+        f"paths={len(target['paths'])} dry_run={req.dry_run}"
+    )
     task = create_task(db, "auto_identify", f"{mode_label}修复识别错误: {target['label']}")
     background_tasks.add_task(run_auto_identify, task.id, target, req.dry_run)
     return TaskStartResponse(task_id=task.id, status="started",
@@ -724,6 +732,10 @@ def normalize_paths(
     """
     target = _resolve_scope(req)
     mode_label = "预览" if req.dry_run else "执行"
+    logger.info(
+        f"/maintenance/normalize-paths: scope={target['label']!r} "
+        f"paths={len(target['paths'])} dry_run={req.dry_run}"
+    )
     task = create_task(db, "normalize_paths", f"{mode_label}规范路径: {target['label']}")
     background_tasks.add_task(
         run_normalize_paths,
@@ -910,6 +922,10 @@ def run_all(
     target = _resolve_scope(mreq)
 
     label_prefix = "一键修复（测试模式）" if req.dry_run else "一键修复"
+    logger.info(
+        f"/maintenance/run-all: scope={target['label']!r} paths={len(target['paths'])} "
+        f"audio_lang={req.audio_lang!r} dry_run={req.dry_run}"
+    )
     parent = create_task(db, "run_all", f"{label_prefix}: {target['label']}")
     background_tasks.add_task(
         run_all_orchestrator,

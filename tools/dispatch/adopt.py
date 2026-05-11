@@ -299,15 +299,20 @@ def _try_adopt_one(qb, t: Dict) -> str:
     )
 
     label = '自动入流水线' if auto_ok else '挂到待审核'
+    # 完整诊断：除了 source/confidence，还带上 title/year/target_path —— 这才是出 bug 时
+    # 真正想要看到的内容（之前 "Z:/videos/movie/ ()" 那个 bug 就是因为日志只 log 了 source
+    # 但没 log title/year，事后想知道 title 是不是空只能靠猜）
     logger.info(
-        f"adopt: {name[:60]} → {label} phase={phase} (media_type={media_type}, "
+        f"adopt: {name[:60]} → {label} phase={phase} "
+        f"(media_type={media_type}, title={identified.get('title')!r}, "
+        f"year={identified.get('year')!r}, target_path={target_info.get('target_path')!r}, "
         f"confidence={confidence:.2f}, source={source})"
     )
     # 自动通过：根据起始 phase 触发对应 worker
     if auto_ok:
         try:
             if phase == PHASE_DOWNLOAD_DONE:
-                from tools.dispatch.pipeline import trigger as pipeline_trigger
+                from tools.dispatch.pipeline_worker import trigger as pipeline_trigger
                 pipeline_trigger.set()
             else:
                 from tools.dispatch.downloader_watcher import trigger as dl_trigger
@@ -333,8 +338,23 @@ def _build_review_reason(identified: Dict, target_info: Dict) -> str:
     confidence = float(identified.get('confidence') or 0.0)
     if confidence < CONFIDENCE_AUTO_THRESHOLD:
         reasons.append(f"置信度 {confidence:.2f} < {CONFIDENCE_AUTO_THRESHOLD}")
-    if not identified.get('media_type') or identified.get('media_type') == 'unknown':
+    media_type = identified.get('media_type')
+    if not media_type or media_type == 'unknown':
         reasons.append("media_type 未识别")
+    # 按 media_type 检查关键标题字段（_resolve_target 同一套规则）
+    if media_type == 'movie':
+        # movie 只强制要求 title；year 缺失允许通过，target_path 渲染时会自动收掉空括号
+        if not identified.get('title'):
+            reasons.append("标题未识别")
+    elif media_type == 'tv':
+        if not identified.get('series_name'):
+            reasons.append("剧名未识别")
+    elif media_type == 'anime':
+        if not (identified.get('series_name') or identified.get('title')):
+            reasons.append("番剧名未识别")
+    elif media_type == 'adult':
+        if not (identified.get('code') or identified.get('title')):
+            reasons.append("番号未识别")
     if not target_info.get('library_id'):
         reasons.append("目标库未配置")
     if not target_info.get('target_path'):

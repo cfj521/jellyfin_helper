@@ -1,6 +1,7 @@
 """
 媒体库管理 API
 """
+import logging
 import os
 import hashlib
 from pathlib import Path
@@ -16,7 +17,7 @@ from web.backend.api.tasks import create_task, update_task_progress, complete_ta
 from web.backend.task_restart import register_resumable
 from web.backend.path_translator import translate_path_with_settings
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -99,9 +100,11 @@ def scan_media(
     db: Session = Depends(get_db)
 ):
     """扫描媒体目录"""
+    logger.info(f"/media/scan 进入: path={request.path!r} recursive={request.recursive}")
     local_path = _resolve_local_path(request.path)
     scan_path = Path(local_path)
     if not scan_path.exists():
+        logger.warning(f"/media/scan 路径不存在: 前端={request.path!r} 翻译后={local_path!r}")
         raise HTTPException(
             status_code=400,
             detail=f"路径不存在: {local_path}（前端传入: {request.path}）",
@@ -130,10 +133,13 @@ def scan_media(
 def run_media_scan(task_id: int, path: str, recursive: bool):
     """执行媒体扫描"""
     from web.backend.database import SessionLocal
+    import time
 
+    t0 = time.time()
     # 路径翻译幂等：API 入口已翻译过的本机路径再翻一遍仍是本机路径
     # 给重启恢复任务多做一层保险（DB 里旧的 params 可能是 jellyfin 路径）
     path = _resolve_local_path(path)
+    logger.info(f"run_media_scan 开始: task={task_id} path={path!r} recursive={recursive}")
 
     VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '.ts', '.rmvb'}
     SUBTITLE_EXTENSIONS = {'.srt', '.ass', '.ssa', '.sub', '.idx', '.vtt'}
@@ -193,6 +199,13 @@ def run_media_scan(task_id: int, path: str, recursive: bool):
 
         update_task_progress(db, task_id, 90, "生成报告...")
 
+        elapsed = time.time() - t0
+        logger.info(
+            f"run_media_scan 完成: task={task_id} videos={stats['video_count']} "
+            f"subs={stats['subtitle_count']} dirs={len(stats['directories'])} "
+            f"size={stats['total_size']/1e9:.2f}GB elapsed={elapsed:.1f}s"
+        )
+
         complete_task(db, task_id, {
             "total_size": stats["total_size"],
             "total_size_gb": round(stats["total_size"] / (1024**3), 2),
@@ -207,6 +220,7 @@ def run_media_scan(task_id: int, path: str, recursive: bool):
         })
 
     except Exception as e:
+        logger.exception(f"run_media_scan 失败: task={task_id} path={path!r}")
         complete_task(db, task_id, {"error": str(e)}, success=False)
     finally:
         db.close()
@@ -252,9 +266,13 @@ def find_duplicates(
 
     use_hash=False 时退化为旧逻辑（仅按 MB 大小聚类，速度快但误报多）。
     """
+    import time
+    t0 = time.time()
+    logger.info(f"/media/duplicates 进入: path={path!r} use_hash={use_hash}")
     local_path = _resolve_local_path(path)
     scan_path = Path(local_path)
     if not scan_path.exists():
+        logger.warning(f"/media/duplicates 路径不存在: {local_path!r}")
         raise HTTPException(
             status_code=400,
             detail=f"路径不存在: {local_path}（前端传入: {path}）",
@@ -335,6 +353,12 @@ def find_duplicates(
     confirmed.sort(key=lambda x: x["size"], reverse=True)
     size_only.sort(key=lambda x: x["size"], reverse=True)
 
+    logger.info(
+        f"/media/duplicates 完成: path={local_path!r} videos={len(videos)} "
+        f"confirmed_dup={len(confirmed)} size_only={len(size_only)} "
+        f"elapsed={time.time()-t0:.1f}s"
+    )
+
     return {
         "total_videos": len(videos),
         "confirmed_duplicates": len(confirmed),
@@ -373,6 +397,8 @@ def find_duplicates_by_metadata(
     client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
     fields = "ProviderIds,ProductionYear,Path,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber"
 
+    logger.info(f"/media/duplicates-by-metadata 进入: library_id={library_id!r}")
+
     def _fetch(types: str) -> list:
         params = {
             'Recursive': 'true',
@@ -385,11 +411,15 @@ def find_duplicates_by_metadata(
         try:
             r = client._request('GET', '/Items', params=params)
             return (r or {}).get('Items', []) or []
-        except Exception:
+        except Exception as e:
+            logger.warning(f"jellyfin /Items 拉 {types} 失败: {e}")
             return []
 
     movies = _fetch('Movie')
     episodes = _fetch('Episode')
+    logger.info(
+        f"/media/duplicates-by-metadata: 拉到 movies={len(movies)} episodes={len(episodes)}"
+    )
 
     def _file_size(item: dict) -> int:
         # MediaSources[0].Size 通常就是真实文件 byte

@@ -81,8 +81,13 @@
 
             <!-- 操作按钮 -->
             <div class="actions">
-              <el-button type="primary" size="large" @click="searchTorrents">
-                <el-icon><Search /></el-icon>
+              <el-button
+                type="primary"
+                size="large"
+                :loading="searching"
+                @click="searchTorrents"
+              >
+                <template #icon><el-icon><Search /></el-icon></template>
                 搜种子下载
               </el-button>
               <el-link
@@ -271,17 +276,24 @@ const load = async () => {
   }
 }
 
-const searchTorrents = () => {
-  if (!data.value) return
-  // AniList 番剧种子优先 romaji（拉丁字母，PT 站归档标准），其次 english
-  const d = data.value
-  const name = d.title_romaji || d.title_english || d.title_native || ''
-  const yr = d.season_year
-  const q = yr ? `${name} ${yr}` : name
-  router.push({
-    path: '/resourcesearch',
-    query: { q, type: 'tv' },
-  })
+const searching = ref(false)
+const searchTorrents = async () => {
+  if (!data.value || searching.value) return
+  searching.value = true
+  try {
+    // AniList 番剧种子优先 romaji（拉丁字母，PT 站归档标准），其次 english
+    const d = data.value
+    const name = d.title_romaji || d.title_english || d.title_native || ''
+    const yr = d.season_year
+    const q = yr ? `${name} ${yr}` : name
+    // await router.push 让 spin 持续到路由切换完成，视觉反馈更明确
+    await router.push({
+      path: '/resourcesearch',
+      query: { q, type: 'tv' },
+    })
+  } finally {
+    searching.value = false
+  }
 }
 
 const goAniList = (id) => {

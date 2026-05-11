@@ -65,6 +65,11 @@ def push_download(
 
     分析由 scheduler 的 analyzer 后台跑：高置信自动入流水线，低置信落 needs_review。
     """
+    src_hint = (request.magnet or request.torrent_url or '')[:120]
+    logger.info(
+        f"/pipeline/download POST: title={request.title!r} src={src_hint!r} "
+        f"category={request.category!r} user_hint={request.user_hint_media_type!r}"
+    )
     if not settings.qbittorrent_host or not settings.qbittorrent_username:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     if not request.magnet and not request.torrent_url:
@@ -247,6 +252,7 @@ def list_downloads(
 def pause_download(torrent_hash: str):
     if not settings.qbittorrent_host:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
+    logger.info(f"/downloads/pause: hash={torrent_hash[:16]}..")
     return {"ok": _qb().pause(torrent_hash)}
 
 
@@ -254,6 +260,7 @@ def pause_download(torrent_hash: str):
 def resume_download(torrent_hash: str):
     if not settings.qbittorrent_host:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
+    logger.info(f"/downloads/resume: hash={torrent_hash[:16]}..")
     return {"ok": _qb().resume(torrent_hash)}
 
 
@@ -261,6 +268,10 @@ def resume_download(torrent_hash: str):
 def delete_download(torrent_hash: str, delete_files: bool = False):
     if not settings.qbittorrent_host:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
+    # 删种子：delete_files=True 时连本地文件一起删，是潜在数据丢失点，升 WARNING
+    logger.warning(
+        f"/downloads/delete: hash={torrent_hash[:16]}.. delete_files={delete_files}"
+    )
     return {"ok": _qb().delete(torrent_hash, delete_files=delete_files)}
 
 
@@ -279,6 +290,15 @@ def bulk_action(request: BulkActionRequest):
     client = _qb()
     client.login()
     a = request.action.lower()
+    # 批量操作：delete 标 WARNING（破坏性 + delete_files 可能带）；其它 INFO
+    log_msg = (
+        f"/downloads/bulk: action={a!r} count={len(request.hashes)}"
+        + (f" delete_files={request.delete_files}" if a == 'delete' else '')
+    )
+    if a == 'delete':
+        logger.warning(log_msg)
+    else:
+        logger.info(log_msg)
     ok = False
     if a == 'pause':
         ok = all(client.pause(h) for h in request.hashes)
@@ -299,11 +319,13 @@ def bulk_action(request: BulkActionRequest):
 
 @router.post("/downloads/{torrent_hash}/recheck")
 def recheck(torrent_hash: str):
+    logger.info(f"/downloads/recheck: hash={torrent_hash[:16]}..")
     return {"ok": _qb().recheck(torrent_hash)}
 
 
 @router.post("/downloads/{torrent_hash}/reannounce")
 def reannounce(torrent_hash: str):
+    logger.info(f"/downloads/reannounce: hash={torrent_hash[:16]}..")
     return {"ok": _qb().reannounce(torrent_hash)}
 
 
@@ -313,6 +335,7 @@ class ForceStartRequest(BaseModel):
 
 @router.post("/downloads/{torrent_hash}/force-start")
 def force_start(torrent_hash: str, request: ForceStartRequest):
+    logger.info(f"/downloads/force-start: hash={torrent_hash[:16]}.. force={request.force}")
     return {"ok": _qb().set_force_start(torrent_hash, force=request.force)}
 
 
@@ -342,6 +365,9 @@ class SpeedLimitRequest(BaseModel):
 
 @router.post("/transfer-info/speed-limit")
 def set_speed_limit(request: SpeedLimitRequest):
+    logger.info(
+        f"/transfer-info/speed-limit: download={request.download_limit} upload={request.upload_limit} (bytes/s)"
+    )
     client = _qb()
     results = {}
     if request.download_limit is not None:
@@ -353,4 +379,5 @@ def set_speed_limit(request: SpeedLimitRequest):
 
 @router.post("/transfer-info/toggle-alt-speed")
 def toggle_alt_speed():
+    logger.info("/transfer-info/toggle-alt-speed: 切换备用限速")
     return {"ok": _qb().toggle_alt_speed_limits()}

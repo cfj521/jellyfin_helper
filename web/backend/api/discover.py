@@ -357,6 +357,7 @@ def _normalize_detail(raw: dict, media_type: str) -> dict:
 @router.post("/cache/clear")
 def clear_tmdb_cache():
     """清除推荐/流行列表的内存缓存"""
+    logger.warning("/discover/cache/clear: 清除 TMDB/Trakt/AniList/豆瓣 列表缓存（用户主动）")
     _cache_clear()
     return {"ok": True}
 
@@ -393,6 +394,112 @@ def get_english_title(media_type: str, tmdb_id: int):
     # 即使是 None 也写缓存，避免反复打 TMDB（缺英文翻译的条目存在）
     _kv_set(_TITLE_EN_SCOPE, cache_key, {"english_title": en_title})
     return {"english_title": en_title, "cached": False}
+
+
+# IMDb→TMDB 临时失败的短 TTL（5 min）：TMDB 502 多为分钟级故障，30 天 None 会把临时态钉死
+_TITLE_EN_FAIL_TTL = 5 * 60
+
+# 同 imdb_id 的并发请求短路：第一个进来的查 TMDB，其它的等结果（threading lock 避开 storm）
+import threading as _threading
+_imdb_lookup_locks: Dict[str, _threading.Lock] = {}
+_imdb_lookup_locks_guard = _threading.Lock()
+
+
+def _get_imdb_lock(imdb_id: str) -> _threading.Lock:
+    with _imdb_lookup_locks_guard:
+        lk = _imdb_lookup_locks.get(imdb_id)
+        if lk is None:
+            lk = _threading.Lock()
+            _imdb_lookup_locks[imdb_id] = lk
+        return lk
+
+
+@router.get("/title-en-by-imdb")
+def get_english_title_by_imdb(imdb_id: str):
+    """
+    根据 IMDb ID → TMDB find → 英文标题。豆瓣条目专用：豆瓣页有 IMDb ID 但没 TMDB ID，
+    搜种子时直接用豆瓣中文标题命中率极低。
+
+    流程：/find/{imdb_id}?external_source=imdb_id → movie_results/tv_results 取第一条
+        → get_english_title(media_type, tmdb_id)
+    缓存策略：
+      - 成功 / 真"TMDB 没收录"   → 30 天（_TITLE_EN_TTL）
+      - 临时失败（TMDB 502 等）  → 5 分钟（_TITLE_EN_FAIL_TTL）
+    并发：同 imdb_id 第一个走 TMDB，其它人等结果（防 storm）
+    """
+    if not imdb_id or not imdb_id.startswith('tt'):
+        raise HTTPException(status_code=400, detail="imdb_id 必须以 tt 开头")
+
+    cache_key = f"imdb:{imdb_id}"
+
+    def _strip_internal(d: dict) -> dict:
+        """剥掉 cache_store 注入的 _cached* 元字段 + transient_failure 标志 → 给前端干净 payload"""
+        return {k: v for k, v in d.items() if not k.startswith('_') and k != 'transient_failure'}
+
+    def _read_cached() -> Optional[Dict]:
+        """读缓存：成功记录用 30 天 TTL；带 transient_failure 标志的失败记录用短 TTL（5 min）"""
+        cached = _kv_get(_TITLE_EN_SCOPE, cache_key, ttl_seconds=_TITLE_EN_TTL)
+        if not isinstance(cached, dict) or 'english_title' not in cached:
+            return None
+        if cached.get('transient_failure'):
+            # cache_store.get_cached 自动注入 _cache_age_seconds（int 秒）
+            age = cached.get('_cache_age_seconds') or 0
+            if age > _TITLE_EN_FAIL_TTL:
+                return None   # 临时失败已过短 TTL → 视为未命中，下面重新查
+        return cached
+
+    hit = _read_cached()
+    if hit is not None:
+        return {**_strip_internal(hit), "cached": True}
+
+    if not settings.tmdb_api_key:
+        return {"english_title": None, "tmdb_id": None, "media_type": None, "cached": False}
+
+    # 并发短路：拿到锁的查 TMDB，其它人 block；锁释放后第二个再读一次缓存就直接命中
+    lock = _get_imdb_lock(imdb_id)
+    with lock:
+        hit = _read_cached()
+        if hit is not None:
+            return {**_strip_internal(hit), "cached": True}
+
+        from common.tmdb_client import TMDBClient
+        client = TMDBClient(settings.tmdb_api_key, delay=0.0, language='en-US')
+        find_data = client._request(f'/find/{imdb_id}', {'external_source': 'imdb_id'})
+
+        # find_data is None → TMDB 502/503/网络炸（_request 已重试 3 次仍失败）→ 临时态，短缓存
+        transient = (find_data is None)
+
+        tmdb_id_resolved = None
+        media_type = None
+        if find_data:
+            # 优先电影，其次剧集（豆瓣 IMDb 链接到 movie 的比例最高）
+            for it in (find_data.get('movie_results') or []):
+                tmdb_id_resolved = it.get('id')
+                media_type = 'movie'
+                break
+            if not tmdb_id_resolved:
+                for it in (find_data.get('tv_results') or []):
+                    tmdb_id_resolved = it.get('id')
+                    media_type = 'tv'
+                    break
+
+        en_title = None
+        if tmdb_id_resolved and media_type:
+            en_title = client.get_english_title(media_type, tmdb_id_resolved)
+            # tmdb_id 拿到了但 translations 返回 None → 粗判仍是 TMDB 临时故障，短缓存
+            if en_title is None and not transient:
+                transient = True
+
+        payload = {
+            "english_title": en_title,
+            "tmdb_id": tmdb_id_resolved,
+            "media_type": media_type,
+        }
+        if transient:
+            payload['transient_failure'] = True
+            logger.info(f"TMDB find/translations 临时失败 imdb={imdb_id}，5 min 内短路")
+        _kv_set(_TITLE_EN_SCOPE, cache_key, payload)
+        return {**_strip_internal(payload), "cached": False}
 
 
 # TMDB 风格映射缓存（id → 中文名）。/genre/movie/list 与 /genre/tv/list 各拉一次缓存 30 天。
@@ -641,6 +748,119 @@ def get_anilist(
 # 豆瓣片单
 # ============================================================================
 
+# ---- 豆瓣列表项的 detail 懒填充 + 后台预热 ----
+# 列表页（特别是 /coming）只有标题/类型/想看数，无海报无评分。
+# 每条 douban_id 进 fetch_subject_summary 可以拿到全套（海报、评分、导演、imdb_id、summary），
+# 这些已在 _DOUBAN_DETAIL_SCOPE 里 30 天缓存（用户每点一次"简介"/"搜种子"就顺手填一条）。
+# 这里做两件事：
+#   1) 列表响应前合并已缓存的 detail（idempotent，重复调用安全）
+#   2) 没缓存过的 douban_id 推到全局队列，单 worker 线程串行消费（写入 detail 缓存）
+# 下次刷新或几分钟后重开同一列表，海报/评分就齐了。
+#
+# 用"单消费者 + queue"而不是每次起新线程：
+#   多线程并发会让 douban 同时接到 N 倍 RPS（每个 client 独立 rate_limit），
+#   触发反爬 → 大批量请求拿到 PoW 挑战页 → 实际成功的没几个。
+#   单线程消费保证全局速率严格 = douban_request_delay
+import queue as _queue
+
+_douban_prefetch_queue: '_queue.Queue[str]' = _queue.Queue()
+_douban_prefetch_seen: set = set()         # 全局已入队/在跑的 douban_id（避免重复入队）
+_douban_prefetch_seen_lock = _threading.Lock()
+_douban_prefetch_worker_started = False    # 单 worker 线程的启动 flag
+
+
+def _enrich_items_from_detail_cache(items: List[Dict]) -> List[str]:
+    """合并 douban_detail 缓存到 list items；返回还没缓存的 douban_id 列表。
+    仅在 item 自身字段缺失时用 detail 的值（保留列表语义优先级）。"""
+    uncached: List[str] = []
+    for it in items:
+        did = str(it.get('douban_id') or '').strip()
+        if not did:
+            continue
+        cached = _kv_get(_DOUBAN_DETAIL_SCOPE, did, ttl_seconds=_DOUBAN_DETAIL_TTL)
+        if not isinstance(cached, dict) or not cached.get('summary'):
+            uncached.append(did)
+            continue
+        if not it.get('poster_url') and cached.get('poster_url'):
+            it['poster_url'] = cached['poster_url']
+        if it.get('rating') is None and cached.get('rating') is not None:
+            it['rating'] = cached['rating']
+        # /coming 用 votes 存"想看人数"（带 votes_label='想看'）；detail 的 votes 是"评价"
+        # 语义不同 → 仅在没有 votes_label 时（即非 /coming）才用 detail 的 votes 兜底
+        if not it.get('votes_label') and it.get('votes') is None and cached.get('votes') is not None:
+            it['votes'] = cached['votes']
+        if not it.get('director') and cached.get('director'):
+            it['director'] = cached['director']
+        if not it.get('imdb_id') and cached.get('imdb_id'):
+            it['imdb_id'] = cached['imdb_id']
+    return uncached
+
+
+def _douban_prefetch_consumer():
+    """全局单消费者：从队列里逐个吃 douban_id，全局共享一个 DoubanClient
+    （rate_limit + PoW cookie 都跟着 client 走 → 严格 douban_request_delay 全局限速）。
+    线程永不退出（队列空时阻塞 .get）"""
+    from common.douban_client import DoubanClient
+    client = DoubanClient(
+        user_agent=settings.douban_user_agent,
+        delay=settings.douban_request_delay,
+    )
+    logger.info("豆瓣详情预取消费者线程启动")
+    while True:
+        try:
+            did = _douban_prefetch_queue.get()
+        except Exception as e:
+            logger.warning(f"豆瓣预取队列读取异常：{e}")
+            continue
+        try:
+            # 再读一次缓存：可能用户主动点"简介"/"搜种子"提前填上了
+            cached = _kv_get(_DOUBAN_DETAIL_SCOPE, did, ttl_seconds=_DOUBAN_DETAIL_TTL)
+            if isinstance(cached, dict) and cached.get('summary'):
+                continue
+            detail = client.fetch_subject_summary(did)
+            if detail and detail.get('summary'):
+                _kv_set(_DOUBAN_DETAIL_SCOPE, did, detail)
+                logger.debug(f"豆瓣详情预取写入缓存 {did}")
+            else:
+                logger.warning(f"豆瓣详情预取 {did} 拿到空 detail（反爬或条目失效）")
+        except Exception as e:
+            logger.warning(f"豆瓣详情预取 {did} 失败: {e}")
+        finally:
+            with _douban_prefetch_seen_lock:
+                _douban_prefetch_seen.discard(did)
+            _douban_prefetch_queue.task_done()
+
+
+def _ensure_prefetch_worker():
+    """单次启动消费者线程，模块级。线程是 daemon，进程退出时自动收。"""
+    global _douban_prefetch_worker_started
+    if _douban_prefetch_worker_started:
+        return
+    with _douban_prefetch_seen_lock:
+        if _douban_prefetch_worker_started:
+            return
+        _douban_prefetch_worker_started = True
+        _threading.Thread(
+            target=_douban_prefetch_consumer,
+            daemon=True,
+            name='douban-prefetch-consumer',
+        ).start()
+
+
+def _kick_douban_prefetch(douban_ids: List[str]):
+    """把 douban_ids 推到全局预取队列，已在队中的不重复推。"""
+    if not douban_ids:
+        return
+    _ensure_prefetch_worker()
+    with _douban_prefetch_seen_lock:
+        new_ids = [d for d in douban_ids if d not in _douban_prefetch_seen]
+        _douban_prefetch_seen.update(new_ids)
+    for d in new_ids:
+        _douban_prefetch_queue.put(d)
+    if new_ids:
+        logger.info(f"豆瓣详情预取入队 {len(new_ids)} 条（队列总深度={_douban_prefetch_queue.qsize()}）")
+
+
 @router.get("/douban-lists")
 def get_douban_lists(
     doulist_id: Optional[str] = None,
@@ -650,7 +870,7 @@ def get_douban_lists(
     """
     豆瓣 doulist 精选片单。
     不传 doulist_id → 返回 settings.douban_lists.lists 的元数据列表（前端先选）。
-    传 doulist_id → 拉该片单第 page 页（豆瓣每页固定 25 条）。
+    传 doulist_id → 拉该片单第 page 页。
     """
     cfg = settings.douban_lists
     if not cfg.enabled:
@@ -664,10 +884,19 @@ def get_douban_lists(
     page_size = 25  # 豆瓣 doulist 固定一页 25 条
     cache_key = f"{doulist_id}:p{page}"
     ttl = max(1, cfg.cache_days) * 86400      # 默认 3 天，反爬严 + 内容变化慢
+
+    def _finalize(result_obj: Dict, from_cache: bool) -> Dict:
+        """统一收尾：合并 detail 缓存 + 起后台预取 + 加 cached 标志"""
+        uncached = _enrich_items_from_detail_cache(result_obj.get('items', []))
+        if uncached:
+            _kick_douban_prefetch(uncached)
+        return {**result_obj, "cached": from_cache}
+
     if not refresh:
         cached = _strip_cache_meta(_kv_get(_DOUBAN_SCOPE, cache_key, ttl_seconds=ttl))
         if cached is not None:
-            return {**cached, "cached": True}
+            # 缓存命中也走一遍 enrich —— 同一列表第二次访问时，期间预取成果就反映出来
+            return _finalize(cached, from_cache=True)
 
     from common.douban_client import DoubanClient
     # 复用 douban 段的 user_agent + delay 配置
@@ -675,7 +904,23 @@ def get_douban_lists(
         user_agent=settings.douban_user_agent,
         delay=settings.douban_request_delay,
     )
-    items = client.fetch_doulist(doulist_id, start=(page - 1) * page_size, limit=page_size)
+    start = (page - 1) * page_size
+    # 按 doulist_id 形态分派：
+    #   纯数字       → 经典 /doulist/<id>/ 片单
+    #   chart        → /chart 电影排行榜
+    #   nowplaying   → /cinema/nowplaying/ 的 #nowplaying section（~19 条，字段全）
+    #   upcoming     → /coming 独立页（~30+ 条，无海报评分 → 靠 enrich + 后台预热补全）
+    # 这样老配置完全兼容；新增的 source 在配置里用字面字符串作为"id"
+    if doulist_id == 'chart':
+        items = client.fetch_chart(start=start, limit=page_size)
+    elif doulist_id == 'nowplaying':
+        items = client.fetch_nowplaying(start=start, limit=page_size)
+    elif doulist_id == 'upcoming':
+        # /coming 单页 ~30-50 条全在一张 HTML 上，没有真正的分页（start>0 直接返空）
+        # 放大 limit 把整页捞下来，has_more 字段会自然为 false（page_size 阈值）
+        items = client.fetch_coming(start=start, limit=100)
+    else:
+        items = client.fetch_doulist(doulist_id, start=start, limit=page_size)
 
     # 找到对应配置项的元信息（name / media_type）
     meta = next((d for d in cfg.lists if str(d.get('doulist_id')) == str(doulist_id)), None)
@@ -695,7 +940,7 @@ def get_douban_lists(
     # 豆瓣页面拉空（很可能是反爬）就不要写缓存，避免长 TTL 把空结果钉死
     if items:
         _kv_set(_DOUBAN_SCOPE, cache_key, result)
-    return {**result, "cached": False}
+    return _finalize(result, from_cache=False)
 
 
 _ANILIST_DETAIL_SCOPE = 'anilist_detail'
