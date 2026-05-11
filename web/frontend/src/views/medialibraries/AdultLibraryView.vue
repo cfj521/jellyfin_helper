@@ -569,18 +569,20 @@ const reload = async () => {
       loading.value = false
       _loadMoreBusy = false
       writeDebug()
+      // 首屏 1.5s 后无条件预取一批（详见 LibraryDetail 同名 setTimeout 注释）
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
-        prefetchIfNeeded()
+        prefetchIfNeeded(/* force */ true)
       }, 1500)
     }
   }
 }
 
 // 后台预取：池子剩余不足 2 步长 → 拉下一批；自递归直到足够
-const prefetchIfNeeded = async () => {
+// force=true：跳过 buffer 阈值（首次 1.5s 延迟预取专用，保证池子一定能长起来）
+const prefetchIfNeeded = async (force = false) => {
   if (loadingMore.value || !hasMore.value) return
-  if (items.value.length - wanted.value >= stepSize() * 2) return
+  if (!force && items.value.length - wanted.value >= stepSize() * 2) return
   const seq = reqSeq
   loadingMore.value = true
   try {
