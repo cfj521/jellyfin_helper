@@ -607,8 +607,7 @@ const prefetchIfNeeded = async (force = false) => {
   }
 }
 
-// loadMore：wanted = max(wanted, 滚动位置目标值)
-// 旧逻辑 wanted += stepSize 在快速滚动时累加过头，新逻辑按当前滚动位置算 target，只增不减
+// 详见 LibraryDetail 同名块：rect-walk 实测，跟 debug 面板共享单一来源
 const loadMore = () => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
@@ -616,18 +615,62 @@ const loadMore = () => {
   if (target > wanted.value) {
     wanted.value = target
     prefetchIfNeeded()
+  } else {
+    prefetchIfNeeded()
   }
 }
 
+const _currentScrollRow = () => {
+  const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
+  if (!scroller) return 0
+  const scrollerRect = scroller.getBoundingClientRect()
+  let viewportTop = scrollerRect.top
+  if (viewMode.value === 'list') {
+    const header = document.querySelector('.adult-lib-view .el-table__header-wrapper')
+    if (header) viewportTop += header.offsetHeight
+  }
+  const viewportBottom = scrollerRect.bottom
+
+  let total = 0
+  if (viewMode.value === 'list') {
+    const bodyEl = document.querySelector('.adult-lib-view .el-table__body')
+    const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
+    let sawVisible = false
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect()
+      if (rect.bottom <= viewportTop) {
+        if (!sawVisible) total++
+      } else if (rect.top < viewportBottom) {
+        sawVisible = true
+        total++
+      } else {
+        break
+      }
+    }
+  } else {
+    const gridEl = document.querySelector('.adult-lib-view .grid-view')
+    const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
+    if (!cards.length) return 0
+    let firstColLeft = null
+    for (const c of cards) {
+      const r = c.getBoundingClientRect()
+      if (r.height > 0) { firstColLeft = r.left; break }
+    }
+    for (const c of cards) {
+      const rect = c.getBoundingClientRect()
+      if (rect.height < 1) continue
+      if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
+      if (rect.bottom <= viewportTop) total++
+      else if (rect.top < viewportBottom) total++
+      else break
+    }
+  }
+  return total
+}
+
 const _computeWantedFromScroll = () => {
-  const el = gridViewRef.value
-  if (!el) return wanted.value + stepSize()
-  const rect = el.getBoundingClientRect()
-  const scrolledPast = Math.max(0, -rect.top)
-  const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 80) : 80
-  const scrolledRows = Math.floor(scrolledPast / rowH)
-  const viewportRows = Math.ceil(window.innerHeight / rowH)
-  return (scrolledRows + viewportRows + 1) * cardsPerRow()
+  const row = _currentScrollRow()
+  return Math.max(1, row + 1) * cardsPerRow()
 }
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
@@ -680,62 +723,7 @@ const writeDebug = () => {
 
 // 详见 LibraryDetail.vue 同名注释
 const updateScrollRow = () => {
-  const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
-  if (!scroller) {
-    debugInfo.scrollRow = 0
-    return
-  }
-  const scrollerRect = scroller.getBoundingClientRect()
-  let viewportTop = scrollerRect.top
-  if (viewMode.value === 'list') {
-    const header = document.querySelector('.adult-lib-view .el-table__header-wrapper')
-    if (header) viewportTop += header.offsetHeight
-  }
-  const viewportBottom = scrollerRect.bottom
-
-  if (viewMode.value === 'list') {
-    const bodyEl = document.querySelector('.adult-lib-view .el-table__body')
-    const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
-    let scrolledRows = 0
-    let visibleRows = 0
-    let sawVisible = false
-    for (const r of rows) {
-      const rect = r.getBoundingClientRect()
-      if (rect.bottom <= viewportTop) {
-        if (!sawVisible) scrolledRows++
-      } else if (rect.top >= viewportBottom) {
-        break
-      } else {
-        sawVisible = true
-        visibleRows++
-      }
-    }
-    debugInfo.scrollRow = scrolledRows + visibleRows
-  } else {
-    // 详见 LibraryDetail 同名块：按第一列卡迭代，过滤未排版的卡
-    const gridEl = document.querySelector('.adult-lib-view .grid-view')
-    const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    if (!cards.length) {
-      debugInfo.scrollRow = 0
-    } else {
-      let firstColLeft = null
-      for (const c of cards) {
-        const r = c.getBoundingClientRect()
-        if (r.height > 0) { firstColLeft = r.left; break }
-      }
-      let scrolled = 0
-      let visible = 0
-      for (const c of cards) {
-        const rect = c.getBoundingClientRect()
-        if (rect.height < 1) continue
-        if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
-        if (rect.bottom <= viewportTop) scrolled++
-        else if (rect.top < viewportBottom) visible++
-        else break
-      }
-      debugInfo.scrollRow = scrolled + visible
-    }
-  }
+  debugInfo.scrollRow = _currentScrollRow()
   writeDebug()
 }
 
