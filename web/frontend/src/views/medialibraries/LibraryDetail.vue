@@ -1902,10 +1902,11 @@ const loadItems = async () => {
     if (seq === reqSeq) {
       itemsLoading.value = false
       _loadMoreBusy = false  // 释放渲染锁
-      // 首屏 1.5s 后启动后台预取（让首批先稳定渲染；用户切库会取消这个 timer）
+      // 首屏 1.5s 后无条件预取一批（force=true 跳过 buffer 阈值，保证池子能长起来）
+      // 列表模式下 wanted 较小 (~11)、buffer 差值刚好压在阈值边缘，不强制就可能漏掉这次预取
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
-        prefetchIfNeeded()
+        prefetchIfNeeded(/* force */ true)
       }, 1500)
     }
   }
@@ -1914,9 +1915,10 @@ const loadItems = async () => {
 // 后台预取：数据池剩余不足 2 个 wanted 步长 → 拉下一批补给；不阻塞 wanted 推进
 // 设计目标：用户滚到末行时，items 池里已经有数据；首批后立即放出，看不到骨架占位时间
 // 自递归：上游一批数量小、用户滚得快 → 一次预取不够时继续预取
-const prefetchIfNeeded = async () => {
+// force=true：跳过 buffer 阈值检查（首次 1.5s 延迟预取专用，保证 items 池一定能长起来）
+const prefetchIfNeeded = async (force = false) => {
   if (loadingMore.value || !hasMore.value) return
-  if (items.value.length - wanted.value >= stepSize() * 2) return
+  if (!force && items.value.length - wanted.value >= stepSize() * 2) return
   const seq = reqSeq
   loadingMore.value = true
   try {
