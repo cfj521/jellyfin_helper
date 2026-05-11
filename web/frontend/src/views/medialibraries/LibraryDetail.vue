@@ -2045,7 +2045,14 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
-  const viewportH = scroller.clientHeight
+  // viewportH = 真正能容纳"行"的区域高度
+  //   grid：整个 card-body
+  //   list：card-body 减去 el-table 的表头高度（header-wrapper 不放数据行）
+  let viewportH = scroller.clientHeight
+  if (viewMode.value === 'list') {
+    const header = document.querySelector('.items-card .el-table__header-wrapper')
+    if (header) viewportH = Math.max(0, viewportH - header.offsetHeight)
+  }
 
   // 实测行高
   //   grid：用第二张卡（首张卡海报常常还在 lazy load，offsetHeight 可能偏小）
@@ -2069,7 +2076,8 @@ const updateScrollRow = () => {
     : scroller.scrollTop  // 兜底
 
   const scrolledRows = Math.floor(offset / rowH)
-  const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
+  // visibleRows 用 floor：只数"完整看到的行"，避免半行被算成 +1
+  const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
   debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }
