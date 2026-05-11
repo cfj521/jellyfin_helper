@@ -974,7 +974,7 @@ const FETCH_BATCH = 30
 const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模型）
 // reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
 let reqSeq = 0
-let prefetchTimer = null                // 首屏后延迟启动后台预取的 timer，reset 时取消
+// 首批渲染后直接调 prefetchIfNeeded（async 不阻塞），不再用 setTimeout 延迟
 // 触发判定：window scroll capture 抓所有滚动事件（.app-main / .el-card__body / window 都能 catch），
 // 然后用 sentinel 的 getBoundingClientRect() 看它离视口底部多近 —— 这个值不在乎谁是真正的滚动容器，
 // 永远反映"sentinel 当前显示在视口的哪个位置"
@@ -1877,7 +1877,6 @@ const formatCacheAge = (seconds) => {
 // ============ 数据池 + wanted 双层加载模型（对齐 Trending.vue）============
 // reset = 清池 + 重置 wanted = initialLimit() + 拉首批；filter 变 / 切库 / 强刷都走这条
 const loadItems = async () => {
-  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   const seq = ++reqSeq
   itemsLoading.value = true
   items.value = []
@@ -1905,12 +1904,9 @@ const loadItems = async () => {
     if (seq === reqSeq) {
       itemsLoading.value = false
       _loadMoreBusy = false  // 释放渲染锁
-      // 首屏 1.5s 后无条件预取一批（force=true 跳过 buffer 阈值，保证池子能长起来）
-      // 列表模式下 wanted 较小 (~11)、buffer 差值刚好压在阈值边缘，不强制就可能漏掉这次预取
-      prefetchTimer = setTimeout(() => {
-        prefetchTimer = null
-        prefetchIfNeeded(/* force */ true)
-      }, 1500)
+      // 首批渲染完立刻无条件预取一批；prefetchIfNeeded 自己是 async，不阻塞首批 DOM 渲染
+      // force=true 跳过 buffer 阈值（list 模式 wanted 太小会压在阈值边缘漏掉这次预取）
+      prefetchIfNeeded(/* force */ true)
     }
   }
 }
@@ -2475,7 +2471,6 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 onUnmounted(() => {
   stopSubtitlePoll()
-  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
   // 离开本页时关掉侧边栏的 debug 显示

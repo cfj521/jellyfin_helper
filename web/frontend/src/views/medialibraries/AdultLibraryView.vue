@@ -463,7 +463,7 @@ const wanted = ref(0)
 const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示行
 const gridViewRef = ref(null)
 let reqSeq = 0
-let prefetchTimer = null
+// 首批渲染后直接调 prefetchIfNeeded（async 不阻塞），不再用 setTimeout 延迟
 // 触发判定：用 sentinel 的 boundingClientRect 判定，与 LibraryDetail 同款
 // 渲染锁（busy flag）替代时间节流，避免快滚时容器到底 + DOM 还没更新造成的"必须往上再向下"卡顿
 let _loadMoreBusy = false
@@ -542,7 +542,6 @@ const loadStats = async () => {
 // ============ 数据池 + wanted 双层加载模型 ============
 // reload = 重置 + 首批；filter / library 切换 / resetAndRescan 都走这条
 const reload = async () => {
-  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   const seq = ++reqSeq
   loading.value = true
   items.value = []
@@ -569,11 +568,8 @@ const reload = async () => {
       loading.value = false
       _loadMoreBusy = false
       writeDebug()
-      // 首屏 1.5s 后无条件预取一批（详见 LibraryDetail 同名 setTimeout 注释）
-      prefetchTimer = setTimeout(() => {
-        prefetchTimer = null
-        prefetchIfNeeded(/* force */ true)
-      }, 1500)
+      // 首批渲染后立刻预取（async 不阻塞），不再延迟
+      prefetchIfNeeded(/* force */ true)
     }
   }
 }
@@ -1331,7 +1327,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
   debugInfo.enabled = false
