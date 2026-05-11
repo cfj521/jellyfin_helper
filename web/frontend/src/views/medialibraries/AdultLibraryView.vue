@@ -849,12 +849,15 @@ const viewMode = useViewMode('adult-library', 'list')
 const GRID_CARD_W = 280
 const GRID_CARD_GAP = 18
 const GRID_POSTER_H = 158
+const GRID_VIEW_PADDING = 18
 
+// 见 LibraryDetail.vue 同名函数的说明：clientWidth 含 grid-view 自身 padding，需扣掉再算 auto-fill
 const cardsPerRow = () => {
   if (viewMode.value !== 'grid') return 1
   const el = gridViewRef.value
-  const containerW = el ? el.clientWidth : Math.max(0, window.innerWidth - 220 - 40)
-  return Math.max(1, Math.floor((containerW + GRID_CARD_GAP) / (GRID_CARD_W + GRID_CARD_GAP)))
+  const clientW = el ? el.clientWidth : Math.max(0, window.innerWidth - 220 - 40 - 40)
+  const contentW = Math.max(0, clientW - 2 * GRID_VIEW_PADDING)
+  return Math.max(1, Math.floor((contentW + GRID_CARD_GAP) / (GRID_CARD_W + GRID_CARD_GAP)))
 }
 
 const stepSize = () => {
