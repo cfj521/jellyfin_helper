@@ -14,6 +14,8 @@
       :src="src"
       fit="cover"
       lazy
+      loading="lazy"
+      decoding="async"
       class="poster-img"
     >
       <template #error>

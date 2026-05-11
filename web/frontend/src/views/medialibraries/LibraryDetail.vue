@@ -247,6 +247,8 @@
                 :alt="row.name"
                 fit="cover"
                 lazy
+                loading="lazy"
+                decoding="async"
                 class="grid-poster"
               >
                 <template #error>
@@ -341,6 +343,8 @@
                   :alt="row.name"
                   fit="cover"
                   lazy
+                  loading="lazy"
+                  decoding="async"
                   :class="['poster-img', `poster-img--${(row.type || '').toLowerCase()}`]"
                 >
                   <template #error>
@@ -3073,6 +3077,10 @@ onUnmounted(() => {
     overflow: hidden;
     cursor: pointer;
     transition: transform 0.15s ease, box-shadow 0.15s ease;
+    // 跳过视口外卡片的渲染 / 图片解码，滚动期间主线程压力骤降
+    // contain-intrinsic-size 给浏览器一个估算（卡宽 280 + 卡高约 220），避免布局抖动
+    content-visibility: auto;
+    contain-intrinsic-size: #{$grid-card-w} 220px;
 
     &:hover {
       transform: translateY(-2px);

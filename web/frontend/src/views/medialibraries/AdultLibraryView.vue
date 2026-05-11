@@ -1616,6 +1616,9 @@ onUnmounted(() => {
     cursor: pointer;
     transition: transform 0.15s ease, box-shadow 0.15s ease;
     border: 1px solid #f1f5f9;
+    // 跳过视口外卡片的渲染（详见 LibraryDetail 同名块注释）
+    content-visibility: auto;
+    contain-intrinsic-size: #{$grid-card-w} 240px;
 
     &:hover {
       transform: translateY(-2px);
