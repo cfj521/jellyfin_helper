@@ -1818,10 +1818,9 @@ const loadItems = async () => {
     if (seq === reqSeq) {
       itemsLoading.value = false
       // observer 可能还在观察旧 sentinel；DOM 稳定后重挂一次
+      // 不要在这里主动触发 loadMore —— 让用户实际滚动后再加载（无限滚动的本意）
       await nextTick()
       _observeSentinel()
-      // 容器没被首批填满（或用户已滚到底）→ 主动触发一次 loadMore
-      _maybeAutoTrigger()
     }
   }
 }
@@ -1850,9 +1849,7 @@ const loadMore = async () => {
     if (seq === reqSeq) {
       loadingMore.value = false
       await nextTick()
-      _observeSentinel()  // 重新挂观察（observer 必 fire 首次状态，下方有 skip 保护）
-      // 新批数据如果太少没让 sentinel 离开视口 → 继续触发下一批
-      _maybeAutoTrigger()
+      _observeSentinel()  // 重新挂观察（observer 必 fire 首次状态，skipNextIntersection 跳过它）
     }
   }
 }
@@ -1902,21 +1899,6 @@ const _observeSentinel = () => {
   if (!observer || !sentinelRef.value) return
   skipNextIntersection = true  // observe() 会立刻 fire 一次当前状态，跳过它
   observer.observe(sentinelRef.value)
-}
-
-// 防御性补充：observe() 的首次 fire 被 skipNextIntersection 吞掉了，
-// 但首批加载后用户可能直接处于"能看到 sentinel"的滚动位置（容器短 / 已滚到底）。
-// 这种情况后续不会再有 intersection 状态变化，loadMore 不会被触发。
-// 这个 helper 用 getBoundingClientRect 显式检测一下，命中就主动 loadMore 一次。
-const _maybeAutoTrigger = () => {
-  if (itemsLoading.value || loadingMore.value || !hasMore.value) return
-  if (!sentinelRef.value) return
-  const rect = sentinelRef.value.getBoundingClientRect()
-  const viewportBottom = window.innerHeight || document.documentElement.clientHeight
-  // rootMargin=200 的等效检测：sentinel 顶端在视口底部以下 200px 内就触发
-  if (rect.top - viewportBottom < 200) {
-    loadMore()
-  }
 }
 
 /**
