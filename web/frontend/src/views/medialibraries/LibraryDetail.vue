@@ -1142,20 +1142,16 @@ const stepSize = () => {
 //   content 高度必须 > usableH + ROOT_MARGIN_PX + 余量
 // 否则 sentinel 一开始就处于 IO 的 rootMargin 虚拟视口内，首次 observe fire 被
 // skipNextIntersection 吞掉后，state 不变化就再也不触发 loadMore → 滚不动。
-// Trending 没踩这个坑是因为卡片 ~520px 高，visibleRows+1 早就把 sentinel 推远了；
-// 库列表 80px 行需要显式补足。
+//
+// usableH = 真正的滚动容器 clientHeight，不是 window.innerHeight：
+// 库视图的滚动发生在 .items-card .el-card__body 内（CSS overflow:auto），
+// 用 window 高度去算会偏大很多。
 const initialLimit = () => {
-  let usableH
-  const el = gridViewRef.value || itemsTable.value?.$el
-  if (el) {
-    const top = el.getBoundingClientRect().top
-    usableH = Math.max(300, window.innerHeight - top)
-  } else {
-    usableH = Math.max(300, window.innerHeight - 240)  // header + 工具栏占位估算
-  }
+  const root = _getScrollRoot()
+  const usableH = root ? root.clientHeight : Math.max(300, window.innerHeight - 240)
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
-  const SAFETY = 40  // 额外安全余量，避免临界值四舍五入吃掉
-  const minContentH = usableH + ROOT_MARGIN_PX + SAFETY
+  const SAFETY = 40
+  const minContentH = Math.max(300, usableH) + ROOT_MARGIN_PX + SAFETY
   const rowsNeeded = Math.max(1, Math.ceil(minContentH / rowH))
   return rowsNeeded * cardsPerRow()
 }
@@ -1986,12 +1982,18 @@ const _fireBatchEnrichments = () => {
   fetchSubtitleLangsForItems()
 }
 
-// ============ IntersectionObserver 无限滚动（Trending 同款）============
-// rootMargin '200px 0px'：viewport 上下各延 200px → 哨兵进入虚拟视口就触发，预取提前量
-// initialLimit() 已经强制让 content 高度 > usableH + 200px + 余量，sentinel 一开始落在
-// 虚拟视口外，首次 observe fire 报 isIntersecting=false 被 skip → 等用户真正滚到底再 fire
+// ============ IntersectionObserver 无限滚动 ============
+// !!! 关键 !!! 库视图的真正滚动容器是 .items-card .el-card__body（CSS overflow:auto），
+// 不是 window 也不是 .app-main。IO 默认 root=null 用 window viewport，sentinel 相对 window
+// 永远不动（el-card 在视口里位置固定，内部滚动不改变 sentinel 的 window 坐标），
+// 所以 IO 永远收不到事件 → loadMore 永远不触发 = "滚不了"。
+// 修复：把 root 指向 el-card__body 本身，让 IO 监听容器内的滚动。
+// Trending 没踩这个坑是因为它直接在 .app-main 里展开，没有 internal scroll 容器。
+const _getScrollRoot = () => document.querySelector('.items-card > .el-card__body')
+
 const _setupObserver = () => {
   if (observer) observer.disconnect()
+  const root = _getScrollRoot()
   observer = new IntersectionObserver((entries) => {
     if (skipNextIntersection) {
       skipNextIntersection = false
@@ -2000,7 +2002,7 @@ const _setupObserver = () => {
     for (const e of entries) {
       if (e.isIntersecting) loadMore()
     }
-  }, { rootMargin: `${ROOT_MARGIN_PX}px 0px` })
+  }, { root, rootMargin: `${ROOT_MARGIN_PX}px 0px` })
   _observeSentinel()
 }
 

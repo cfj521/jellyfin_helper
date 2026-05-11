@@ -639,9 +639,14 @@ const _buildListParams = (offset, limit) => {
   return params
 }
 
-// ============ IntersectionObserver 无限滚动（Trending 同款）============
+// ============ IntersectionObserver 无限滚动 ============
+// !!! 关键 !!! 真正的滚动容器是 .items-card .el-card__body（CSS overflow:auto），
+// 不是 window。详见 LibraryDetail.vue 同名函数的注释。
+const _getScrollRoot = () => document.querySelector('.adult-lib-view .items-card > .el-card__body')
+
 const _setupObserver = () => {
   if (observer) observer.disconnect()
+  const root = _getScrollRoot()
   observer = new IntersectionObserver((entries) => {
     if (skipNextIntersection) {
       skipNextIntersection = false
@@ -650,7 +655,7 @@ const _setupObserver = () => {
     for (const e of entries) {
       if (e.isIntersecting) loadMore()
     }
-  }, { rootMargin: `${ROOT_MARGIN_PX}px 0px` })
+  }, { root, rootMargin: `${ROOT_MARGIN_PX}px 0px` })
   _observeSentinel()
 }
 
@@ -855,20 +860,13 @@ const stepSize = () => {
   return viewMode.value === 'grid' ? cardsPerRow() : 10
 }
 
-// 强制 content 高度 > usableH + ROOT_MARGIN_PX + 余量，确保 sentinel 一开始在 IO 虚拟视口外
-// 否则首次 observe 就 intersecting → skipNextIntersection 吞掉首发 → 滚不动（详见 LibraryDetail 同名注释）
+// usableH 来自滚动容器 clientHeight（el-card__body），不是 window —— 详见 LibraryDetail 同名注释
 const initialLimit = () => {
-  let usableH
-  const el = gridViewRef.value
-  if (el) {
-    const top = el.getBoundingClientRect().top
-    usableH = Math.max(300, window.innerHeight - top)
-  } else {
-    usableH = Math.max(300, window.innerHeight - 240)
-  }
+  const root = _getScrollRoot()
+  const usableH = root ? root.clientHeight : Math.max(300, window.innerHeight - 240)
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
   const SAFETY = 40
-  const minContentH = usableH + ROOT_MARGIN_PX + SAFETY
+  const minContentH = Math.max(300, usableH) + ROOT_MARGIN_PX + SAFETY
   const rowsNeeded = Math.max(1, Math.ceil(minContentH / rowH))
   return rowsNeeded * cardsPerRow()
 }
