@@ -2045,40 +2045,51 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
-  // viewportH = 真正能容纳"行"的区域高度
-  //   grid：整个 card-body
-  //   list：card-body 减去 el-table 的表头高度（header-wrapper 不放数据行）
-  let viewportH = scroller.clientHeight
+  const scrollerRect = scroller.getBoundingClientRect()
+  // header-wrapper（list 模式）不算"可放数据行"的区域：把视口顶部基准下移它的高度
+  let viewportTop = scrollerRect.top
   if (viewMode.value === 'list') {
     const header = document.querySelector('.items-card .el-table__header-wrapper')
-    if (header) viewportH = Math.max(0, viewportH - header.offsetHeight)
+    if (header) viewportTop += header.offsetHeight
   }
+  const viewportBottom = scrollerRect.bottom
 
-  // 实测行高
-  //   grid：用第二张卡（首张卡海报常常还在 lazy load，offsetHeight 可能偏小）
-  //   list：第一行 tr 高度通常已稳定
-  let rowH = 0
-  let el = null
-  if (viewMode.value === 'grid') {
-    el = document.querySelector('.items-card .grid-view')
-    const cards = el ? el.querySelectorAll('.grid-card') : []
-    const sample = cards[1] || cards[0]
-    rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
+  if (viewMode.value === 'list') {
+    // 列表：直接遍历每个 tr 判定其与 viewport 的关系，比除法估算精确
+    const bodyEl = document.querySelector('.items-card .el-table__body')
+    const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
+    let scrolledRows = 0       // 完全在 viewport 上方（已滚过）
+    let visibleRows = 0        // 跟 viewport 有任意重叠
+    let sawVisible = false
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect()
+      if (rect.bottom <= viewportTop) {
+        // 完全在上方
+        if (!sawVisible) scrolledRows++
+      } else if (rect.top >= viewportBottom) {
+        // 完全在下方 → 后面的也都在下方，break
+        break
+      } else {
+        // 有重叠 → 可见
+        sawVisible = true
+        visibleRows++
+      }
+    }
+    debugInfo.scrollRow = scrolledRows + visibleRows
   } else {
-    el = document.querySelector('.items-card .el-table__body')
-    const firstRow = el ? el.querySelector('tr') : null
-    rowH = firstRow ? firstRow.offsetHeight : 80
+    // 网格：grid 是单个容器，没法逐行 DOM 元素；用第二张卡的高度做行高估算
+    const gridEl = document.querySelector('.items-card .grid-view')
+    const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
+    const sample = cards[1] || cards[0]
+    const rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
+    const viewportH = scrollerRect.height
+    const offset = gridEl
+      ? Math.max(0, scrollerRect.top - gridEl.getBoundingClientRect().top)
+      : scroller.scrollTop
+    const scrolledRows = Math.floor(offset / rowH)
+    const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
+    debugInfo.scrollRow = scrolledRows + visibleRows
   }
-  if (rowH < 1) rowH = viewMode.value === 'grid' ? 240 : 80
-
-  const offset = el
-    ? Math.max(0, scroller.getBoundingClientRect().top - el.getBoundingClientRect().top)
-    : scroller.scrollTop  // 兜底
-
-  const scrolledRows = Math.floor(offset / rowH)
-  // visibleRows 用 floor：只数"完整看到的行"，避免半行被算成 +1
-  const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
-  debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }
 

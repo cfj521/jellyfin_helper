@@ -685,33 +685,45 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
-  let viewportH = scroller.clientHeight
+  const scrollerRect = scroller.getBoundingClientRect()
+  let viewportTop = scrollerRect.top
   if (viewMode.value === 'list') {
     const header = document.querySelector('.adult-lib-view .el-table__header-wrapper')
-    if (header) viewportH = Math.max(0, viewportH - header.offsetHeight)
+    if (header) viewportTop += header.offsetHeight
   }
+  const viewportBottom = scrollerRect.bottom
 
-  let rowH = 0
-  let el = null
-  if (viewMode.value === 'grid') {
-    el = document.querySelector('.adult-lib-view .grid-view')
-    const cards = el ? el.querySelectorAll('.grid-card') : []
-    const sample = cards[1] || cards[0]
-    rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
+  if (viewMode.value === 'list') {
+    const bodyEl = document.querySelector('.adult-lib-view .el-table__body')
+    const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
+    let scrolledRows = 0
+    let visibleRows = 0
+    let sawVisible = false
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect()
+      if (rect.bottom <= viewportTop) {
+        if (!sawVisible) scrolledRows++
+      } else if (rect.top >= viewportBottom) {
+        break
+      } else {
+        sawVisible = true
+        visibleRows++
+      }
+    }
+    debugInfo.scrollRow = scrolledRows + visibleRows
   } else {
-    el = document.querySelector('.adult-lib-view .el-table__body')
-    const firstRow = el ? el.querySelector('tr') : null
-    rowH = firstRow ? firstRow.offsetHeight : 80
+    const gridEl = document.querySelector('.adult-lib-view .grid-view')
+    const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
+    const sample = cards[1] || cards[0]
+    const rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
+    const viewportH = scrollerRect.height
+    const offset = gridEl
+      ? Math.max(0, scrollerRect.top - gridEl.getBoundingClientRect().top)
+      : scroller.scrollTop
+    const scrolledRows = Math.floor(offset / rowH)
+    const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
+    debugInfo.scrollRow = scrolledRows + visibleRows
   }
-  if (rowH < 1) rowH = viewMode.value === 'grid' ? 240 : 80
-
-  const offset = el
-    ? Math.max(0, scroller.getBoundingClientRect().top - el.getBoundingClientRect().top)
-    : scroller.scrollTop
-
-  const scrolledRows = Math.floor(offset / rowH)
-  const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
-  debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }
 
