@@ -605,17 +605,16 @@ const prefetchIfNeeded = async (force = false) => {
   }
 }
 
-// 详见 LibraryDetail 同名块：rect-walk 实测，跟 debug 面板共享单一来源
-const loadMore = () => {
+// 详见 LibraryDetail 同名块：presetRow 由 onWindowScroll 那一帧测好的 row 传入，避免重复 rect-walk
+const loadMore = (presetRow = null) => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  const target = _computeWantedFromScroll()
+  const row = presetRow != null ? presetRow : _currentScrollRow()
+  const target = Math.max(1, row + 1) * cardsPerRow()
   if (target > wanted.value) {
     wanted.value = target
-    prefetchIfNeeded()
-  } else {
-    prefetchIfNeeded()
   }
+  prefetchIfNeeded()
 }
 
 const _currentScrollRow = () => {
@@ -666,10 +665,7 @@ const _currentScrollRow = () => {
   return total
 }
 
-const _computeWantedFromScroll = () => {
-  const row = _currentScrollRow()
-  return Math.max(1, row + 1) * cardsPerRow()
-}
+// （_computeWantedFromScroll 已合并到 loadMore）
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
 const _buildListParams = (offset, limit) => {
@@ -693,7 +689,8 @@ const _buildListParams = (offset, limit) => {
 }
 
 // ============ 滚动触发：sentinel boundingClientRect 判定（详见 LibraryDetail 注释）============
-const _maybeLoadMoreOnScroll = () => {
+// currentRow 由 onWindowScroll 那一帧测好的 row 传进来；避免 loadMore 再跑一次 rect-walk
+const _maybeLoadMoreOnScroll = (currentRow) => {
   if (_loadMoreBusy) return
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
@@ -702,7 +699,7 @@ const _maybeLoadMoreOnScroll = () => {
   const viewportBottom = window.innerHeight || document.documentElement.clientHeight
   if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
   _loadMoreBusy = true
-  loadMore()
+  loadMore(currentRow)
   nextTick(() => { _loadMoreBusy = false })
 }
 
@@ -729,8 +726,11 @@ let _scrollRaf = null
 const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
-    updateScrollRow()
-    _maybeLoadMoreOnScroll()
+    // 一帧一次 rect-walk，结果给 debug 和 loadMore 共用（详见 LibraryDetail 同名块注释）
+    const row = _currentScrollRow()
+    debugInfo.scrollRow = row
+    writeDebug()
+    _maybeLoadMoreOnScroll(row)
     _scrollRaf = null
   })
 }

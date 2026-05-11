@@ -1944,19 +1944,17 @@ const prefetchIfNeeded = async (force = false) => {
 }
 
 // 触底（scroll 监听调）：wanted = max(wanted, 当前 scrollRow + 1 行缓冲) × 列数
-// 单一来源原则：_currentScrollRow() 跟 debug 面板用同一份实测逻辑（rect-walk），
-// 不再做坐标系不一致的"window viewport vs scroller scrollTop"那种除法估算
-const loadMore = () => {
+// presetRow 由调用方传入（onWindowScroll 那一帧已经测过），避免重复 rect-walk
+const loadMore = (presetRow = null) => {
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  const target = _computeWantedFromScroll()
+  const row = presetRow != null ? presetRow : _currentScrollRow()
+  const target = Math.max(1, row + 1) * cardsPerRow()
   if (target > wanted.value) {
     wanted.value = target
-    prefetchIfNeeded()
-  } else {
-    // target 没增长，但 items 池剩余可能不足 stepSize×2 → 也要给 prefetch 一次机会
-    prefetchIfNeeded()
   }
+  // 不管 target 涨没涨，都给 prefetch 一次机会：buffer 阈值才是池子是否补给的决定条件
+  prefetchIfNeeded()
 }
 
 // 用 rect-walk 实测的"已滚过 + 可见"总行数。与 updateScrollRow 完全一致；
@@ -2009,11 +2007,7 @@ const _currentScrollRow = () => {
   return total
 }
 
-const _computeWantedFromScroll = () => {
-  const row = _currentScrollRow()
-  // 用户当前看到第 row 行 → wanted 至少 row+1 行（多一行让滚一点就能看到下一行）
-  return Math.max(1, row + 1) * cardsPerRow()
-}
+// （_computeWantedFromScroll 已合并到 loadMore；逻辑：target = (row + 1) × cardsPerRow）
 
 // 公共 params 构造：filter / search 共用
 const _buildItemsParams = (start, limit) => {
@@ -2048,7 +2042,8 @@ const _fireBatchEnrichments = () => {
 // 用渲染锁代替时间节流：loadMore 立即推 wanted，新卡片要等 Vue nextTick 才进 DOM。
 // 这期间用户继续滚动可能撞到容器 scrollTop 上限（旧 DOM 还没更新）→ 滚轮事件被边界吃掉 →
 // 用户感觉"卡死，必须往上滚一点才能再向下" —— 故用 busy flag 而非时间窗，DOM 一更新就放行
-const _maybeLoadMoreOnScroll = () => {
+// currentRow 由 onWindowScroll 那一帧测好的 row 传进来；避免 loadMore 再跑一次 rect-walk
+const _maybeLoadMoreOnScroll = (currentRow) => {
   if (_loadMoreBusy) return
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
@@ -2057,7 +2052,7 @@ const _maybeLoadMoreOnScroll = () => {
   const viewportBottom = window.innerHeight || document.documentElement.clientHeight
   if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
   _loadMoreBusy = true
-  loadMore()
+  loadMore(currentRow)
   nextTick(() => { _loadMoreBusy = false })
 }
 
@@ -2092,8 +2087,12 @@ let _scrollRaf = null
 const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
-    updateScrollRow()
-    _maybeLoadMoreOnScroll()
+    // 一帧只跑一次 _currentScrollRow（含 tr 遍历 + rect 计算），结果给 debug 和 loadMore 共用
+    // 之前 updateScrollRow 和 _computeWantedFromScroll 各跑一次 → 2 倍 rect 开销 → 列表模式滚动卡
+    const row = _currentScrollRow()
+    debugInfo.scrollRow = row
+    writeDebug()
+    _maybeLoadMoreOnScroll(row)
     _scrollRaf = null
   })
 }
