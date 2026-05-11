@@ -271,7 +271,7 @@ const sentinelRef = ref(null)
 const gridRowRef = ref(null)        // <el-row> ref，用 getBoundingClientRect 实测网格起点
 let observer = null
 let reqSeq = 0   // 并发竞态保护：每次 reload++，回调时对比丢弃过期响应
-let prefetchTimer = null  // reload 后延迟启动预取，避免首批和预取背靠背挤上游 API
+// prefetchTimer 已废弃：首批渲染后直接调 prefetchIfNeeded（async 不阻塞 DOM）
 // IntersectionObserver 经典坑：observe() 调用时会立刻 fire 一次"当前 intersection 状态"，
 // 当内容不够撑满 viewport 时这次 fire 会误触发 loadMore。
 // 用这个 flag 跳过每次 observe() 的首次 fire，等用户真正滚动产生的 transition 才响应。
@@ -549,20 +549,14 @@ const callApi = async (kind, params) => {
 
 // 重置：换 source / 子分类 / 强刷
 const reload = async (forceRefresh = false) => {
-  // 任何新 reload 都先取消上一个延迟预取，避免污染新 source 的 items
-  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   page.value = 1
   hasMore.value = true
   // wanted 重置为视口可见行数 + 1 行（首屏所需）
   wanted.value = initialLimit()
   for (const k of Object.keys(overviewVisible)) overviewVisible[k] = false
   await load(forceRefresh, /*append*/ false)
-  // 延迟启动后台预取下一页：让首批先稳定渲染，避免首屏未完就再压上游一发
-  // 1.5s 是经验值：用户从看到首屏到开始滚动通常要 1~2s，正好在此窗口内悄悄拉好
-  prefetchTimer = setTimeout(() => {
-    prefetchTimer = null
-    prefetchIfNeeded()
-  }, 1500)
+  // 首批渲染后立刻预取下一页（async 不阻塞 DOM 渲染），不再延迟
+  prefetchIfNeeded()
 }
 
 const load = async (forceRefresh = false, append = false) => {
@@ -834,7 +828,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (resizeTimer) clearTimeout(resizeTimer)
   if (scrollTimer) cancelAnimationFrame(scrollTimer)
-  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   // 离开本页时关掉侧边栏的 debug 显示
   debugInfo.enabled = false
 })
