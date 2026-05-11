@@ -1943,13 +1943,16 @@ const prefetchIfNeeded = async (force = false) => {
   }
 }
 
-// 触底（scroll 监听调）：wanted = max(wanted, 当前 scrollRow + 1 行缓冲) × 列数
-// presetRow 由调用方传入（onWindowScroll 那一帧已经测过），避免重复 rect-walk
-const loadMore = (presetRow = null) => {
+// 触底（scroll 监听调）：wanted = max(wanted, (scrolled + visible × 2) × 列数)
+// 在视口下方多留一个视口的内容做缓冲（visible 个 row），列表模式下尤其需要 —— 行矮、视口能塞 8~10 行，
+// 之前 "+1 行" buffer 实测太薄。grid 视口 3-4 行，加这一个视口也合理
+// presetState 由调用方传入（onWindowScroll 那一帧已经测过），避免重复 rect-walk
+const loadMore = (presetState = null) => {
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  const row = presetRow != null ? presetRow : _currentScrollRow()
-  const target = Math.max(1, row + 1) * cardsPerRow()
+  const { scrolled, visible } = presetState || _currentScrollState()
+  // 至少多放一个视口的行做提前量（visible 行）
+  const target = Math.max(1, scrolled + visible * 2) * cardsPerRow()
   if (target > wanted.value) {
     wanted.value = target
   }
@@ -1957,11 +1960,11 @@ const loadMore = (presetRow = null) => {
   prefetchIfNeeded()
 }
 
-// 用 rect-walk 实测的"已滚过 + 可见"总行数。与 updateScrollRow 完全一致；
-// 把它单独抽出来给 _computeWantedFromScroll 复用
-const _currentScrollRow = () => {
+// 用 rect-walk 实测的滚动状态：scrolled = 已滚过的行数；visible = 视口内可见的行数
+// 返回对象以便 loadMore 用 visible 做 buffer，debug 用 total = scrolled + visible
+const _currentScrollState = () => {
   const scroller = document.querySelector('.items-card > .el-card__body')
-  if (!scroller) return 0
+  if (!scroller) return { scrolled: 0, visible: 0 }
   const scrollerRect = scroller.getBoundingClientRect()
   let viewportTop = scrollerRect.top
   if (viewMode.value === 'list') {
@@ -1970,7 +1973,8 @@ const _currentScrollRow = () => {
   }
   const viewportBottom = scrollerRect.bottom
 
-  let total = 0
+  let scrolled = 0
+  let visible = 0
   if (viewMode.value === 'list') {
     const bodyEl = document.querySelector('.items-card .el-table__body')
     const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
@@ -1978,10 +1982,10 @@ const _currentScrollRow = () => {
     for (const r of rows) {
       const rect = r.getBoundingClientRect()
       if (rect.bottom <= viewportTop) {
-        if (!sawVisible) total++
+        if (!sawVisible) scrolled++
       } else if (rect.top < viewportBottom) {
         sawVisible = true
-        total++
+        visible++
       } else {
         break
       }
@@ -1989,22 +1993,29 @@ const _currentScrollRow = () => {
   } else {
     const gridEl = document.querySelector('.items-card .grid-view')
     const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    if (!cards.length) return 0
-    let firstColLeft = null
-    for (const c of cards) {
-      const r = c.getBoundingClientRect()
-      if (r.height > 0) { firstColLeft = r.left; break }
-    }
-    for (const c of cards) {
-      const rect = c.getBoundingClientRect()
-      if (rect.height < 1) continue
-      if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
-      if (rect.bottom <= viewportTop) total++
-      else if (rect.top < viewportBottom) total++
-      else break
+    if (cards.length) {
+      let firstColLeft = null
+      for (const c of cards) {
+        const r = c.getBoundingClientRect()
+        if (r.height > 0) { firstColLeft = r.left; break }
+      }
+      for (const c of cards) {
+        const rect = c.getBoundingClientRect()
+        if (rect.height < 1) continue
+        if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
+        if (rect.bottom <= viewportTop) scrolled++
+        else if (rect.top < viewportBottom) visible++
+        else break
+      }
     }
   }
-  return total
+  return { scrolled, visible }
+}
+
+// 简单包装：返回 scrolled + visible（debug 面板的 scrollRow 用这个总数）
+const _currentScrollRow = () => {
+  const s = _currentScrollState()
+  return s.scrolled + s.visible
 }
 
 // （_computeWantedFromScroll 已合并到 loadMore；逻辑：target = (row + 1) × cardsPerRow）
@@ -2042,8 +2053,8 @@ const _fireBatchEnrichments = () => {
 // 用渲染锁代替时间节流：loadMore 立即推 wanted，新卡片要等 Vue nextTick 才进 DOM。
 // 这期间用户继续滚动可能撞到容器 scrollTop 上限（旧 DOM 还没更新）→ 滚轮事件被边界吃掉 →
 // 用户感觉"卡死，必须往上滚一点才能再向下" —— 故用 busy flag 而非时间窗，DOM 一更新就放行
-// currentRow 由 onWindowScroll 那一帧测好的 row 传进来；避免 loadMore 再跑一次 rect-walk
-const _maybeLoadMoreOnScroll = (currentRow) => {
+// presetState 由 onWindowScroll 那一帧测好的 { scrolled, visible } 传进来
+const _maybeLoadMoreOnScroll = (presetState) => {
   if (_loadMoreBusy) return
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
@@ -2052,7 +2063,7 @@ const _maybeLoadMoreOnScroll = (currentRow) => {
   const viewportBottom = window.innerHeight || document.documentElement.clientHeight
   if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
   _loadMoreBusy = true
-  loadMore(currentRow)
+  loadMore(presetState)
   nextTick(() => { _loadMoreBusy = false })
 }
 
@@ -2087,12 +2098,11 @@ let _scrollRaf = null
 const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
-    // 一帧只跑一次 _currentScrollRow（含 tr 遍历 + rect 计算），结果给 debug 和 loadMore 共用
-    // 之前 updateScrollRow 和 _computeWantedFromScroll 各跑一次 → 2 倍 rect 开销 → 列表模式滚动卡
-    const row = _currentScrollRow()
-    debugInfo.scrollRow = row
+    // 一帧只跑一次 _currentScrollState（含 tr 遍历 + rect 计算），结果给 debug 和 loadMore 共用
+    const state = _currentScrollState()
+    debugInfo.scrollRow = state.scrolled + state.visible
     writeDebug()
-    _maybeLoadMoreOnScroll(row)
+    _maybeLoadMoreOnScroll(state)
     _scrollRaf = null
   })
 }
