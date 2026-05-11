@@ -802,7 +802,8 @@ const updateScrollRow = () => {
   const offset = Math.max(0, scrollerRect.top - gridRect.top)
 
   const scrolledRows = Math.floor(offset / ch)
-  const visibleRows = Math.max(1, Math.ceil(viewportH / ch))
+  // floor：只数"完整看到的行"，半行不算
+  const visibleRows = Math.max(1, Math.floor(viewportH / ch))
   debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }

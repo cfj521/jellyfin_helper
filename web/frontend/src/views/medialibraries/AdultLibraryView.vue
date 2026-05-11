@@ -685,7 +685,11 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
-  const viewportH = scroller.clientHeight
+  let viewportH = scroller.clientHeight
+  if (viewMode.value === 'list') {
+    const header = document.querySelector('.adult-lib-view .el-table__header-wrapper')
+    if (header) viewportH = Math.max(0, viewportH - header.offsetHeight)
+  }
 
   let rowH = 0
   let el = null
@@ -706,7 +710,7 @@ const updateScrollRow = () => {
     : scroller.scrollTop
 
   const scrolledRows = Math.floor(offset / rowH)
-  const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
+  const visibleRows = Math.max(1, Math.floor(viewportH / rowH))
   debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }
