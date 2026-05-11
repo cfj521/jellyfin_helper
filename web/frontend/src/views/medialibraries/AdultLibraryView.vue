@@ -463,9 +463,7 @@ const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示�
 const gridViewRef = ref(null)
 let reqSeq = 0
 let prefetchTimer = null
-// 滚动监听：直接挂在真正的滚动容器 .items-card > .el-card__body（CSS overflow:auto）
-let scrollContainer = null
-let _scrollAttached = false
+// 触发判定：用 sentinel 的 boundingClientRect 判定，与 LibraryDetail 同款
 let _loadMoreFiredAt = 0
 const SCROLL_TRIGGER_PX = 400
 
@@ -567,8 +565,7 @@ const reload = async () => {
   } finally {
     if (seq === reqSeq) {
       loading.value = false
-      await nextTick()
-      _attachScrollListener()
+      _loadMoreFiredAt = 0
       writeDebug()
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -635,36 +632,14 @@ const _buildListParams = (offset, limit) => {
   return params
 }
 
-// ============ 直接监听滚动容器（.items-card > .el-card__body）的 scroll 事件 ============
-// 详见 LibraryDetail.vue 同名函数的设计理由
-const _getScrollContainer = () => document.querySelector('.adult-lib-view .items-card > .el-card__body')
-
-const _attachScrollListener = () => {
-  const el = _getScrollContainer()
-  if (!el) return
-  if (scrollContainer === el && _scrollAttached) return
-  if (scrollContainer && _scrollAttached) {
-    scrollContainer.removeEventListener('scroll', _onContainerScroll)
-  }
-  scrollContainer = el
-  scrollContainer.addEventListener('scroll', _onContainerScroll, { passive: true })
-  _scrollAttached = true
-}
-
-const _detachScrollListener = () => {
-  if (scrollContainer && _scrollAttached) {
-    scrollContainer.removeEventListener('scroll', _onContainerScroll)
-  }
-  scrollContainer = null
-  _scrollAttached = false
-}
-
-const _onContainerScroll = () => {
-  if (!scrollContainer) return
+// ============ 滚动触发：sentinel boundingClientRect 判定（详见 LibraryDetail 注释）============
+const _maybeLoadMoreOnScroll = () => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  const remaining = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight
-  if (remaining > SCROLL_TRIGGER_PX) return
+  if (!sentinelRef.value) return
+  const rect = sentinelRef.value.getBoundingClientRect()
+  const viewportBottom = window.innerHeight || document.documentElement.clientHeight
+  if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
   const now = Date.now()
   if (now - _loadMoreFiredAt < 300) return
   _loadMoreFiredAt = now
@@ -711,6 +686,7 @@ const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
     updateScrollRow()
+    _maybeLoadMoreOnScroll()
     _scrollRaf = null
   })
 }
@@ -866,12 +842,17 @@ const stepSize = () => {
   return viewMode.value === 'grid' ? cardsPerRow() : 10
 }
 
-// usableH 来自真正的滚动容器 clientHeight（el-card__body）
 const initialLimit = () => {
-  const root = _getScrollContainer()
-  const usableH = root ? root.clientHeight : Math.max(300, window.innerHeight - 240)
+  const el = gridViewRef.value
+  let usableH
+  if (el) {
+    const top = el.getBoundingClientRect().top
+    usableH = Math.max(300, window.innerHeight - top)
+  } else {
+    usableH = Math.max(300, window.innerHeight - 240)
+  }
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
-  const visibleRows = Math.max(1, Math.ceil(Math.max(300, usableH) / rowH))
+  const visibleRows = Math.max(1, Math.ceil(usableH / rowH))
   return (visibleRows + 1) * cardsPerRow()
 }
 
@@ -1295,15 +1276,12 @@ onMounted(async () => {
     await reload()
     loadStats()
   }
-  await nextTick()
-  _attachScrollListener()
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
 onUnmounted(() => {
-  _detachScrollListener()
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
