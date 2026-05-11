@@ -973,13 +973,11 @@ const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模
 // reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
 let reqSeq = 0
 let prefetchTimer = null                // 首屏后延迟启动后台预取的 timer，reset 时取消
-// 滚动监听：直接挂在 .items-card > .el-card__body（真正的滚动容器，CSS overflow:auto）
-// 不用 IntersectionObserver —— root 设了 el-card__body 也调不通（多次实战验证），
-// 改为最朴素的 scroll 事件 + scrollHeight/scrollTop/clientHeight 数学判定，最稳
-let scrollContainer = null
-let _scrollAttached = false
+// 触发判定：window scroll capture 抓所有滚动事件（.app-main / .el-card__body / window 都能 catch），
+// 然后用 sentinel 的 getBoundingClientRect() 看它离视口底部多近 —— 这个值不在乎谁是真正的滚动容器，
+// 永远反映"sentinel 当前显示在视口的哪个位置"
 let _loadMoreFiredAt = 0                // 节流：300ms 内不重复触发
-const SCROLL_TRIGGER_PX = 400           // 距底部 ≤ 400px 触发 loadMore
+const SCROLL_TRIGGER_PX = 400           // sentinel 离视口底 ≤ 400px 触发 loadMore
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
@@ -1141,12 +1139,19 @@ const stepSize = () => {
   return viewMode.value === 'grid' ? cardsPerRow() : 10
 }
 
-// 首批展示条数：内容塞满滚动容器再加一行余量。usableH = 滚动容器 clientHeight。
+// 首批展示条数：内容塞满滚动容器再加一行余量
 const initialLimit = () => {
-  const root = _getScrollContainer()
-  const usableH = root ? root.clientHeight : Math.max(300, window.innerHeight - 240)
+  // 优先用 grid/table 自己的 top 推算可用高度
+  const el = gridViewRef.value || itemsTable.value?.$el
+  let usableH
+  if (el) {
+    const top = el.getBoundingClientRect().top
+    usableH = Math.max(300, window.innerHeight - top)
+  } else {
+    usableH = Math.max(300, window.innerHeight - 240)
+  }
   const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 60) : 80
-  const visibleRows = Math.max(1, Math.ceil(Math.max(300, usableH) / rowH))
+  const visibleRows = Math.max(1, Math.ceil(usableH / rowH))
   return (visibleRows + 1) * cardsPerRow()
 }
 
@@ -1894,8 +1899,7 @@ const loadItems = async () => {
   } finally {
     if (seq === reqSeq) {
       itemsLoading.value = false
-      await nextTick()
-      _attachScrollListener()  // DOM 稳定后挂滚动监听（v-if 切库可能重建容器）
+      _loadMoreFiredAt = 0  // 重置节流时钟
       // 首屏 1.5s 后启动后台预取（让首批先稳定渲染；用户切库会取消这个 timer）
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -1968,40 +1972,19 @@ const _fireBatchEnrichments = () => {
   fetchSubtitleLangsForItems()
 }
 
-// ============ 直接监听滚动容器的 scroll 事件 ============
-// 库视图的真正滚动容器是 .items-card > .el-card__body（CSS overflow:auto），
-// 不是 window 也不是 .app-main。原本的 IntersectionObserver root 路径多次验证
-// 调不通（事件不触发 / 触发位置不对），直接读 scrollTop 做距底部判定最稳。
-const _getScrollContainer = () => document.querySelector('.items-card > .el-card__body')
-
-const _attachScrollListener = () => {
-  const el = _getScrollContainer()
-  if (!el) return
-  if (scrollContainer === el && _scrollAttached) return
-  // 旧容器换了（v-if / 切库导致 DOM 重建）→ 解绑旧的
-  if (scrollContainer && _scrollAttached) {
-    scrollContainer.removeEventListener('scroll', _onContainerScroll)
-  }
-  scrollContainer = el
-  scrollContainer.addEventListener('scroll', _onContainerScroll, { passive: true })
-  _scrollAttached = true
-}
-
-const _detachScrollListener = () => {
-  if (scrollContainer && _scrollAttached) {
-    scrollContainer.removeEventListener('scroll', _onContainerScroll)
-  }
-  scrollContainer = null
-  _scrollAttached = false
-}
-
-const _onContainerScroll = () => {
-  if (!scrollContainer) return
+// ============ 滚动触发：用 sentinel 的 boundingClientRect 判定 ============
+// 不再纠结"谁是真正的滚动容器"（.app-main / el-card__body / window 都有可能），
+// 用 window scroll capture 抓住所有滚动事件，然后看 sentinel 在 window 视口里的位置。
+// getBoundingClientRect 返回 window 视口坐标，跟容器内部 scrollTop 无关 —— 谁滚都对。
+const _maybeLoadMoreOnScroll = () => {
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  const remaining = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight
-  if (remaining > SCROLL_TRIGGER_PX) return
-  // 节流：每 300ms 最多 fire 一次（避免一直贴底时每帧都 fire）
+  if (!sentinelRef.value) return
+  const rect = sentinelRef.value.getBoundingClientRect()
+  // sentinel.top 距 window 视口底 ≤ SCROLL_TRIGGER_PX 时触发
+  const viewportBottom = window.innerHeight || document.documentElement.clientHeight
+  if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
+  // 节流：每 300ms 最多 fire 一次
   const now = Date.now()
   if (now - _loadMoreFiredAt < 300) return
   _loadMoreFiredAt = now
@@ -2055,6 +2038,7 @@ const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
     updateScrollRow()
+    _maybeLoadMoreOnScroll()
     _scrollRaf = null
   })
 }
@@ -2414,19 +2398,17 @@ const formatSize = (bytes) => {
 onMounted(async () => {
   loadStatsPrefs(id.value)
   await loadAll()
-  // DOM 稳定后挂滚动监听 + window-scroll（后者仅为 debug scrollRow）
-  await nextTick()
-  _attachScrollListener()
+  // window capture 抓所有滚动事件（含 .app-main 内部 / .el-card__body 内部）
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
-// 切换不同库（router 复用同组件）：el-card__body 可能仍是同一个 DOM 节点，但保险起见重挂
+// 切换不同库（router 复用同组件）：节流时钟重置即可
 watch(() => id.value, async (newId) => {
   loadStatsPrefs(newId)
   await nextTick()
-  _attachScrollListener()
+  _loadMoreFiredAt = 0
   writeDebug()
 })
 
@@ -2435,7 +2417,6 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 onUnmounted(() => {
   stopSubtitlePoll()
-  _detachScrollListener()
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
