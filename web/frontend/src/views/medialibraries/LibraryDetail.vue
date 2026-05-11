@@ -959,7 +959,7 @@ const itemsLoading = ref(false)         // 首批/重置加载（清空 items �
 const loadingMore = ref(false)          // 后台预取加载（不清 items；wanted 不被阻塞）
 const hasMore = ref(true)               // 后端还有下一批 = true
 const itemsTable = ref(null)
-const sentinelRef = ref(null)
+const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示行（不再用于 IO，仅做视觉）
 const gridViewRef = ref(null)           // <div.grid-view> 的 DOM ref，用于 cardsPerRow 实测
 const selectedItems = ref([])
 // 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
@@ -973,9 +973,13 @@ const FETCH_BATCH = 80
 const nextStartIndex = ref(0)           // 下一批的 start_index（offset 模型）
 // reqSeq 防竞态：任何 reset / 切库 / 改 filter 都 ++；过期回调按 seq 不一致丢弃
 let reqSeq = 0
-let observer = null                     // IntersectionObserver
-let skipNextIntersection = false        // 防 observe() 首次 fire 误触发（与 Trending 同款套路）
 let prefetchTimer = null                // 首屏后延迟启动后台预取的 timer，reset 时取消
+// 滚动触发：上一次的"距底部"距离；用阈值穿越判定（remaining 从 >400 跌到 ≤400 才触发）
+// 之前用 IntersectionObserver + sentinel 的方案在列表 80px 行高 + rootMargin=200 场景下
+// 首次 observe 就 intersecting → skipNextIntersection 吞掉首发后再无事件 → 滚不动。
+// 直接用滚动位置数学判定更可靠
+let _prevRemaining = Infinity
+const SCROLL_TRIGGER_PX = 400           // 距底部 400px 触发 loadMore
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
@@ -1896,8 +1900,7 @@ const loadItems = async () => {
   } finally {
     if (seq === reqSeq) {
       itemsLoading.value = false
-      await nextTick()
-      _observeSentinel()
+      _resetScrollGuard()  // 内容刚换，下一次滚动触发可正常工作
       // 首屏 1.5s 后启动后台预取（让首批先稳定渲染；用户切库会取消这个 timer）
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -1937,20 +1940,15 @@ const prefetchIfNeeded = async () => {
   }
 }
 
-// 触底（IntersectionObserver 调）：wanted += stepSize；池子告急时后台预取（不 await）
+// 触底：wanted += stepSize；池子告急时后台预取（不 await）
 // 关键：wanted 推进永远立即，fetch 在后台跑；用户看到的是"滚到底立即一行新卡片，海报/文字陆续到位"
-const loadMore = async () => {
-  if (itemsLoading.value || !hasMore.value && items.value.length <= wanted.value) return
-  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
-  try {
-    // 严格一行：wanted 累加 stepSize（grid = cardsPerRow，list = 10）
-    wanted.value += stepSize()
-    // 池子够用就什么都不做；不够就后台预取（不 await）
-    prefetchIfNeeded()
-  } finally {
-    await nextTick()
-    _observeSentinel()  // 重新挂观察；skipNextIntersection 跳过 observe() 的首次 fire
-  }
+const loadMore = () => {
+  if (itemsLoading.value) return
+  if (!hasMore.value && items.value.length <= wanted.value) return
+  // 严格一行：wanted 累加 stepSize（grid = cardsPerRow，list = 10）
+  wanted.value += stepSize()
+  // 池子够用就什么都不做；不够就后台预取（不 await）
+  prefetchIfNeeded()
 }
 
 // 公共 params 构造：filter / search 共用
@@ -1978,29 +1976,27 @@ const _fireBatchEnrichments = () => {
   fetchSubtitleLangsForItems()
 }
 
-// ============ IntersectionObserver 无限滚动 ============
-// rootMargin 故意设 0：库视图列表模式行高 80px，配合首批 visibleRows+1 行后，
-// sentinel 刚好落在视口下方一两个像素 —— 用 200px rootMargin 会让 sentinel 一开始就
-// 处于"虚拟相交"状态，被 skipNextIntersection 吞掉首次 fire 后再无事件，造成"滚不动"
-// Trending 没事是因为卡片高 300px，加 1 行就把 sentinel 推出 200px rootMargin 了
-const _setupObserver = () => {
-  if (observer) observer.disconnect()
-  observer = new IntersectionObserver((entries) => {
-    if (skipNextIntersection) {
-      skipNextIntersection = false
-      return
-    }
-    for (const e of entries) {
-      if (e.isIntersecting) loadMore()
-    }
-  }, { rootMargin: '0px' })
-  _observeSentinel()
+// ============ 滚动触发：距底部 SCROLL_TRIGGER_PX 阈值穿越时调 loadMore ============
+// 找滚动容器：优先 .app-main（应用主滚动容器），fallback 到 document.scrollingElement
+const _getScroller = () => {
+  return document.querySelector('.app-main') || document.scrollingElement || document.documentElement
 }
 
-const _observeSentinel = () => {
-  if (!observer || !sentinelRef.value) return
-  skipNextIntersection = true  // observe() 会立刻 fire 一次当前状态，跳过它
-  observer.observe(sentinelRef.value)
+const _maybeLoadMoreOnScroll = () => {
+  if (itemsLoading.value) return
+  if (!hasMore.value && items.value.length <= wanted.value) return
+  const scroller = _getScroller()
+  if (!scroller) return
+  const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+  // 阈值穿越：从 >400 跌到 ≤400 才触发一次，避免一直滚在底部时 RAF 每帧都 fire
+  if (_prevRemaining > SCROLL_TRIGGER_PX && remaining <= SCROLL_TRIGGER_PX) {
+    loadMore()
+  }
+  _prevRemaining = remaining
+}
+
+const _resetScrollGuard = () => {
+  _prevRemaining = Infinity  // reload / 切库后下一帧滚动事件可重新触发首批 loadMore
 }
 
 // ============ DEBUG（事后删）：写共享 debugInfo，由 App.vue 侧边栏读取展示 ============
@@ -2050,6 +2046,7 @@ const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
     updateScrollRow()
+    _maybeLoadMoreOnScroll()
     _scrollRaf = null
   })
 }
@@ -2409,20 +2406,16 @@ const formatSize = (bytes) => {
 onMounted(async () => {
   loadStatsPrefs(id.value)
   await loadAll()
-  // 首批渲染完成后挂哨兵 observer：等 DOM 稳定再绑，避免观察空容器误 fire
-  await nextTick()
-  _setupObserver()
-  // debug：监听滚动 + 初始化一次 scrollRow
+  // 滚动监听一起搞定 debug 的 scrollRow + 无限滚动触发（capture 捕获 .app-main 内部滚动）
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
-// 切换不同库时重新加载该库的显示偏好；observer 也要重挂（router 复用同组件）
+// 切换不同库（router 复用同组件）：loadItems 内部会 _resetScrollGuard，这里只负责显示偏好
 watch(() => id.value, async (newId) => {
   loadStatsPrefs(newId)
   await nextTick()
-  _setupObserver()
   writeDebug()
 })
 
@@ -2431,10 +2424,6 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 onUnmounted(() => {
   stopSubtitlePoll()
-  if (observer) {
-    observer.disconnect()
-    observer = null
-  }
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)

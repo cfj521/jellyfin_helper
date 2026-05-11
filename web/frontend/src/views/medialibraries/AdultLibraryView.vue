@@ -459,12 +459,13 @@ const nextOffset = ref(0)
 const hasMore = ref(true)
 const loadingMore = ref(false)
 const wanted = ref(0)
-const sentinelRef = ref(null)
+const sentinelRef = ref(null)           // 仅做"加载更多/已到底"提示展示，不再 IO 观察
 const gridViewRef = ref(null)
-let observer = null
-let skipNextIntersection = false
 let reqSeq = 0
 let prefetchTimer = null
+// 滚动触发：阈值穿越判定（remaining 从 >400 跌到 ≤400 才触发一次 loadMore）
+let _prevRemaining = Infinity
+const SCROLL_TRIGGER_PX = 400
 
 const scanning = ref(false)
 const repairing = reactive({ covers: false, meta: false })
@@ -564,8 +565,7 @@ const reload = async () => {
   } finally {
     if (seq === reqSeq) {
       loading.value = false
-      await nextTick()
-      _observeSentinel()
+      _resetScrollGuard()
       writeDebug()
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -604,16 +604,11 @@ const prefetchIfNeeded = async () => {
 }
 
 // loadMore：wanted += stepSize；池子告急时后台预取（不 await）
-const loadMore = async () => {
-  if (loading.value || (!hasMore.value && items.value.length <= wanted.value)) return
-  if (observer && sentinelRef.value) observer.unobserve(sentinelRef.value)
-  try {
-    wanted.value += stepSize()
-    prefetchIfNeeded()
-  } finally {
-    await nextTick()
-    _observeSentinel()
-  }
+const loadMore = () => {
+  if (loading.value) return
+  if (!hasMore.value && items.value.length <= wanted.value) return
+  wanted.value += stepSize()
+  prefetchIfNeeded()
 }
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
@@ -637,28 +632,24 @@ const _buildListParams = (offset, limit) => {
   return params
 }
 
-// ============ IntersectionObserver 无限滚动 ============
-// rootMargin=0：详见 LibraryDetail 同名函数注释；列表模式 80px 行高下 200px rootMargin
-// 会让 sentinel 一开始就"虚拟相交"被 skipNextIntersection 吞掉首次 fire 后永不再 fire
-const _setupObserver = () => {
-  if (observer) observer.disconnect()
-  observer = new IntersectionObserver((entries) => {
-    if (skipNextIntersection) {
-      skipNextIntersection = false
-      return
-    }
-    for (const e of entries) {
-      if (e.isIntersecting) loadMore()
-    }
-  }, { rootMargin: '0px' })
-  _observeSentinel()
+// ============ 滚动触发：距底部 SCROLL_TRIGGER_PX 阈值穿越调 loadMore ============
+const _getScroller = () => {
+  return document.querySelector('.app-main') || document.scrollingElement || document.documentElement
 }
 
-const _observeSentinel = () => {
-  if (!observer || !sentinelRef.value) return
-  skipNextIntersection = true
-  observer.observe(sentinelRef.value)
+const _maybeLoadMoreOnScroll = () => {
+  if (loading.value) return
+  if (!hasMore.value && items.value.length <= wanted.value) return
+  const scroller = _getScroller()
+  if (!scroller) return
+  const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+  if (_prevRemaining > SCROLL_TRIGGER_PX && remaining <= SCROLL_TRIGGER_PX) {
+    loadMore()
+  }
+  _prevRemaining = remaining
 }
+
+const _resetScrollGuard = () => { _prevRemaining = Infinity }
 
 // ============ DEBUG（共享 debugInfo / 侧边栏展示）============
 const writeDebug = () => {
@@ -700,6 +691,7 @@ const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
     updateScrollRow()
+    _maybeLoadMoreOnScroll()
     _scrollRaf = null
   })
 }
@@ -1289,18 +1281,12 @@ onMounted(async () => {
     await reload()
     loadStats()
   }
-  await nextTick()
-  _setupObserver()
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
 })
 
 onUnmounted(() => {
-  if (observer) {
-    observer.disconnect()
-    observer = null
-  }
   if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   window.removeEventListener('scroll', onWindowScroll, { capture: true })
   if (_scrollRaf) cancelAnimationFrame(_scrollRaf)
