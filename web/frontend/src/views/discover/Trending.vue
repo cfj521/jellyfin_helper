@@ -155,6 +155,8 @@
               :src="item.poster_url"
               fit="cover"
               lazy
+              loading="lazy"
+              decoding="async"
               referrerpolicy="no-referrer"
               style="width: 100%; aspect-ratio: 2/3"
             />
@@ -1014,6 +1016,9 @@ onBeforeUnmount(() => {
   overflow: hidden;
   // 卡片整体先出（含文字内容）—— 0.2s 内完成，文字"瞬间到位"
   animation: fade-in 0.2s ease;
+  // 视口外的卡片跳过渲染/图片解码；contain-intrinsic-size 给个估算（poster 2:3 + meta ~130）
+  content-visibility: auto;
+  contain-intrinsic-size: 240px 490px;
 
   // el-image 容器自身：在图片到达前用浅灰渐变占位，比白色更明显地表达"图片在路上"
   .poster :deep(.el-image) {
