@@ -678,6 +678,7 @@ const writeDebug = () => {
 }
 
 
+// 用户当前已经看到第几行 = 已滚过的行 + 视口内可见的行（详见 LibraryDetail 同名注释）
 const updateScrollRow = () => {
   const el = viewMode.value === 'grid'
     ? document.querySelector('.adult-lib-view .grid-view')
@@ -686,10 +687,14 @@ const updateScrollRow = () => {
     debugInfo.scrollRow = 0
     return
   }
+  const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
+  const viewportH = scroller ? scroller.clientHeight : window.innerHeight
   const rect = el.getBoundingClientRect()
   const offset = Math.max(0, -rect.top)
-  const rowH = viewMode.value === 'grid' ? 280 : 80
-  debugInfo.scrollRow = Math.floor(offset / rowH) + (offset > 0 ? 1 : 0)
+  const rowH = viewMode.value === 'grid' ? 240 : 80
+  const scrolledRows = Math.floor(offset / rowH)
+  const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
+  debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }
 

@@ -781,7 +781,8 @@ const onWindowResize = () => {
   }, 200)
 }
 
-// DEBUG: 计算"当前视口顶部对齐的是第几行"
+// DEBUG: 计算"用户当前已经看到第几行" = 已滚过的行 + 当前视口内可见的行
+// 之前只算滚过的行（首屏 scrollRow=1），用户的直觉是"viewport 里这 4 行也算我看过了" → 改为加上
 const updateScrollRow = () => {
   const gridEl = getGridEl()
   if (!gridEl) return
@@ -789,8 +790,10 @@ const updateScrollRow = () => {
   const ch = cardHeightPx()
   // window 视口顶端在 grid 内的相对位置 = -top（top<=0 时已往上滚了）
   const offsetIntoGrid = Math.max(0, -top)
-  // 当前最上面一行 + 1（1-indexed）
-  debugInfo.scrollRow = Math.floor(offsetIntoGrid / ch) + 1
+  const scrolledRows = Math.floor(offsetIntoGrid / ch)
+  // 视口里 currently 可见的行数（向上取整：半行也算"看到了"）
+  const visibleRows = Math.max(1, Math.ceil(window.innerHeight / ch))
+  debugInfo.scrollRow = scrolledRows + visibleRows
   // scroll/resize 顺手刷新其它字段（cols/items/wanted 也可能变）
   writeDebug()
 }
