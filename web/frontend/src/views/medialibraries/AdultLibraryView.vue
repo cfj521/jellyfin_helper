@@ -226,14 +226,16 @@
               >无码</span>
             </div>
             <div class="grid-meta">
-              <div class="grid-code">{{ row.code || '未识别' }}</div>
+              <!-- code 行右侧并入健康度（圆点 + 文字），跟普通库的"code/title + 健康"右对齐风格保持一致 -->
+              <div class="grid-code-row">
+                <div class="grid-code">{{ row.code || '未识别' }}</div>
+                <div class="grid-health-row" :class="`grid-health-row--${gridHealthState(row)}`">
+                  <span class="grid-health-dot" />
+                  <span class="grid-health-text">{{ gridHealthLabel(row) }}</span>
+                </div>
+              </div>
               <div class="grid-title" :title="row.title || row.file_name">
                 {{ row.title || row.file_name || '—' }}
-              </div>
-              <!-- 健康度状态行：圆点 + 文字，始终可见 -->
-              <div class="grid-health-row" :class="`grid-health-row--${gridHealthState(row)}`">
-                <span class="grid-health-dot" />
-                <span class="grid-health-text">{{ gridHealthLabel(row) }}</span>
               </div>
             </div>
           </template>
@@ -1701,11 +1703,24 @@ onUnmounted(() => {
     min-width: 0;
   }
 
+  // code 行：左边番号、右边健康度，flex 分两端
+  .grid-code-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .grid-code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
     font-weight: 600;
     color: #4f46e5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   .grid-title {
@@ -1716,13 +1731,13 @@ onUnmounted(() => {
     white-space: nowrap;
   }
 
-  // 网格卡片健康度状态行（meta 区底部，始终可见）
+  // 网格卡片健康度状态行（并入 code-row 右侧）
   .grid-health-row {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 5px;
-    margin-top: 2px;
     font-size: 11px;
+    flex-shrink: 0;
 
     .grid-health-dot {
       width: 7px;
