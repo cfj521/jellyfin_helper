@@ -42,6 +42,10 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.heic'
 from web.backend.cache_store import get_cached as _kv_get, set_cached as _kv_set, invalidate as _kv_invalidate
 
 _LIB_STATS_SCOPE = 'lib_stats'
+# 派生字段过滤（health_issue / missing_tmdb）需要后端拉整库 + 计算 + 切片，开销大。
+# 同一组 filter+sort 的请求 5min 内复用同一份"已过滤+排序"列表，分页切片就是 O(1)。
+_LIB_FILTERED_SCOPE = 'lib_items_filtered'
+_LIB_FILTERED_TTL = 5 * 60
 
 
 def _lib_stats_ttl_seconds() -> int:
@@ -153,12 +157,21 @@ def get_library_items(
     search: Optional[str] = None,
     years: Optional[str] = None,        # 多个年份逗号分隔："2023,2024"
     genres: Optional[str] = None,       # 多个 genre 管道分隔："Action|Comedy"
+    sort_by: Optional[str] = None,      # Jellyfin SortBy：SortName / ProductionYear / CommunityRating / Type
+    sort_order: Optional[str] = None,   # Ascending / Descending
+    exclude_item_types: Optional[str] = None,  # 例 'Folder' 排除未识别孤儿目录
+    has_health_issue: bool = False,     # 只看健康有问题的条目（compute_health.level != 'ok'）
+    missing_tmdb: bool = False,         # 只看缺 TMDB ID 的条目
 ):
     """
     列出某个库的条目（分页）。
     返回字段包含海报缩略图 URL、Jellyfin 详情页 URL、演员数/有图演员数。
 
     search：按名称模糊搜索（透传 Jellyfin 的 SearchTerm 参数，服务端做匹配）。
+
+    sort_by/sort_order：透传给 Jellyfin（让服务端排好再分页）；前端可用于把"原生字段"排序
+    （name/year/rating/type）下推到 Jellyfin，避免无限滚动模式下只对已加载子集排序的 bug。
+    派生字段（health/tmdb_bound 等我们自己计算的）走前端 in-memory 排序。
 
     item_type 默认推断逻辑（避免 TV 库递归返回 Series+Season+Episode 一锅端）：
       tvshows → Series（顶层只显示剧；季/集靠 tree-table 懒加载）
@@ -189,24 +202,98 @@ def get_library_items(
             logger.warning(f"推断 item_type 失败 lib={library_id}: {e}")
             # 失败兜底：不限制类型（保持旧行为）
 
+    host = (settings.jellyfin_host or "").rstrip('/')
+
+    # ── 分支 A：派生字段过滤（health_issue / missing_tmdb）→ 后端全量拉 + 内存过滤 + 分页切片 ──
+    # 这两个字段 jellyfin 不知道，没法下推；用 5min 缓存避免重复拉整库
+    if has_health_issue or missing_tmdb:
+        cache_key = (
+            f"{library_id}|{item_type or ''}|{exclude_item_types or ''}|"
+            f"{int(has_health_issue)}{int(missing_tmdb)}|"
+            f"{sort_by or 'SortName'}|{sort_order or 'Ascending'}|"
+            f"{years or ''}|{genres or ''}|{search or ''}"
+        )
+        cached = _kv_get(_LIB_FILTERED_SCOPE, cache_key, ttl_seconds=_LIB_FILTERED_TTL)
+        if isinstance(cached, dict) and 'all_items' in cached:
+            all_items = cached['all_items']
+        else:
+            # 拉一次"全库"——jellyfin 单页上限 500，多翻几页直到拉完
+            all_raw = []
+            cur_start = 0
+            page_size = 500
+            while True:
+                p = client.get_library_items_page(
+                    library_id,
+                    start_index=cur_start,
+                    limit=page_size,
+                    item_types=item_type,
+                    exclude_item_types=exclude_item_types,
+                    fields=(
+                        "Path,ProductionYear,ImageTags,BackdropImageTags,ProviderIds,People,"
+                        "CommunityRating,OfficialRating,RunTimeTicks,MediaSources,MediaStreams,"
+                        "ChildCount,Overview,OriginalTitle,Genres"
+                    ),
+                    sort_by=sort_by or 'SortName',
+                    sort_order=sort_order or 'Ascending',
+                    search_term=search,
+                    years=years,
+                    genres=genres,
+                )
+                got = p['items'] or []
+                all_raw.extend(got)
+                if len(got) < page_size or cur_start + page_size >= (p.get('total') or 0):
+                    break
+                cur_start += page_size
+                # 防御：拉超过 1 万条停（罕见）
+                if cur_start > 10000:
+                    logger.warning(f"lib {library_id} 拉取超过 10000 条，停止全量")
+                    break
+
+            built = [_build_item_dict(i, host) for i in all_raw]
+            # in-memory filter
+            def _keep(it: Dict) -> bool:
+                if has_health_issue and (it.get('health') or {}).get('level') == 'ok':
+                    return False
+                if missing_tmdb and it.get('tmdb_id'):
+                    return False
+                return True
+            all_items = [it for it in built if _keep(it)]
+            _kv_set(_LIB_FILTERED_SCOPE, cache_key, {'all_items': all_items})
+            logger.info(
+                f"派生字段过滤拉全库: lib={library_id} 原 {len(built)} 条 → 过滤后 {len(all_items)} 条"
+                f"（has_health_issue={has_health_issue}, missing_tmdb={missing_tmdb}）"
+            )
+
+        total = len(all_items)
+        items_page = all_items[start_index:start_index + limit]
+        return {
+            "count": len(items_page),
+            "total": total,
+            "start_index": start_index,
+            "limit": limit,
+            "items": items_page,
+        }
+
+    # ── 分支 B：无派生过滤 → jellyfin 服务端分页（高效路径，无限滚动天然兼容）──
     page = client.get_library_items_page(
         library_id,
         start_index=start_index,
         limit=limit,
         item_types=item_type,
+        exclude_item_types=exclude_item_types,
         fields=(
             "Path,ProductionYear,ImageTags,BackdropImageTags,ProviderIds,People,"
             "CommunityRating,OfficialRating,RunTimeTicks,MediaSources,MediaStreams,ChildCount,Overview,"
             "OriginalTitle,Genres"
         ),
+        sort_by=sort_by or 'SortName',
+        sort_order=sort_order or 'Ascending',
         search_term=search,
         years=years,
         genres=genres,
     )
     items = page['items']
     total = page['total']
-
-    host = (settings.jellyfin_host or "").rstrip('/')
 
     return {
         "count": len(items),
@@ -781,6 +868,10 @@ def identify_search(item_id: str, req: IdentifySearchRequest):
 
     # 元数据语言：默认跟 settings.tmdb_language 一致；调用方可显式覆盖
     language = req.language or settings.tmdb_language or 'en-US'
+    logger.info(
+        f"/items/identify-search: item_id={item_id} item_type={req.item_type!r} "
+        f"name={req.name!r} year={req.year} tmdb_id={req.tmdb_id!r} language={language!r}"
+    )
     try:
         results = client.remote_search(
             item_id=item_id,
@@ -794,6 +885,7 @@ def identify_search(item_id: str, req: IdentifySearchRequest):
         logger.exception("Jellyfin remote_search 调用失败")
         raise HTTPException(status_code=502, detail=f"Jellyfin 远端搜索失败: {e}")
 
+    logger.info(f"/items/identify-search: item_id={item_id} 候选数={len(results)}")
     return {
         "count": len(results),
         "candidates": results,
@@ -847,6 +939,7 @@ def _assert_safe_to_delete(item_path: str, item_name: str):
 
     # 归一化后变空，说明原路径只有斜杠 / 反斜杠 —— 系统根，拒绝
     if not item_norm:
+        logger.error(f"_assert_safe_to_delete 拦截：路径 {item_path!r} 归一化为空（系统根）")
         raise HTTPException(
             status_code=400,
             detail=f"拒绝删除：路径是系统根 ({item_path})，绝对不允许",
@@ -859,6 +952,7 @@ def _assert_safe_to_delete(item_path: str, item_name: str):
         't:', 'u:', 'v:', 'w:', 'x:', 'y:', 'z:',
     }
     if item_norm in DANGEROUS_ROOTS:
+        logger.error(f"_assert_safe_to_delete 拦截：路径 {item_path!r} 是盘符根")
         raise HTTPException(
             status_code=400,
             detail=f"拒绝删除：路径是系统根 ({item_path})，绝对不允许",
@@ -883,6 +977,10 @@ def _assert_safe_to_delete(item_path: str, item_name: str):
                 continue
             # 完全相等：item 就是库根
             if item_norm == loc_norm:
+                logger.error(
+                    f"_assert_safe_to_delete 拦截：item_path={item_path!r} "
+                    f"等于库 {lib.get('name')!r} 的根 {loc!r}"
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -892,6 +990,10 @@ def _assert_safe_to_delete(item_path: str, item_name: str):
                 )
             # item 是库 location 的祖先目录（极少见但灾难性）
             if loc_norm.startswith(item_norm + '/'):
+                logger.error(
+                    f"_assert_safe_to_delete 拦截：item_path={item_path!r} 是库 "
+                    f"{lib.get('name')!r} 根 {loc!r} 的祖先"
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -1103,6 +1205,11 @@ def delete_item(item_id: str):
     item_path = item.get('Path') or ''
     item_name = item.get('Name') or ''
 
+    logger.warning(
+        f"/items/delete 请求: item_id={item_id} name={item_name!r} "
+        f"type={item.get('Type')!r} path={item_path!r}"
+    )
+
     # 阻断危险删除
     _assert_safe_to_delete(item_path, item_name)
 
@@ -1110,6 +1217,7 @@ def delete_item(item_id: str):
     jellyfin_error: Optional[str] = None
     try:
         client.delete_item(item_id)
+        logger.info(f"/items/delete 成功 (jellyfin): item_id={item_id} path={item_path!r}")
         return {"success": True, "method": "jellyfin", "item_id": item_id}
     except Exception as e:
         jellyfin_error = str(e)
@@ -1207,6 +1315,11 @@ def delete_item(item_id: str):
             except Exception as e:
                 logger.warning(f"物理删除后刷新库失败: {e}")
 
+    logger.warning(
+        f"/items/delete 成功 (physical_delete): item_id={item_id} kind={kind!r} "
+        f"deleted_paths={len(deleted_paths)} root={local_path_str!r} "
+        f"library_refresh={refreshed_lib_id!r}"
+    )
     return {
         "success": True,
         "method": "physical_delete",
@@ -1227,6 +1340,18 @@ def identify_apply(item_id: str, req: IdentifyApplyRequest):
     if not req.candidate:
         raise HTTPException(status_code=400, detail="缺少 candidate")
 
+    # candidate 可能含 ProviderIds 等结构；记关键身份字段就够
+    cand = req.candidate or {}
+    cand_summary = {
+        'Name': cand.get('Name'),
+        'ProductionYear': cand.get('ProductionYear'),
+        'ProviderIds': cand.get('ProviderIds'),
+    }
+    logger.info(
+        f"/items/identify-apply: item_id={item_id} "
+        f"candidate={cand_summary} replace_all_images={req.replace_all_images}"
+    )
+
     client = _client()
     try:
         client.remote_search_apply(
@@ -1238,6 +1363,7 @@ def identify_apply(item_id: str, req: IdentifyApplyRequest):
         logger.exception("Jellyfin remote_search_apply 调用失败")
         raise HTTPException(status_code=502, detail=f"Jellyfin 应用候选失败: {e}")
 
+    logger.info(f"/items/identify-apply 成功: item_id={item_id}")
     return {"success": True, "item_id": item_id}
 
 
@@ -1662,9 +1788,11 @@ def refresh_library(library_id: str, mode: str = 'scan_changes'):
       - missing_metadata  搜索缺少的元数据
       - replace_all       覆盖所有元数据
     """
+    logger.info(f"/libraries/{library_id}/refresh: mode={mode}")
     client = _client()
     ok = client.refresh_library(library_id, mode=mode)
     if not ok:
+        logger.warning(f"刷新触发失败 library_id={library_id} mode={mode}")
         raise HTTPException(status_code=500, detail="刷新触发失败，查看后端日志")
     return {"ok": True, "library_id": library_id, "mode": mode}
 
@@ -1672,9 +1800,11 @@ def refresh_library(library_id: str, mode: str = 'scan_changes'):
 @router.post("/refresh-all")
 def refresh_all():
     """触发全局媒体库刷新（耗时操作，Jellyfin 内部异步执行）"""
+    logger.info("/refresh-all: 触发全局媒体库刷新")
     client = _client()
     ok = client.refresh_all_libraries()
     if not ok:
+        logger.warning("全局刷新触发失败")
         raise HTTPException(status_code=500, detail="全局刷新触发失败")
     return {"ok": True}
 

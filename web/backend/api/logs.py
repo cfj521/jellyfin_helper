@@ -31,6 +31,8 @@ _LEVEL_RE = re.compile(r'\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]')
 
 _VALID_LEVELS = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
 
+logger = logging.getLogger(__name__)
+
 
 class LogLevelRequest(BaseModel):
     level: str
@@ -111,6 +113,12 @@ def set_log_level(req: LogLevelRequest):
     if level_up not in _VALID_LEVELS:
         raise HTTPException(status_code=400, detail=f"未知 level: {req.level}")
     root = logging.getLogger()
+    old_level = logging.getLevelName(root.level)
+    # 用 WARNING 而非 INFO：日志级别变更是审计事件——事后看"为什么日志爆炸 / 为什么没 INFO"时
+    # 需要明确知道发生过这步切换；WARNING 不管将来 level 怎么调都能保留这条
+    logger.warning(
+        f"/logs/level POST: root logger {old_level} → {level_up}（用户主动；进程重启会失效）"
+    )
     root.setLevel(level_up)
     for h in root.handlers:
         h.setLevel(level_up)

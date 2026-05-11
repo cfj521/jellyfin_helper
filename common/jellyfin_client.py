@@ -268,6 +268,7 @@ class JellyfinClient:
         start_index: int = 0,
         limit: int = 50,
         item_types: Optional[str] = None,
+        exclude_item_types: Optional[str] = None,  # 例 'Folder' 把未识别的 Folder 行过滤掉
         recursive: bool = True,
         fields: str = "Path,ProductionYear,ImageTags,ProviderIds",
         sort_by: str = "SortName",
@@ -294,6 +295,8 @@ class JellyfinClient:
         }
         if item_types:
             params['IncludeItemTypes'] = item_types
+        if exclude_item_types:
+            params['ExcludeItemTypes'] = exclude_item_types
         if search_term:
             params['SearchTerm'] = search_term
         # 年份过滤：jellyfin 接受 Years=2020,2021,2022（多年逗号分隔）

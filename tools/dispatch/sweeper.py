@@ -200,7 +200,7 @@ def _fire_all_triggers():
     targets = [
         ('tools.dispatch.analyzer', 'trigger'),
         ('tools.dispatch.downloader_watcher', 'trigger'),
-        ('tools.dispatch.pipeline', 'trigger'),
+        ('tools.dispatch.pipeline_worker', 'trigger'),
         ('tools.dispatch.jellyfin_watcher', 'trigger'),
         ('tools.dispatch.post_process_worker', 'trigger'),
     ]

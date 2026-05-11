@@ -34,7 +34,7 @@ def _spawn_thread(target, name: str, args=()):
 
 def _start_pipeline_worker(stop_event):
     """DispatchPipeline 是个 class，要包一层。"""
-    from tools.dispatch.pipeline import DispatchPipeline
+    from tools.dispatch.pipeline_worker import DispatchPipeline
     pl = DispatchPipeline(stop_event=stop_event)
     pl.run_forever()
 

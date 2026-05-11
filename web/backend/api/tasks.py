@@ -2,6 +2,7 @@
 任务管理 API
 后台任务状态查询和管理
 """
+import logging
 from typing import List, Optional
 from datetime import datetime
 import json
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from web.backend.database import get_db, Task
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -135,6 +136,9 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     if task.status == "running":
         raise HTTPException(status_code=400, detail="无法删除正在运行的任务")
 
+    logger.info(
+        f"/tasks/delete: id={task_id} task_type={task.task_type!r} status={task.status!r}"
+    )
     db.delete(task)
     db.commit()
 
@@ -151,6 +155,10 @@ def cancel_task(task_id: int, db: Session = Depends(get_db)):
     if task.status not in ["pending", "running"]:
         raise HTTPException(status_code=400, detail="只能取消待执行或运行中的任务")
 
+    logger.warning(
+        f"/tasks/cancel: id={task_id} task_type={task.task_type!r} "
+        f"status={task.status!r} progress={task.progress}"
+    )
     task.status = "cancelled"
     task.completed_at = datetime.utcnow()
     task.message = "用户取消"
@@ -264,6 +272,25 @@ def complete_task(
 
     task = db.query(Task).filter(Task.id == task_id).first()
     if task:
+        # 任务运行时长 + 终态：所有后台 worker 完成都过这里，是 task 状态机的统一出口
+        # 比每个 worker 自己写 "任务 X 完成" 更可靠（漏写不会丢日志）
+        elapsed_str = ''
+        if task.started_at:
+            elapsed = (datetime.utcnow() - task.started_at).total_seconds()
+            elapsed_str = f" elapsed={elapsed:.1f}s"
+        log_msg = (
+            f"task complete: id={task_id} type={task.task_type!r} "
+            f"success={success}{elapsed_str}"
+        )
+        if not success:
+            # 失败时多打一行 err 摘要，方便 grep 'task complete.*success=False' 看故障批次
+            err = (result or {}).get('error') if isinstance(result, dict) else None
+            if err:
+                log_msg += f" error={str(err)[:200]!r}"
+            logger.warning(log_msg)
+        else:
+            logger.info(log_msg)
+
         task.status = "completed" if success else "failed"
         task.progress = 100.0
         task.completed_at = datetime.utcnow()

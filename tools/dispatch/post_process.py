@@ -35,6 +35,9 @@ def post_process_subtitle(
         return ('warned', {'error': str(e)})
 
     langs = preferred_langs or _settings.preferred_langs
+    logger.info(
+        f"post_process_subtitle: 处理 {len(dispatched_files)} 个文件 langs={langs}"
+    )
 
     try:
         result = run_subtitle_auto_fix_inline(
@@ -47,12 +50,17 @@ def post_process_subtitle(
             progress_cb=progress_cb,
         )
         if result.get('error'):
+            logger.warning(f"post_process_subtitle: error={result['error']}")
             return ('warned', {'error': result['error']})
-        if result['download'].get('failed', 0) > 0:
-            return ('warned', {
-                'failed': result['download']['failed'],
-                'success': result['download'].get('success', 0),
-            })
+        dl = result.get('download') or {}
+        success = dl.get('success', 0)
+        failed = dl.get('failed', 0)
+        if failed > 0:
+            logger.warning(
+                f"post_process_subtitle: 部分下载失败 success={success} failed={failed}"
+            )
+            return ('warned', {'failed': failed, 'success': success})
+        logger.info(f"post_process_subtitle: ok success={success}")
         return ('ok', result)
     except Exception as e:
         logger.warning(f"字幕处理失败（不阻断）: {e}")
@@ -81,6 +89,9 @@ def post_process_audio(
         return ('warned', {'error': str(e)})
 
     langs = preferred_langs or _settings.preferred_audio_langs
+    logger.info(
+        f"post_process_audio: 处理 {len(dispatched_files)} 个文件 langs={langs}"
+    )
 
     try:
         result = run_default_track_inline(
@@ -93,7 +104,10 @@ def post_process_audio(
         )
         # mkvtoolnix 不可用会返回 error 字段且自动降级为预览
         if result.get('error'):
+            logger.info(f"post_process_audio: 跳过 reason={result['error']!r}")
             return ('skipped', {'reason': result['error']})
+        applied = result.get('applied') or 0
+        logger.info(f"post_process_audio: ok applied={applied}")
         return ('ok', result)
     except Exception as e:
         logger.warning(f"音轨处理失败（不阻断）: {e}")

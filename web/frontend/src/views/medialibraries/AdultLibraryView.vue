@@ -44,6 +44,8 @@
             @change="onFilterChange"
           />
         </div>
+        <!-- 「仅看健康有问题」已移到 sort-bar 里作 chip 形式（紧跟排序按钮后）-->
+
         <!-- 数据源切换开关：靠右 -->
         <div class="toolbar-switch">
           <span class="switch-label">使用 Jellyfin 数据库</span>
@@ -117,7 +119,7 @@
     <el-card shadow="never" class="items-card">
       <template #header>
         <div class="card-header items-header">
-          <!-- 排序栏（与普通库 LibraryDetail 风格一致） -->
+          <!-- 排序栏 + 派生 filter chip（与普通库 LibraryDetail 风格一致） -->
           <div class="sort-bar">
             <span class="sort-label">排序：</span>
             <button
@@ -131,6 +133,21 @@
                 <CaretTop v-if="sortDir === 'asc'" />
                 <CaretBottom v-else />
               </el-icon>
+            </button>
+            <!-- filter chip：跟 sort chip 视觉一致；激活时琥珀色 + ✓ 区分语义 -->
+            <span class="filter-divider" aria-hidden="true">·</span>
+            <button
+              :class="['sort-chip', 'filter-chip', { active: filters.has_health_issue, disabled: filters.use_jellyfin_db }]"
+              :disabled="filters.use_jellyfin_db"
+              :title="filters.use_jellyfin_db
+                ? 'Jellyfin 视图下用此条件不准；切回 AdultItem 数据源后可用'
+                : (filters.has_health_issue
+                  ? '点击取消「健康度」过滤'
+                  : '只看未识别 / 未刮削 / 封面或 NFO 本地缺失的条目')"
+              @click="filters.has_health_issue = !filters.has_health_issue"
+            >
+              <el-icon v-if="filters.has_health_issue" class="filter-check"><Check /></el-icon>
+              健康度
             </button>
           </div>
 
@@ -451,6 +468,7 @@ const filters = reactive({
   uncensored: null,
   show_excluded: false,    // 默认隐藏 excluded 条目（用户标记为无效番号的）
   use_jellyfin_db: false,  // ON = data_source=jellyfin（按 Jellyfin 视角列）
+  has_health_issue: false, // 派生字段过滤：只看不"完全完整"的条目（未识别/未刮削/cover或nfo缺）
 })
 // 无限滚动 + wanted 累加器（对齐 Trending.vue / LibraryDetail.vue 双层模型）
 //   items     = 后端数据池（一次拉 FETCH_BATCH 条，比 wanted 大）
@@ -690,6 +708,13 @@ const _buildListParams = (offset, limit) => {
   if (filters.uncensored !== null && filters.uncensored !== '') {
     params.uncensored = filters.uncensored
   }
+  // 排序下推到后端 SQL ORDER BY，sortedItems 不再前端排
+  params.sort_by = sortField.value
+  params.sort_order = sortDir.value
+  // 派生字段过滤 has_health_issue 同样下推（后端用 OR 条件 SQL 表达）
+  if (filters.has_health_issue) {
+    params.has_health_issue = true
+  }
   return params
 }
 
@@ -798,21 +823,22 @@ const onFilterChange = () => {
 }
 
 // ============================================================================
-// 排序栏（前端排序：作用于当前页；普通库也是这个策略）
+// 排序栏（全部下推到后端 SQL ORDER BY，无限滚动天然兼容）
 // ============================================================================
+// 之前包含派生字段「健康度」，但前端排只对加载子集生效，无限滚动模式下结果错误。
+// 健康度需求改成 filter 开关「仅看健康有问题」（见 filters.has_health_issue），更直接
 const sortOptions = [
   { field: 'code',         label: '番号' },
   { field: 'title',        label: '标题' },
-  { field: 'health',       label: '健康度' },
   { field: 'release_date', label: '发行' },
 ]
 
 const sortField = ref('code')
 const sortDir = ref('asc')
 
-// 切到不同字段给个合理默认方向（健康度/发行降序更顺手）
+// 发行日期降序更顺手
 const _defaultDir = (field) =>
-  ['health', 'release_date'].includes(field) ? 'desc' : 'asc'
+  ['release_date'].includes(field) ? 'desc' : 'asc'
 
 const setSort = (field) => {
   if (sortField.value === field) {
@@ -823,52 +849,9 @@ const setSort = (field) => {
   }
 }
 
-// 健康度排序权重：要让"红 / 灰 / 黄"排在前面便于排查；excluded / cooldown 沉底
-const _healthRank = (row) => {
-  if (row.excluded) return 0
-  if (row.cooldown_until && new Date(row.cooldown_until).getTime() > Date.now()) return 1
-  if (!row.code) return 6                                         // 红：未识别
-  if (row.source === 'not_found') return 6                        // 红：刮失败
-  if (!row.title || !row.source || row.source === 'pending') return 5  // 灰
-  // 用后端 cover_local_ok / nfo_local_ok 权威判定（字段值 + 文件实存）
-  // 旧逻辑只看字段非空 → 字段有 URL 但本地未下载成功，UI 仍显示"完整"
-  const missingCover = (row.cover_local_ok === undefined)
-    ? (!row.poster_path && !row.cover_url)
-    : !row.cover_local_ok
-  const missingNfo = (row.nfo_local_ok === undefined)
-    ? !row.nfo_path
-    : !row.nfo_local_ok
-  if (missingCover || missingNfo) return 4                        // 黄
-  return 2                                                         // 绿
-}
-
-const _fieldKey = (row, field) => {
-  switch (field) {
-    case 'code':         return [(row.code || '').toLowerCase()]
-    case 'title':        return [(row.title || '').toLocaleLowerCase()]
-    case 'health':       return [_healthRank(row)]
-    case 'release_date': return [row.release_date || '']
-    default:             return [0]
-  }
-}
-
-const _compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-
-const sortedItems = computed(() => {
-  const arr = [...items.value]
-  const dir = sortDir.value === 'asc' ? 1 : -1
-  arr.sort((a, b) => {
-    const ka = _fieldKey(a, sortField.value)
-    const kb = _fieldKey(b, sortField.value)
-    for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
-      const r = _compare(ka[i], kb[i])
-      if (r !== 0) return r * dir
-    }
-    // 主键相同时用 code 做次级稳定排序
-    return _compare((a.code || '').toLowerCase(), (b.code || '').toLowerCase())
-  })
-  return arr
-})
+// 排序全部下推到后端 SQL，前端不再二次排（旧版 _fieldKey/_compare/_healthRank 已删）
+// 派生健康信号现在通过 has_health_issue filter 表达，比"按健康度排序看 top N"更直接
+const sortedItems = computed(() => items.value)
 
 const onSelectionChange = (rows) => { selected.value = rows }
 
@@ -1319,6 +1302,12 @@ watch(() => props.library?.id, async () => {
   loadStats()
 })
 
+// 排序 / 派生 filter 切换：全部下推到后端 SQL → 触发 reload 重新拉首页
+// 跟普通库 LibraryDetail 同一套模型，避免无限滚动下"前端只对子集排序"的 bug
+watch([sortField, sortDir, () => filters.has_health_issue], () => {
+  reload()
+})
+
 // items 数量 / wanted / 视图模式变化 → 刷新 debug 面板
 watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
@@ -1587,6 +1576,34 @@ onUnmounted(() => {
           font-size: 11px;
         }
       }
+
+      // filter-chip：激活态琥珀色区分语义（多选过滤 vs 单选排序）
+      &.filter-chip {
+        &.active {
+          background: #f59e0b;
+          border-color: #f59e0b;
+          color: #fff;
+        }
+        &.disabled,
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+          &:hover {
+            border-color: #e2e8f0;
+            color: #475569;
+          }
+        }
+        .filter-check {
+          font-size: 11px;
+          margin-right: 2px;
+        }
+      }
+    }
+
+    .filter-divider {
+      color: #cbd5e1;
+      margin: 0 2px;
+      user-select: none;
     }
   }
 

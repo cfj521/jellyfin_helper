@@ -19,20 +19,28 @@ def clean_trash() -> dict:
     """清空 trash_dir 下所有文件 + 删空目录（保留 trash_dir 本身）。"""
     cfg = settings.dispatch
     if not cfg.trash_dir:
+        logger.debug("trash_cleaner: trash_dir 未配置，跳过")
         return {'deleted': 0, 'errors': 0}
     trash = Path(cfg.trash_dir)
     if not trash.exists():
+        logger.debug(f"trash_cleaner: {trash} 不存在，跳过")
         return {'deleted': 0, 'errors': 0}
 
     deleted = 0
     errors = 0
+    freed_bytes = 0
 
     # 删所有文件
     for f in trash.rglob('*'):
         try:
             if f.is_file():
+                try:
+                    sz = f.stat().st_size
+                except OSError:
+                    sz = 0
                 f.unlink()
                 deleted += 1
+                freed_bytes += sz
         except Exception as e:
             logger.warning(f"trash 文件删除失败 {f}: {e}")
             errors += 1
@@ -46,6 +54,11 @@ def clean_trash() -> dict:
             except Exception:
                 pass
 
-    if deleted:
-        logger.info(f"trash 清理：删除 {deleted} 个文件")
+    if deleted or errors:
+        logger.info(
+            f"trash 清理：删除 {deleted} 个文件 ({freed_bytes/1e9:.2f}GB)"
+            + (f"，{errors} 个失败" if errors else "")
+        )
+    else:
+        logger.debug("trash 清理：无需处理")
     return {'deleted': deleted, 'errors': errors}

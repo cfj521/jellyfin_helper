@@ -110,6 +110,7 @@ def scan_actors(
     if not settings.jellyfin_api_key:
         raise HTTPException(status_code=400, detail="未配置 Jellyfin API Key")
 
+    logger.info("/actors/scan: 启动 Jellyfin 演员扫描任务")
     task = create_task(db, "actor_scan", "扫描 Jellyfin 演员...", params={})
 
     background_tasks.add_task(run_actor_scan, task.id)
@@ -183,6 +184,11 @@ def run_actor_scan(task_id: int):
 
         without_image = db.query(ActorInfo).filter(ActorInfo.has_image == False).count()
 
+        logger.info(
+            f"run_actor_scan 完成: task={task_id} jellyfin_persons={len(persons)} "
+            f"new={new_count} updated={updated_count} without_image={without_image}"
+        )
+
         complete_task(db, task_id, {
             "total": len(persons),
             "new": new_count,
@@ -191,6 +197,7 @@ def run_actor_scan(task_id: int):
         })
 
     except Exception as e:
+        logger.exception(f"run_actor_scan 失败: task={task_id}")
         complete_task(db, task_id, {"error": str(e)}, success=False)
     finally:
         db.close()
@@ -232,6 +239,7 @@ def delete_cjk_named_actors(
         raise HTTPException(status_code=400, detail="未配置 Jellyfin API Key")
 
     mode = "预览" if req.dry_run else "执行"
+    logger.warning(f"/actors/delete-cjk: dry_run={req.dry_run}（破坏性操作）")
     task = create_task(db, "actor_delete_cjk", f"{mode}删除 CJK 名演员...")
     background_tasks.add_task(run_delete_cjk_actors, task.id, req.dry_run)
     return {"task_id": task.id, "status": "started", "message": f"{mode}任务已启动"}
@@ -378,6 +386,11 @@ def fix_actor_images(
 
     mode = "扫描" if request.scan_only else "修复"
     scope_label = _make_scope_label(request.library_id, request.library_ids)
+    logger.info(
+        f"/actors/fix: scope={scope_label!r} scan_only={request.scan_only} "
+        f"limit={request.limit} skip_existing={request.skip_existing} "
+        f"library_id={request.library_id!r} library_ids={request.library_ids!r}"
+    )
     task = create_task(
         db,
         "actor_fix",
@@ -637,6 +650,10 @@ def fix_single_actor(
     if not actor:
         raise HTTPException(status_code=404, detail="演员不存在")
 
+    logger.info(
+        f"/actors/{actor_id}/fix: name={actor.name!r} tmdb_id={actor.tmdb_id!r} "
+        f"jellyfin_id={actor.jellyfin_id!r}"
+    )
     task = create_task(db, "actor_fix_single", f"修复演员: {actor.name}")
 
     background_tasks.add_task(run_single_actor_fix, task.id, actor_id)
@@ -872,6 +889,7 @@ def scan_posters(
     if not settings.jellyfin_api_key:
         raise HTTPException(status_code=400, detail="未配置 Jellyfin API Key")
 
+    logger.info("/posters/scan: 启动海报扫描任务")
     task = create_task(db, "poster_scan", "扫描 Jellyfin 电影/剧集...", params={})
     background_tasks.add_task(run_poster_scan, task.id)
     return {"task_id": task.id, "status": "started", "message": "扫描任务已启动"}
@@ -958,6 +976,11 @@ def run_poster_scan(task_id: int):
         _flush_batch(movies, 'movie')
         _flush_batch(series, 'series')
 
+        logger.info(
+            f"run_poster_scan 完成: task={task_id} total={total} "
+            f"movies={len(movies)} series={len(series)} new={new_count} "
+            f"updated={updated_count} without_poster={without_poster}"
+        )
         with SessionLocal() as db:
             complete_task(db, task_id, {
                 "total": total,
@@ -969,7 +992,7 @@ def run_poster_scan(task_id: int):
             })
 
     except Exception as e:
-        logger.exception("海报扫描失败")
+        logger.exception(f"海报扫描失败: task={task_id}")
         with SessionLocal() as db:
             complete_task(db, task_id, {"error": str(e)}, success=False)
 
@@ -1069,6 +1092,12 @@ def fix_posters(
     mode = "扫描" if request.scan_only else "修复"
     scope_label = _make_scope_label(
         request.library_id, request.library_ids, request.item_paths,
+    )
+    logger.info(
+        f"/posters/fix: scope={scope_label!r} scan_only={request.scan_only} "
+        f"limit={request.limit} skip_existing={request.skip_existing} "
+        f"media_type={request.media_type!r} library_id={request.library_id!r} "
+        f"library_ids={request.library_ids!r}"
     )
     task = create_task(
         db,
@@ -1332,6 +1361,10 @@ def fix_single_poster(
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
 
+    logger.info(
+        f"/posters/{item_id}/fix: title={item.title!r} media_type={item.media_type!r} "
+        f"tmdb_id={item.tmdb_id!r}"
+    )
     task = create_task(db, "poster_fix_single", f"修复海报: {item.title}")
     background_tasks.add_task(run_single_poster_fix, task.id, item_id)
     return {"task_id": task.id, "status": "started"}
@@ -1466,6 +1499,13 @@ def fix_episode_stills(
         scope_label = "1 个库"
     else:
         scope_label = "全部 TV 库"
+
+    logger.info(
+        f"/episodes/fix-stills: scope={scope_label!r} scan_only={request.scan_only} "
+        f"limit={request.limit} skip_existing={request.skip_existing} "
+        f"episode_ids={len(request.episode_ids or [])} "
+        f"library_id={request.library_id!r} library_ids={request.library_ids!r}"
+    )
 
     task = create_task(
         db,
@@ -1663,6 +1703,12 @@ def run_episode_still_fix(
                 entry['error'] = str(e)
                 details.append(entry)
 
+        logger.info(
+            f"run_episode_still_fix 完成: task={task_id} total={total} "
+            f"success={success_count} skipped={skipped_count} failed={failed_count} "
+            f"scan_only={scan_only}"
+        )
+
         with SessionLocal() as db:
             complete_task(db, task_id, {
                 "total": total,
@@ -1674,7 +1720,7 @@ def run_episode_still_fix(
             })
 
     except Exception as e:
-        logger.exception("Episode 缩略图修复失败")
+        logger.exception(f"Episode 缩略图修复失败: task={task_id}")
         with SessionLocal() as db:
             complete_task(db, task_id, {"error": str(e)}, success=False)
 

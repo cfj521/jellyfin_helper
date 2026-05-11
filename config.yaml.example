@@ -179,18 +179,23 @@ anilist:
   timeout_seconds: 15
   cache_minutes: 240            # 番剧排行变化慢，4 小时
 
-# 豆瓣片单：白名单形式，每个 doulist_id 是 douban.com/doulist/<id>/ 的 ID 部分
-# 反爬严：豆瓣对未登录访问触发限速会拉黑半小时；片单内容变化慢（如 Top 250 一周改不了几条）
+# 豆瓣片单：白名单形式
+# doulist_id 取值：
+#   纯数字       → 经典 /doulist/<id>/ 片单（如 Top 250 的 240962）
+#   "chart"      → 豆瓣电影排行榜（/chart 默认 section）
+#   "nowplaying" → 正在上映（/cinema/nowplaying/）
+#   "upcoming"   → 上映在即
+# 反爬严：豆瓣对未登录访问触发限速会拉黑半小时；片单内容变化慢
 # → cache_days 默认 3 天；空结果不写缓存（避免反爬被命中后长期返回空）
 # 失效时打开 douban.com 找新片单 URL 中的 ID 替换即可
 douban_lists:
   enabled: true
   cache_days: 3
   lists:
-    - { name: "豆瓣 Top 250",      doulist_id: "240962",  media_type: "movie" }
-    - { name: "必看高分剧情片",     doulist_id: "1295618", media_type: "movie" }
-    - { name: "高分美剧",          doulist_id: "1462129", media_type: "tv" }
-    - { name: "一生必看的100部电影", doulist_id: "122224",  media_type: "movie" }
+    - { name: "豆瓣 Top 250", doulist_id: "240962",     media_type: "movie" }
+    - { name: "豆瓣排行榜",   doulist_id: "chart",      media_type: "movie" }
+    - { name: "正在上映",     doulist_id: "nowplaying", media_type: "movie" }
+    - { name: "即将上映",     doulist_id: "upcoming",   media_type: "movie" }
 
 # 成人内容配置（默认关闭）
 # enabled=false 时菜单不显示，相关 API 路由也不挂载

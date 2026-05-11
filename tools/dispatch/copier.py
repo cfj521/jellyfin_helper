@@ -60,12 +60,13 @@ def copy_file_with_progress(
             dst_stat = dst.stat()
             dst_size = dst_stat.st_size
             dst_mtime = dst_stat.st_mtime
-        except OSError:
+        except OSError as e:
+            logger.warning(f"copy: stat 目标失败 {dst}: {e}（按从零复制处理）")
             dst_size = 0
             dst_mtime = 0.0
         if dst_size == total:
             # 完整匹配 → 已复制过，跳过整个传输
-            logger.info(f"resume: {dst.name} 已存在且 size 一致，跳过复制")
+            logger.info(f"copy: skip-identical {dst.name} ({total/1e6:.1f}MB) 已存在且 size 一致")
             if progress_cb:
                 try:
                     progress_cb(total, total)
@@ -79,22 +80,38 @@ def copy_file_with_progress(
                 # 老文件 → 多半是另一个种子（D7 PROPER/REPACK / 同 TMDB 不同质量）写过这里
                 # 此时 append 会把新种子的内容追加到旧种子文件尾部 → 文件结构损坏
                 # 抛出明确错误让 organizer/pipeline 处理（建议: 备份旧文件到 trash 后重写）
+                logger.warning(
+                    f"copy: cross-torrent-collision {dst} "
+                    f"({dst_size}/{total} bytes, mtime age {int(age/60)}min) "
+                    f"→ raise CrossTorrentCollisionError（需人工决策）"
+                )
                 raise CrossTorrentCollisionError(
                     f"目标 {dst} 已存在 ({dst_size}/{total} bytes) 但 mtime 老于 "
                     f"{int(age/60)} 分钟前 —— 多半是另一个种子的旧文件。"
                     f"为防 append 损坏文件，已拒绝续传。请人工决策（覆盖/改名/跳过）。"
                 )
-            logger.info(f"resume: {dst.name} 续传，已有 {dst_size}/{total} bytes (age={int(age)}s)")
+            logger.info(
+                f"copy: resume {dst.name} 续传，已有 {dst_size}/{total} bytes (age={int(age)}s)"
+            )
             skip = dst_size
             open_mode = 'ab'
         else:
             # 异常（dst_size > total 或为 0 或 stat 失败）→ 重头复制
+            logger.warning(
+                f"copy: dst 状态异常 {dst} "
+                f"(dst_size={dst_size}, total={total}) → 删除后重头复制"
+            )
             try:
                 dst.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"copy: 删除旧 dst 失败 {dst}: {e}（继续，open 会覆盖）")
+
+    if skip == 0:
+        # 全新复制：明确记录 src→dst + size，事后可追溯哪个文件什么时候被搬过
+        logger.info(f"copy: start {src.name} → {dst} ({total/1e6:.1f}MB)")
 
     done = skip
+    t0 = time.time()
 
     with open(src, 'rb') as f_in, open(dst, open_mode) as f_out:
         if skip:
@@ -116,7 +133,15 @@ def copy_file_with_progress(
     except Exception as e:
         logger.warning(f"copystat 失败 {dst}: {e}")
 
-    return done - skip   # 实际新写入的字节数
+    new_bytes = done - skip
+    elapsed = time.time() - t0
+    if new_bytes > 0:
+        speed = (new_bytes / 1e6 / elapsed) if elapsed > 0 else 0
+        logger.info(
+            f"copy: done {dst.name} new={new_bytes/1e6:.1f}MB "
+            f"elapsed={elapsed:.1f}s speed={speed:.1f}MB/s"
+        )
+    return new_bytes   # 实际新写入的字节数
 
 
 def copy_tree_with_progress(

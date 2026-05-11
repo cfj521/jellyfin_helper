@@ -255,7 +255,18 @@ def quota_check_and_cleanup() -> Optional[Dict]:
             # 主流水线 / 后处理在跑的 / 等外部事件中的（downloading、jellyfin_recognizing 等）
             # —— 一律不动，避免清掉正在 copy 的源 / 还没识别完的种子
             if row.phase in ACTIVE_PHASES:
+                logger.debug(
+                    f"配额清理: 跳过 {row.torrent_hash[:16]}.. ({t.get('name')!r}) "
+                    f"phase={row.phase} 仍活跃"
+                )
                 continue
+
+            reason = _classify_clean_reason(row)
+            logger.warning(
+                f"配额清理: 选中 {row.torrent_hash[:16]}.. ({t.get('name')!r}) "
+                f"size={size/1e9:.2f}GB phase={row.phase} ratio={row.last_seen_ratio} "
+                f"reason={reason!r}"
+            )
 
             # 真正删除：删 qB 任务 + 删文件（仅当 save_path 落在 downloads 根下）
             try:
@@ -270,13 +281,17 @@ def quota_check_and_cleanup() -> Optional[Dict]:
                         'size_gb': round(size / 1e9, 2),
                         'phase': row.phase,
                         'ratio': float(row.last_seen_ratio or 0),
-                        'reason': _classify_clean_reason(row),
+                        'reason': reason,
                         'deleted_files': deleted_files,
                     })
                     # 标记 dispatch_map.cleaned
                     row.phase = PHASE_CLEANED
                     row.phase_status = STATUS_SUCCEEDED
                     row.cleaned_at = datetime.utcnow()
+                else:
+                    logger.warning(
+                        f"配额清理: qB delete 返回 false {row.torrent_hash[:16]}.."
+                    )
             except Exception as e:
                 logger.warning(f"配额清理失败 {row.torrent_hash[:16]}..: {e}")
 
@@ -351,6 +366,13 @@ def regular_cleanup() -> Optional[Dict]:
             days_ok = seeding_time >= min_days * 86400
             if not (ratio_ok or days_ok):
                 continue
+
+            logger.info(
+                f"软清: 选中 {row.torrent_hash[:16]}.. ({t.get('name')!r}) "
+                f"size={size/1e9:.2f}GB ratio={ratio:.2f} "
+                f"seed_days={seeding_time/86400:.1f} "
+                f"reason={'ratio' if ratio_ok else 'days'}"
+            )
 
             try:
                 ok, deleted_files = _safe_delete(client, row.torrent_hash, t.get('save_path'))

@@ -2,6 +2,7 @@
 Dispatch API：配额状态、清理操作、流水线状态查询、加种预览。
 """
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -68,6 +69,11 @@ def preview_dispatch(request: PreviewRequest):
     metadata-only 预添加：拿到文件列表 → 识别类型 → 重复检测 → 返回预览。
     用户在 UI 上确认后，调 /confirm 真正落库 dispatch_map 让 pipeline 接管。
     """
+    src_hint = (request.magnet or request.torrent_url or '')[:120]
+    logger.info(
+        f"/preview 进入: src={src_hint!r} user_hint={request.user_hint!r} "
+        f"timeout={request.metadata_timeout}s"
+    )
     if not (request.magnet or request.torrent_url):
         raise HTTPException(status_code=400, detail='必须提供 magnet 或 torrent_url')
 
@@ -136,6 +142,10 @@ def preview_dispatch(request: PreviewRequest):
 
     if not files:
         # 超时未拿到 metadata → 删除种子退回
+        logger.warning(
+            f"/preview metadata_timeout: hash={info_hash[:16]}.. elapsed={elapsed}s "
+            f"deadline={request.metadata_timeout}s → 删种回退"
+        )
         qb.delete(info_hash, delete_files=True)
         return {
             'ok': False,
@@ -157,6 +167,12 @@ def preview_dispatch(request: PreviewRequest):
     # 保留种子在 qB 里 paused，等用户 confirm 后再 resume；超时取消
     # 用户没 confirm 时由 trash_cleaner 兜底（dispatch-preview tag 30 分钟自动清）
     qb.pause(info_hash)
+
+    logger.info(
+        f"/preview 完成: hash={info_hash[:16]}.. name={name[:60]!r} "
+        f"files={len(files)} dup={len(duplicates) if duplicates else 0} "
+        f"target={target_info.get('target_path')!r} elapsed={elapsed}s"
+    )
 
     return {
         'ok': True,
@@ -197,6 +213,11 @@ def confirm_dispatch(request: ConfirmRequest):
     用户确认后：写 dispatch_map(phase=pending) + 移除 dispatch-preview tag + resume 种子。
     pipeline 会拣起来跑全流程。
     """
+    logger.info(
+        f"/confirm 进入: hash={request.torrent_hash[:16]}.. "
+        f"media_type={request.media_type!r} title={request.title!r} year={request.year!r} "
+        f"target_library={request.target_library_id!r} target_path={request.target_path!r}"
+    )
     from common.qbittorrent_client import QBittorrentClient
     qb = QBittorrentClient(
         host=settings.qbittorrent_host,
@@ -228,11 +249,13 @@ def confirm_dispatch(request: ConfirmRequest):
     )
 
     # 写 dispatch_map
+    new_row = False
     with SessionLocal() as db:
         row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
         if not row:
             row = DownloadDispatchMap(torrent_hash=h)
             db.add(row)
+            new_row = True
         row.media_type = request.media_type
         row.title = request.title
         row.year = request.year
@@ -249,6 +272,10 @@ def confirm_dispatch(request: ConfirmRequest):
         row.phase_status = STATUS_RUNNING
         row.status_message = '已确认，等待下载完成'
         db.commit()
+    logger.info(
+        f"/confirm 写库完成: hash={h[:16]}.. {'新建' if new_row else '更新'} "
+        f"phase=dispatch_queued/running target_path={target_path_for_db!r}"
+    )
 
     # resume 种子开始下载
     qb.resume(h)
@@ -356,21 +383,53 @@ def _resolve_target(identified: Dict) -> Dict:
     # 前端展示也由 API 层翻译。这样 DB 内容跟 Jellyfin 一致，不绑定具体宿主机的盘符。
 
     # 渲染 location_template
+    # 关键防御：模板里某变量为空就不渲染。比如 movie 模板 '{library_root}/{title} ({year})'
+    # 若 title=None 直接用 '' 填进去，会生成 '/library/videos/movie/ ()' 这种垃圾路径但 truthy，
+    # 通过上游 auto_ok 校验直接落库 → adopt 流程吐出无效任务。
     target_path = ''
     if library_root:
-        try:
-            target_path = rule['location_template'].format(
-                library_root=library_root,
-                title=identified.get('title') or '',
-                year=identified.get('year') or '',
-                series_name=identified.get('series_name') or '',
-                anime_name=identified.get('series_name') or identified.get('title') or '',
-                season=identified.get('season') or 1,
-                episode=identified.get('episode') or 1,
-                code=identified.get('code') or identified.get('title') or '',
+        # 按 media_type 检查必填字段；任一缺失 → 不渲染 target_path
+        title = identified.get('title')
+        year = identified.get('year')
+        series_name = identified.get('series_name')
+        code = identified.get('code')
+        anime_name = series_name or title  # anime 用 series_name 或 title 兜底
+        required_ok = False
+        if media_type == 'movie':
+            # year 可缺（老片/未知年份种子允许只靠标题落地）
+            required_ok = bool(title)
+        elif media_type == 'tv':
+            required_ok = bool(series_name)
+        elif media_type == 'anime':
+            required_ok = bool(anime_name)
+        elif media_type == 'adult':
+            required_ok = bool(code) or bool(title)
+        if not required_ok:
+            logger.info(
+                f"resolve_target: 必填字段缺失，跳过 target_path 渲染 "
+                f"(media_type={media_type}, title={title!r}, year={year!r}, "
+                f"series_name={series_name!r}, code={code!r})"
             )
-        except Exception as e:
-            logger.warning(f"location_template 渲染失败: {e}")
+        else:
+            try:
+                target_path = rule['location_template'].format(
+                    library_root=library_root,
+                    title=title or '',
+                    year=year or '',
+                    series_name=series_name or '',
+                    anime_name=anime_name or '',
+                    season=identified.get('season') or 1,
+                    episode=identified.get('episode') or 1,
+                    code=code or title or '',
+                )
+                # 模板里 year 占位符是 "{title} ({year})"。year 缺失时会留下空括号 " ()"
+                # → 清理掉，避免 "Schindlers List ()" 这种丑文件名
+                # （类似 anime/tv 模板的 ({series_name}) 在 series_name 必填校验下不会变空）
+                target_path = re.sub(r'\s*\(\s*\)\s*', '', target_path)
+                # 顺手把可能产生的连续空格收一收
+                target_path = re.sub(r'  +', ' ', target_path).rstrip()
+            except Exception as e:
+                logger.warning(f"location_template 渲染失败: {e}")
 
     return {
         'library_id': lib_id,
@@ -1040,7 +1099,7 @@ def confirm_needs_review(
     # 已下完 → 直接喊 pipeline；否则喊 downloader-watcher
     try:
         if is_done:
-            from tools.dispatch.pipeline import trigger as pipeline_trigger
+            from tools.dispatch.pipeline_worker import trigger as pipeline_trigger
             pipeline_trigger.set()
         else:
             from tools.dispatch.downloader_watcher import trigger as dl_trigger

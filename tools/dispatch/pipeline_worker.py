@@ -6,6 +6,18 @@ DispatchPipeline：单 worker 串行处理 dispatch_map(phase=download_done) 的
 
 后处理（subtitle_fetching / audio_track_order_adjusting）由独立 PostProcessWorker
 在 jellyfin-watcher 确认入库（phase=jellyfin_recognize_done）后处理，避免阻塞主线。
+
+---
+tools/dispatch/ 目录的命名 taxonomy（避免下次重命名又来争论）：
+  *_worker.py     状态机推进者：claim phase 并往后推（本文件 + post_process_worker）
+  *_watcher.py    监视外部系统状态变化（downloader_watcher 看 qB；jellyfin_watcher 看 jellyfin scan）
+  analyzer.py     一次性分析/识别（analyzing → dispatch_queued）
+  sweeper.py      周期扫 failed/zombie 行做恢复
+  *_cleaner.py    周期清磁盘（trash_cleaner）
+  quota.py        磁盘配额检查 + 软清
+  scheduler.py    顶层编排（spawn 上述所有 worker + 跑定时任务）
+辅助（非 worker 类）：
+  copier.py / organizer.py / identify.py / phases.py / poll.py / post_process.py / adopt.py
 """
 from __future__ import annotations
 
@@ -43,11 +55,16 @@ trigger = threading.Event()
 def _set_phase(row_hash: str, phase: str, phase_status: str = 'running',
                message: Optional[str] = None, error: Optional[str] = None,
                extra: Optional[Dict] = None):
-    """更新 dispatch_map 行的 phase + status + message。短事务，不持库锁。"""
+    """更新 dispatch_map 行的 phase + status + message。短事务，不持库锁。
+    **每次调用都打日志**：phase 转换是 dispatch 系统的核心事件流，不打日志的话出 bug
+    根本不知道种子是怎么走到当前状态的。"""
     with SessionLocal() as db:
         row = db.query(DownloadDispatchMap).filter_by(torrent_hash=row_hash).first()
         if not row:
+            logger.warning(f"_set_phase 找不到 row: hash={row_hash[:16]}.. phase={phase}")
             return
+        old_phase = row.phase
+        old_status = row.phase_status
         row.phase = phase
         row.phase_status = phase_status
         if message is not None:
@@ -59,6 +76,19 @@ def _set_phase(row_hash: str, phase: str, phase_status: str = 'running',
                 if hasattr(row, k):
                     setattr(row, k, v)
         db.commit()
+
+    # 日志按 status 升级别：failed → ERROR、warned/needs_review → WARNING、其它 → INFO
+    log_msg = (
+        f"phase {row_hash[:16]}.. {old_phase}/{old_status} → {phase}/{phase_status}"
+        + (f" msg={message!r}" if message else '')
+        + (f" err={error[:200]!r}" if error else '')
+    )
+    if phase_status in ('failed',):
+        logger.error(log_msg)
+    elif phase_status in ('warned', 'needs_review'):
+        logger.warning(log_msg)
+    else:
+        logger.info(log_msg)
 
 
 def _record_phase_timing(row_hash: str, phase: str, duration_seconds: float):
@@ -181,7 +211,10 @@ class DispatchPipeline:
 
     def _run_one(self, row: Dict):
         h = row['torrent_hash']
-        logger.info(f"开始处理 {h[:16]}.. ({row.get('title')})")
+        logger.info(
+            f"开始处理 {h[:16]}.. title={row.get('title')!r} "
+            f"media_type={row.get('media_type')!r} target_path={row.get('target_path')!r}"
+        )
 
         # Step 1: copying
         if not self._step_copy(row):
@@ -267,6 +300,7 @@ class DispatchPipeline:
             pass
 
         src_path = Path(src)
+        logger.info(f"copy {h[:16]}.. src={src_path} → target={target}")
         if not src_path.exists():
             # 给出清晰的诊断方向：可能 path_mappings 没配 / qB 那边路径异常 / 文件被外部删了
             _set_phase(
@@ -365,6 +399,11 @@ class DispatchPipeline:
             return False
 
         elapsed = time.time() - t0
+        speed_mb = (bytes_copied / 1e6 / elapsed) if elapsed > 0 else 0
+        logger.info(
+            f"copy 完成 {h[:16]}.. files={files_count} "
+            f"bytes={bytes_copied/1e9:.2f}GB elapsed={elapsed:.1f}s speed={speed_mb:.1f}MB/s"
+        )
         _record_phase_timing(h, PHASE_COPYING, elapsed)
         _set_phase(
             h, PHASE_COPYING, STATUS_SUCCEEDED,
@@ -446,10 +485,18 @@ class DispatchPipeline:
             logger.warning(f"jellyfin 通知失败（不阻断，watcher 接管）: {e}")
 
         if notified_via:
+            logger.info(
+                f"jellyfin 通知 {h[:16]}.. lib_id={lib_id!r} "
+                f"paths={len(dispatched_files)} via={notified_via}"
+            )
             _set_phase(h, PHASE_JELLYFIN_RECOGNIZING, STATUS_RUNNING,
                        message=f'已通知 jellyfin（{"+".join(notified_via)}），等扫描完成',
                        extra={'dispatched_at': datetime.utcnow()})
         else:
+            logger.warning(
+                f"jellyfin 通知全失败 {h[:16]}.. lib_id={lib_id!r} "
+                f"paths={len(dispatched_files)}（watcher 仍会轮询兜底）"
+            )
             _set_phase(h, PHASE_JELLYFIN_RECOGNIZING, STATUS_WARNED,
                        message='jellyfin 通知调用全失败，watcher 仍会轮询',
                        extra={'dispatched_at': datetime.utcnow()})

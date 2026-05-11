@@ -22,7 +22,7 @@ from tools.dispatch.phases import (
     PHASE_SUBTITLE_FETCHING, PHASE_AUDIO_TRACK_ORDER_ADJUSTING, PHASE_ALL_JOBS_DONE,
     STATUS_RUNNING, STATUS_SUCCEEDED, STATUS_FAILED, STATUS_WARNED, STATUS_SKIPPED,
 )
-from tools.dispatch.pipeline import _set_phase, _record_phase_timing, _row_to_dict
+from tools.dispatch.pipeline_worker import _set_phase, _record_phase_timing, _row_to_dict
 
 logger = logging.getLogger(__name__)
 

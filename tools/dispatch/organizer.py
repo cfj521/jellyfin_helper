@@ -171,9 +171,13 @@ class TorrentOrganizer:
                     dst = self._compose_episode_path(
                         target_dir, v, rule_with_tpl, metadata, season=s, episode=e,
                     )
+                    logger.info(f"episode {v.name} → S{s:02d}E{e:02d} → {dst}")
                 else:
                     # 提不出集号 → 直接复制到 target_dir（兜底）
                     dst = target_dir / v.name
+                    logger.warning(
+                        f"video {v.name} 提不出 SxxExx，落到顶层 {dst}（建议手动重命名后再扫库）"
+                    )
 
                 bytes_copied += copy_file_with_progress(
                     v, dst,
@@ -209,6 +213,7 @@ class TorrentOrganizer:
     def _move_to_trash(self, src_root: Path, junk_file: Path):
         """把 junk_file 移到 trash_dir，保持相对结构便于事后人工恢复。"""
         if not self.trash_dir:
+            logger.debug(f"trash_dir 未配置，跳过 junk 处理: {junk_file.name}")
             return
         try:
             rel = junk_file.relative_to(src_root) if src_root.is_dir() else Path(junk_file.name)
@@ -220,6 +225,7 @@ class TorrentOrganizer:
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.move(str(junk_file), str(target))
+            logger.info(f"junk → trash: {junk_file.name} → {target}")
         except Exception as e:
             logger.warning(f"垃圾文件入 trash 失败 {junk_file}: {e}")
 

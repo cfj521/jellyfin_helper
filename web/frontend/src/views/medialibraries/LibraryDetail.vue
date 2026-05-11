@@ -34,15 +34,8 @@
     <!-- 成人库：完全切到自己的视图（自带 toolbar / paths / stats / filter / table） -->
     <AdultLibraryView v-if="library?.is_adult" :library="library" />
 
-    <!-- 普通库：以下是原有的 toolbar / paths / stats / 内容预览 -->
+    <!-- 普通库：以下是原有的 paths / stats / toolbar / 内容预览 -->
     <template v-if="library && !library.is_adult">
-
-    <!-- 媒体处理工具栏：作用范围 = 当前库 / 选中条目 -->
-    <MediaToolbar
-      v-if="library"
-      :scope="toolbarScope"
-      @clear-selection="clearSelection"
-    />
 
     <!-- 顶部并列：媒体路径 + 统计 -->
     <div v-if="library" class="top-row">
@@ -110,11 +103,24 @@
       </el-card>
     </div>
 
+    <!-- toolbar 的 sticky 哨兵：sentinel 离开视口顶端 → toolbar 已 stuck → 加 .stuck class 触发 compact 样式
+         （CSS position:sticky 本身没"stuck"事件，IntersectionObserver 是标准 hack） -->
+    <div ref="toolbarSentinel" class="toolbar-sentinel" aria-hidden="true"></div>
+
+    <!-- 媒体处理工具栏：放在路径/统计之后；stick 到 .app-main 顶部，滚动时 paths/stats 滚走后自动收缩 -->
+    <MediaToolbar
+      v-if="library"
+      ref="mediaToolbarRef"
+      :scope="toolbarScope"
+      :class="{ 'is-stuck': toolbarStuck }"
+      @clear-selection="clearSelection"
+    />
+
     <!-- 内容预览：直接展示在页面下方（替代原来的 tabs 默认页） -->
     <el-card shadow="never" class="items-card">
       <template #header>
         <div class="card-header">
-          <!-- 排序栏 -->
+          <!-- 排序栏 + 派生字段 filter（共用 chip 视觉，区分单选 sort 和多选 filter） -->
           <div class="sort-bar">
             <span class="sort-label">排序：</span>
             <button
@@ -128,6 +134,25 @@
                 <CaretTop v-if="sortDir === 'asc'" />
                 <CaretBottom v-else />
               </el-icon>
+            </button>
+            <!-- filter chips：紧跟在评分之后。点击切换 on/off，激活时显示 ✓
+                 跟 sort chip 视觉一致但语义是多选 filter（互相独立可叠加） -->
+            <span class="filter-divider" aria-hidden="true">·</span>
+            <button
+              :class="['sort-chip', 'filter-chip', { active: filterHasHealthIssue }]"
+              :title="filterHasHealthIssue ? '点击取消「健康度」过滤' : '只看健康有问题的条目（未识别 / 名称错配 / 嵌套主文件等）'"
+              @click="filterHasHealthIssue = !filterHasHealthIssue"
+            >
+              <el-icon v-if="filterHasHealthIssue" class="filter-check"><Check /></el-icon>
+              健康度
+            </button>
+            <button
+              :class="['sort-chip', 'filter-chip', { active: filterMissingTmdb }]"
+              :title="filterMissingTmdb ? '点击取消「缺 TMDB」过滤' : '只看没有 TMDB ID 的条目'"
+              @click="filterMissingTmdb = !filterMissingTmdb"
+            >
+              <el-icon v-if="filterMissingTmdb" class="filter-check"><Check /></el-icon>
+              缺 TMDB
             </button>
           </div>
 
@@ -206,6 +231,7 @@
                 <el-icon class="hint-icon"><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
+            <!-- 派生字段 filter 已移到 sort-bar 里作 chip 形式（紧跟评分后）-->
             <ViewModeToggle v-model="viewMode" />
           </div>
         </div>
@@ -967,6 +993,9 @@ const hasMore = ref(true)               // 后端还有下一批 = true
 const itemsTable = ref(null)
 const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示行（仅视觉，不再做 IO 观察）
 const gridViewRef = ref(null)           // <div.grid-view> 的 DOM ref，用于 cardsPerRow 实测
+const toolbarSentinel = ref(null)       // toolbar 的 sticky 哨兵：在 toolbar 前面 1px 高占位
+const mediaToolbarRef = ref(null)
+const toolbarStuck = ref(false)         // sticky 状态：true 时给 toolbar 加 .is-stuck → CSS 切到 compact 样式
 const selectedItems = ref([])
 // 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
 const expandedSet = ref(new Set())
@@ -1012,7 +1041,9 @@ const onGridCardClick = (row) => {
   if (row.detail_url) window.open(row.detail_url, '_blank', 'noopener,noreferrer')
 }
 
-// 经过过滤后的列表（目前只用于"忽略 Folder"，sortedItems 在此基础上排序）
+// 经过过滤后的列表
+// hideFolders 主路径已下推到 Jellyfin（ExcludeItemTypes=Folder），这里前端再做一遍是
+// 防御性兜底——万一 jellyfin 某种 collection_type 不严格遵守，前端能再剔一道
 const filteredItems = computed(() => {
   if (hideFolders.value) {
     return items.value.filter(it => it.type !== 'Folder')
@@ -1044,21 +1075,26 @@ const summaryCodes = (issues) => {
 }
 
 // 排序选项与状态
+// 只列 Jellyfin 服务端原生支持的字段——这样 sort 永远基于"整库"排序后分页，
+// 跟无限滚动天然兼容。原来的"健康度"、"TMDB"两个派生字段改为 filter（见 filterHasHealthIssue / filterMissingTmdb）：
+// 用户的真实需求是"列出有问题的"、"列出缺 TMDB 的"，filter 比 sort 更对路也更便宜。
 const sortOptions = [
-  { field: 'name',         label: '名称' },
-  { field: 'health',       label: '健康度' },
-  { field: 'type',         label: '类型' },
-  { field: 'year',         label: '年份' },
-  { field: 'rating',       label: '评分' },
-  { field: 'tmdb_bound',   label: 'TMDB' },
+  { field: 'name',   label: '名称' },
+  { field: 'type',   label: '类型' },
+  { field: 'year',   label: '年份' },
+  { field: 'rating', label: '评分' },
 ]
 
 const sortField = ref('name')
 const sortDir = ref('asc') // 'asc' | 'desc'
 
-// 切到不同字段时给个合理默认方向（排查问题/找高分时降序更顺手）
+// 派生字段 filter（jellyfin 不知道，后端拉全量 + 内存过滤；5min 缓存）
+const filterHasHealthIssue = ref(false)
+const filterMissingTmdb = ref(false)
+
+// 切到不同字段时给个合理默认方向（找高分时降序更顺手）
 const _defaultDir = (field) =>
-  ['health', 'rating', 'year'].includes(field) ? 'desc' : 'asc'
+  ['rating', 'year'].includes(field) ? 'desc' : 'asc'
 
 const setSort = (field) => {
   if (sortField.value === field) {
@@ -1069,59 +1105,10 @@ const setSort = (field) => {
   }
 }
 
-// 单字段比较器：返回 [primary, secondary] 元组（多键稳定排序用）
-const _fieldKey = (row, field) => {
-  switch (field) {
-    case 'name':
-      return [(row.name || '').toLocaleLowerCase()]
-    case 'health': {
-      const lvl = { error: 3, warning: 2, ok: 1 }[row.health?.level || 'ok'] || 0
-      const issueCount = row.health?.issues?.length || 0
-      return [lvl, issueCount]
-    }
-    case 'type':
-      return [row.type || '']
-    case 'year':
-      // null 排到最后
-      return [row.year == null ? -Infinity : row.year]
-    case 'rating':
-      return [row.community_rating == null ? -Infinity : row.community_rating]
-    case 'actors_done': {
-      // 演员图完成度：用比例排序；无演员的当作 1（视为完成）
-      if (!row.actors_total) return [1]
-      return [row.actors_with_image / row.actors_total]
-    }
-    case 'tmdb_bound':
-      return [row.tmdb_id ? 1 : 0]
-    default:
-      return [0]
-  }
-}
-
-const _compare = (a, b) => {
-  if (a < b) return -1
-  if (a > b) return 1
-  return 0
-}
-
-const sortedItems = computed(() => {
-  const arr = [...filteredItems.value]
-  const dir = sortDir.value === 'asc' ? 1 : -1
-  arr.sort((a, b) => {
-    const ka = _fieldKey(a, sortField.value)
-    const kb = _fieldKey(b, sortField.value)
-    for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
-      const r = _compare(ka[i], kb[i])
-      if (r !== 0) return r * dir
-    }
-    // 主键完全相同时，用名称做次级稳定排序（不受方向影响）
-    return _compare(
-      (a.name || '').toLocaleLowerCase(),
-      (b.name || '').toLocaleLowerCase(),
-    )
-  })
-  return arr
-})
+// 所有排序字段（name/year/rating/type）都下推到 Jellyfin 服务端排好序再分页，前端不再二次排
+// hideFolders 过滤只剔除不重排，order 不破坏 → 直接复用 filteredItems
+// （旧版 _fieldKey/_compare 前端排序 helper 已删——派生字段改成 filter 后不再需要）
+const sortedItems = computed(() => filteredItems.value)
 
 // ============ wanted / 行步长 / 视口测量（对齐 Trending.vue 同款套路）============
 // 网格卡片宽度（来自 CSS $grid-card-w）+ gap：cardsPerRow = floor((containerW + gap) / (cardW + gap))
@@ -2025,6 +2012,15 @@ const _currentScrollRow = () => {
 // （_computeWantedFromScroll 已合并到 loadMore；逻辑：target = (row + 1) × cardsPerRow）
 
 // 公共 params 构造：filter / search 共用
+// 我们的 sortField → Jellyfin 原生 SortBy 字段映射
+// 4 个排序字段都在 jellyfin 原生支持范围内（之前 health/tmdb_bound 派生字段已改成 filter）
+const _JELLYFIN_SORT_MAP = {
+  name:   'SortName',
+  year:   'ProductionYear',
+  rating: 'CommunityRating',
+  type:   'Type',
+}
+
 const _buildItemsParams = (start, limit) => {
   const params = {
     start_index: start,
@@ -2036,6 +2032,20 @@ const _buildItemsParams = (start, limit) => {
   }
   if (searchGenres.value.length) {
     params.genres = searchGenres.value.join('|')
+  }
+  // 排序全部下推到 jellyfin（4 个字段都是原生支持的）
+  params.sort_by = _JELLYFIN_SORT_MAP[sortField.value] || 'SortName'
+  params.sort_order = sortDir.value === 'asc' ? 'Ascending' : 'Descending'
+  // hideFolders 下推到后端 ExcludeItemTypes=Folder
+  if (hideFolders.value) {
+    params.exclude_item_types = 'Folder'
+  }
+  // 派生字段 filter：后端拉全量 + 内存过滤 + 5min 缓存
+  if (filterHasHealthIssue.value) {
+    params.has_health_issue = true
+  }
+  if (filterMissingTmdb.value) {
+    params.missing_tmdb = true
   }
   return params
 }
@@ -2463,6 +2473,24 @@ const formatSize = (bytes) => {
   return `${bytes.toFixed(1)} ${units[i]}`
 }
 
+// toolbar sticky observer：监 sentinel 离开视口 → toolbar 进入 stuck 态切 compact 样式
+// sentinel 是 toolbar 前面的 1px 占位 div，paths/stats 滚走时它先离开 → toolbar 自然贴顶
+let toolbarStickyObserver = null
+const setupToolbarStickyObserver = () => {
+  if (toolbarStickyObserver) toolbarStickyObserver.disconnect()
+  const target = toolbarSentinel.value
+  if (!target) return
+  toolbarStickyObserver = new IntersectionObserver(([entry]) => {
+    // sentinel 离开视口（intersectionRatio=0 且在视口上方）→ toolbar stuck
+    toolbarStuck.value = !entry.isIntersecting && entry.boundingClientRect.top < 0
+  }, {
+    // rootMargin: 顶部边界往上 1px，避免临界值抖动
+    threshold: [0, 1],
+    rootMargin: '-1px 0px 0px 0px',
+  })
+  toolbarStickyObserver.observe(target)
+}
+
 onMounted(async () => {
   loadStatsPrefs(id.value)
   await loadAll()
@@ -2470,6 +2498,13 @@ onMounted(async () => {
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
+  // 数据加载完 + DOM 挂上后再装 observer（sentinel 才有真实位置）
+  await nextTick()
+  setupToolbarStickyObserver()
+})
+
+onUnmounted(() => {
+  if (toolbarStickyObserver) toolbarStickyObserver.disconnect()
 })
 
 // 切换不同库（router 复用同组件）：渲染锁释放
@@ -2480,8 +2515,22 @@ watch(() => id.value, async (newId) => {
   writeDebug()
 })
 
+// sort / hideFolders / 派生 filter 切换：全部下推到后端 → 触发 reload 重新拉首页
+// 派生字段（health_issue / missing_tmdb）由后端拉全量 + 内存过滤 + 5min 缓存承担，
+// 前端流程跟普通分页一致，无限滚动天然兼容
+watch([sortField, sortDir, hideFolders, filterHasHealthIssue, filterMissingTmdb], () => {
+  loadItems()
+})
+
 // items 数量 / wanted / 视图模式变化 → 刷新 debug
 watch([() => items.value.length, wanted, viewMode], () => writeDebug())
+
+// 切视图（list ↔ grid）时回顶部 —— 列表和网格的行高 / 卡片高完全不一样，
+// 停留在 list 第 80 行的位置切到 grid 会落到完全不相关的卡片中间，体验割裂
+watch(viewMode, () => {
+  const scroller = document.querySelector('.items-card > .el-card__body')
+  if (scroller) scroller.scrollTop = 0
+})
 
 onUnmounted(() => {
   stopSubtitlePoll()
@@ -2513,6 +2562,45 @@ onUnmounted(() => {
   .header-right {
     display: flex;
     gap: 8px;
+  }
+}
+
+// MediaToolbar 的 sticky 哨兵：1px 占位，IntersectionObserver 用它探测"已 stuck"
+.toolbar-sentinel {
+  height: 1px;
+  margin: 0;
+}
+
+// 把 MediaToolbar sticky 到 .app-main 顶部。is-stuck 时切到 compact 样式：
+//   - padding 收紧
+//   - 加阴影增强"浮起"感
+//   - 隐藏 scope-label / scope-icon（信息冗余且占垂直空间）
+:deep(.media-toolbar) {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  transition: padding 0.2s, box-shadow 0.2s, gap 0.2s, margin-bottom 0.2s;
+
+  &.is-stuck {
+    padding: 6px 14px;
+    gap: 4px;
+    margin-bottom: 8px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+    border-radius: 0 0 8px 8px;
+    // 顶部贴边：sticky 后去掉上 border 让它显得跟 viewport 连成一体
+    border-top: none;
+
+    // 隐藏 scope 行（"作用范围: 当前库"那段），按钮区独占整行
+    .toolbar-scope {
+      display: none;
+    }
+
+    // 按钮稍微压扁，节省垂直空间
+    .toolbar-actions :deep(.el-button),
+    .toolbar-actions .el-button {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
   }
 }
 
@@ -3046,6 +3134,27 @@ onUnmounted(() => {
           font-size: 11px;
         }
       }
+
+      // filter-chip：跟 sort-chip 同款胶囊形，但激活态用琥珀色区分（表达"过滤器开启"而非"排序选中"）
+      // 视觉上一组按钮里能看出"哪几个是单选 sort，哪几个是多选 filter"
+      &.filter-chip {
+        &.active {
+          background: #f59e0b;
+          border-color: #f59e0b;
+          color: #fff;
+        }
+        .filter-check {
+          font-size: 11px;
+          margin-right: 2px;
+        }
+      }
+    }
+
+    // sort chip 和 filter chip 之间的分隔点
+    .filter-divider {
+      color: #cbd5e1;
+      margin: 0 2px;
+      user-select: none;
     }
   }
 
