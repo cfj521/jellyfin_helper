@@ -1941,12 +1941,30 @@ const prefetchIfNeeded = async () => {
   }
 }
 
-// 触底（scroll 监听调）：wanted += stepSize；池子告急时后台预取（不 await）
+// 触底（scroll 监听调）：wanted = max(wanted, 滚动位置目标值)
+// 旧逻辑 `wanted += stepSize` 在快速滚动时每帧都被触发，wanted 远超当前视口需要 → 错。
+// 新逻辑：按"已滚过行数 + 视口行数 + 1 行缓冲"算 target，wanted 只增不减；
+// 即使一次滚动事件触发多次 loadMore，wanted 也只长到当前应该的位置为止。
 const loadMore = () => {
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  wanted.value += stepSize()
-  prefetchIfNeeded()
+  const target = _computeWantedFromScroll()
+  if (target > wanted.value) {
+    wanted.value = target
+    prefetchIfNeeded()
+  }
+}
+
+const _computeWantedFromScroll = () => {
+  const el = gridViewRef.value || itemsTable.value?.$el
+  if (!el) return wanted.value + stepSize()  // fallback：DOM 还没就绪时退回累加
+  const rect = el.getBoundingClientRect()
+  const scrolledPast = Math.max(0, -rect.top)
+  const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 80) : 80
+  const scrolledRows = Math.floor(scrolledPast / rowH)
+  const viewportRows = Math.ceil(window.innerHeight / rowH)
+  // 视口行 + 1 行缓冲（让用户略滚一点就能看到下一行）
+  return (scrolledRows + viewportRows + 1) * cardsPerRow()
 }
 
 // 公共 params 构造：filter / search 共用

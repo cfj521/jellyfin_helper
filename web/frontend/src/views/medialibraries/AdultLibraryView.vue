@@ -605,12 +605,27 @@ const prefetchIfNeeded = async () => {
   }
 }
 
-// loadMore：wanted += stepSize；池子告急时后台预取
+// loadMore：wanted = max(wanted, 滚动位置目标值)
+// 旧逻辑 wanted += stepSize 在快速滚动时累加过头，新逻辑按当前滚动位置算 target，只增不减
 const loadMore = () => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  wanted.value += stepSize()
-  prefetchIfNeeded()
+  const target = _computeWantedFromScroll()
+  if (target > wanted.value) {
+    wanted.value = target
+    prefetchIfNeeded()
+  }
+}
+
+const _computeWantedFromScroll = () => {
+  const el = gridViewRef.value
+  if (!el) return wanted.value + stepSize()
+  const rect = el.getBoundingClientRect()
+  const scrolledPast = Math.max(0, -rect.top)
+  const rowH = viewMode.value === 'grid' ? (GRID_POSTER_H + 80) : 80
+  const scrolledRows = Math.floor(scrolledPast / rowH)
+  const viewportRows = Math.ceil(window.innerHeight / rowH)
+  return (scrolledRows + viewportRows + 1) * cardsPerRow()
 }
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
