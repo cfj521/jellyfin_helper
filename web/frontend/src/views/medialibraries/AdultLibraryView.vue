@@ -605,21 +605,21 @@ const prefetchIfNeeded = async (force = false) => {
   }
 }
 
-// 详见 LibraryDetail 同名块：presetRow 由 onWindowScroll 那一帧测好的 row 传入，避免重复 rect-walk
-const loadMore = (presetRow = null) => {
+// 详见 LibraryDetail 同名块：buffer 改成 visible 行（一个视口）让滚动跟手
+const loadMore = (presetState = null) => {
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
-  const row = presetRow != null ? presetRow : _currentScrollRow()
-  const target = Math.max(1, row + 1) * cardsPerRow()
+  const { scrolled, visible } = presetState || _currentScrollState()
+  const target = Math.max(1, scrolled + visible * 2) * cardsPerRow()
   if (target > wanted.value) {
     wanted.value = target
   }
   prefetchIfNeeded()
 }
 
-const _currentScrollRow = () => {
+const _currentScrollState = () => {
   const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
-  if (!scroller) return 0
+  if (!scroller) return { scrolled: 0, visible: 0 }
   const scrollerRect = scroller.getBoundingClientRect()
   let viewportTop = scrollerRect.top
   if (viewMode.value === 'list') {
@@ -628,7 +628,8 @@ const _currentScrollRow = () => {
   }
   const viewportBottom = scrollerRect.bottom
 
-  let total = 0
+  let scrolled = 0
+  let visible = 0
   if (viewMode.value === 'list') {
     const bodyEl = document.querySelector('.adult-lib-view .el-table__body')
     const rows = bodyEl ? bodyEl.querySelectorAll('tr') : []
@@ -636,10 +637,10 @@ const _currentScrollRow = () => {
     for (const r of rows) {
       const rect = r.getBoundingClientRect()
       if (rect.bottom <= viewportTop) {
-        if (!sawVisible) total++
+        if (!sawVisible) scrolled++
       } else if (rect.top < viewportBottom) {
         sawVisible = true
-        total++
+        visible++
       } else {
         break
       }
@@ -647,25 +648,29 @@ const _currentScrollRow = () => {
   } else {
     const gridEl = document.querySelector('.adult-lib-view .grid-view')
     const cards = gridEl ? gridEl.querySelectorAll('.grid-card') : []
-    if (!cards.length) return 0
-    let firstColLeft = null
-    for (const c of cards) {
-      const r = c.getBoundingClientRect()
-      if (r.height > 0) { firstColLeft = r.left; break }
-    }
-    for (const c of cards) {
-      const rect = c.getBoundingClientRect()
-      if (rect.height < 1) continue
-      if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
-      if (rect.bottom <= viewportTop) total++
-      else if (rect.top < viewportBottom) total++
-      else break
+    if (cards.length) {
+      let firstColLeft = null
+      for (const c of cards) {
+        const r = c.getBoundingClientRect()
+        if (r.height > 0) { firstColLeft = r.left; break }
+      }
+      for (const c of cards) {
+        const rect = c.getBoundingClientRect()
+        if (rect.height < 1) continue
+        if (firstColLeft !== null && Math.abs(rect.left - firstColLeft) > 5) continue
+        if (rect.bottom <= viewportTop) scrolled++
+        else if (rect.top < viewportBottom) visible++
+        else break
+      }
     }
   }
-  return total
+  return { scrolled, visible }
 }
 
-// （_computeWantedFromScroll 已合并到 loadMore）
+const _currentScrollRow = () => {
+  const s = _currentScrollState()
+  return s.scrolled + s.visible
+}
 
 // 共用 params 构造（filter / search / library 都汇聚到这里）
 const _buildListParams = (offset, limit) => {
@@ -689,8 +694,8 @@ const _buildListParams = (offset, limit) => {
 }
 
 // ============ 滚动触发：sentinel boundingClientRect 判定（详见 LibraryDetail 注释）============
-// currentRow 由 onWindowScroll 那一帧测好的 row 传进来；避免 loadMore 再跑一次 rect-walk
-const _maybeLoadMoreOnScroll = (currentRow) => {
+// presetState 由 onWindowScroll 那一帧测好的 { scrolled, visible } 传进来
+const _maybeLoadMoreOnScroll = (presetState) => {
   if (_loadMoreBusy) return
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
@@ -699,7 +704,7 @@ const _maybeLoadMoreOnScroll = (currentRow) => {
   const viewportBottom = window.innerHeight || document.documentElement.clientHeight
   if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
   _loadMoreBusy = true
-  loadMore(currentRow)
+  loadMore(presetState)
   nextTick(() => { _loadMoreBusy = false })
 }
 
@@ -726,11 +731,11 @@ let _scrollRaf = null
 const onWindowScroll = () => {
   if (_scrollRaf) return
   _scrollRaf = requestAnimationFrame(() => {
-    // 一帧一次 rect-walk，结果给 debug 和 loadMore 共用（详见 LibraryDetail 同名块注释）
-    const row = _currentScrollRow()
-    debugInfo.scrollRow = row
+    // 一帧一次 rect-walk（详见 LibraryDetail 同名块）
+    const state = _currentScrollState()
+    debugInfo.scrollRow = state.scrolled + state.visible
     writeDebug()
-    _maybeLoadMoreOnScroll(row)
+    _maybeLoadMoreOnScroll(state)
     _scrollRaf = null
   })
 }
