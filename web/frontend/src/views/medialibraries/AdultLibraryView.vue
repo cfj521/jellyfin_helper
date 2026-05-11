@@ -631,8 +631,10 @@ const writeDebug = () => {
   const visible = sortedItems.value.length
   debugInfo.cols = cols
   debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visible / cols)) : 0
+  // 跟 LibraryDetail 同步：wanted 与 items 同步增长（库视图无"逐行展示"概念，
+  // 总数在工具栏"已加载/共"处显示，debug 面板不重复）
   debugInfo.items = items.value.length
-  debugInfo.wanted = itemsTotal.value
+  debugInfo.wanted = items.value.length
 }
 
 const _gridColsEstimate = () => {

@@ -1912,8 +1912,11 @@ const writeDebug = () => {
   const visibleCount = sortedItems.value.length
   debugInfo.cols = cols
   debugInfo.totalRows = cols ? Math.max(1, Math.ceil(visibleCount / cols)) : 0
-  debugInfo.items = items.value.length        // 已拉到的总数（无限滚动累积器大小）
-  debugInfo.wanted = itemsTotal.value         // 后端给的总数（== 库内符合 filter 的总数）
+  // items = 当前已加载到本地的条数（累积器大小）
+  // wanted 在 Trending 是逐行累加器；库视图没有"逐行展示"概念，跟 items 同步增长即可
+  // （库总数已在工具栏 "已加载 X / 共 Y" 处显示，这里不重复）
+  debugInfo.items = items.value.length
+  debugInfo.wanted = items.value.length
 }
 
 // 网格列数：网格 CSS 用 auto-fill minmax(160px,1fr)，按容器宽度估算
