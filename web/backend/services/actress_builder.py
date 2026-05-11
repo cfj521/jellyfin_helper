@@ -114,8 +114,15 @@ class ActressBuilder:
             return
 
         try:
-            # ---- Phase 1: discover ----
+            # ---- Phase 0: 把之前 not_found 的重置回 pending（继续处理没完成的）----
+            # 用户语义：点"开始构建"= 继续处理所有没解析完的（含上次失败/未找到的）
+            # 不重置就会出现"点了没反应" —— 所有名字非 resolved 即 not_found，pending 早是 0
             self._update_phase('discover')
+            requeued = self._requeue_not_found()
+            if requeued:
+                logger.info(f"ActressBuilder 重新排队 {requeued} 条 not_found → pending")
+
+            # ---- Phase 1: discover ----
             added = self._discover()
             logger.info(f"ActressBuilder discover 完成，新增 {added} 条 pending")
 
@@ -146,6 +153,23 @@ class ActressBuilder:
             self._mark_stopped()
 
     # ============ 阶段实现 ============
+
+    def _requeue_not_found(self) -> int:
+        """把所有 source='not_found' 的行重置回 'pending'，让本轮重新尝试。
+        点"开始构建"应该让用户感觉是"继续处理没完成的"，所以上一轮失败的也算未完成。
+        """
+        from web.backend.database import SessionLocal, AdultActress
+        with SessionLocal() as db:
+            rows = (db.query(AdultActress)
+                      .filter(AdultActress.source == 'not_found')
+                      .all())
+            count = len(rows)
+            if not count:
+                return 0
+            for r in rows:
+                r.source = 'pending'
+            db.commit()
+            return count
 
     def _discover(self) -> int:
         """扫 AdultItem.actors[]，把没见过的名字插入为 pending 占位行。
