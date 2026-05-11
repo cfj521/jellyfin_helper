@@ -978,8 +978,8 @@ let prefetchTimer = null                // 首屏后延迟启动后台预取的 
 // 触发判定：window scroll capture 抓所有滚动事件（.app-main / .el-card__body / window 都能 catch），
 // 然后用 sentinel 的 getBoundingClientRect() 看它离视口底部多近 —— 这个值不在乎谁是真正的滚动容器，
 // 永远反映"sentinel 当前显示在视口的哪个位置"
-let _loadMoreFiredAt = 0                // 节流：300ms 内不重复触发
-const SCROLL_TRIGGER_PX = 400           // sentinel 离视口底 ≤ 400px 触发 loadMore
+let _loadMoreBusy = false               // 渲染锁：loadMore 后到 DOM 更新完之间不重复触发
+const SCROLL_TRIGGER_PX = 600           // sentinel 离视口底 ≤ 600px 触发 loadMore（提前量大些避免滚到底卡住）
 // 评分缓存：{`${tmdb_id}-${media_type}`: RatingResponse}
 const ratingsByKey = ref({})
 // 标题搜索：v-model 绑输入框，提交后写入 itemsSearch 触发 loadItems
@@ -1901,7 +1901,7 @@ const loadItems = async () => {
   } finally {
     if (seq === reqSeq) {
       itemsLoading.value = false
-      _loadMoreFiredAt = 0  // 重置节流时钟
+      _loadMoreBusy = false  // 释放渲染锁
       // 首屏 1.5s 后启动后台预取（让首批先稳定渲染；用户切库会取消这个 timer）
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -1978,19 +1978,21 @@ const _fireBatchEnrichments = () => {
 // 不再纠结"谁是真正的滚动容器"（.app-main / el-card__body / window 都有可能），
 // 用 window scroll capture 抓住所有滚动事件，然后看 sentinel 在 window 视口里的位置。
 // getBoundingClientRect 返回 window 视口坐标，跟容器内部 scrollTop 无关 —— 谁滚都对。
+//
+// 用渲染锁代替时间节流：loadMore 立即推 wanted，新卡片要等 Vue nextTick 才进 DOM。
+// 这期间用户继续滚动可能撞到容器 scrollTop 上限（旧 DOM 还没更新）→ 滚轮事件被边界吃掉 →
+// 用户感觉"卡死，必须往上滚一点才能再向下" —— 故用 busy flag 而非时间窗，DOM 一更新就放行
 const _maybeLoadMoreOnScroll = () => {
+  if (_loadMoreBusy) return
   if (itemsLoading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
   if (!sentinelRef.value) return
   const rect = sentinelRef.value.getBoundingClientRect()
-  // sentinel.top 距 window 视口底 ≤ SCROLL_TRIGGER_PX 时触发
   const viewportBottom = window.innerHeight || document.documentElement.clientHeight
   if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
-  // 节流：每 300ms 最多 fire 一次
-  const now = Date.now()
-  if (now - _loadMoreFiredAt < 300) return
-  _loadMoreFiredAt = now
+  _loadMoreBusy = true
   loadMore()
+  nextTick(() => { _loadMoreBusy = false })
 }
 
 // ============ DEBUG（事后删）：写共享 debugInfo，由 App.vue 侧边栏读取展示 ============
@@ -2406,11 +2408,11 @@ onMounted(async () => {
   updateScrollRow()
 })
 
-// 切换不同库（router 复用同组件）：节流时钟重置即可
+// 切换不同库（router 复用同组件）：渲染锁释放
 watch(() => id.value, async (newId) => {
   loadStatsPrefs(newId)
   await nextTick()
-  _loadMoreFiredAt = 0
+  _loadMoreBusy = false
   writeDebug()
 })
 

@@ -465,8 +465,9 @@ const gridViewRef = ref(null)
 let reqSeq = 0
 let prefetchTimer = null
 // 触发判定：用 sentinel 的 boundingClientRect 判定，与 LibraryDetail 同款
-let _loadMoreFiredAt = 0
-const SCROLL_TRIGGER_PX = 400
+// 渲染锁（busy flag）替代时间节流，避免快滚时容器到底 + DOM 还没更新造成的"必须往上再向下"卡顿
+let _loadMoreBusy = false
+const SCROLL_TRIGGER_PX = 600
 
 const scanning = ref(false)
 const repairing = reactive({ covers: false, meta: false })
@@ -566,7 +567,7 @@ const reload = async () => {
   } finally {
     if (seq === reqSeq) {
       loading.value = false
-      _loadMoreFiredAt = 0
+      _loadMoreBusy = false
       writeDebug()
       prefetchTimer = setTimeout(() => {
         prefetchTimer = null
@@ -635,16 +636,16 @@ const _buildListParams = (offset, limit) => {
 
 // ============ 滚动触发：sentinel boundingClientRect 判定（详见 LibraryDetail 注释）============
 const _maybeLoadMoreOnScroll = () => {
+  if (_loadMoreBusy) return
   if (loading.value) return
   if (!hasMore.value && items.value.length <= wanted.value) return
   if (!sentinelRef.value) return
   const rect = sentinelRef.value.getBoundingClientRect()
   const viewportBottom = window.innerHeight || document.documentElement.clientHeight
   if (rect.top - viewportBottom > SCROLL_TRIGGER_PX) return
-  const now = Date.now()
-  if (now - _loadMoreFiredAt < 300) return
-  _loadMoreFiredAt = now
+  _loadMoreBusy = true
   loadMore()
+  nextTick(() => { _loadMoreBusy = false })
 }
 
 // ============ DEBUG（共享 debugInfo / 侧边栏展示）============
