@@ -781,18 +781,28 @@ const onWindowResize = () => {
   }, 200)
 }
 
-// DEBUG: 计算"用户当前已经看到第几行" = 已滚过的行 + 当前视口内可见的行
-// rowH 实测：取第一张 poster-card offsetHeight + col gutter，避免 cardHeightPx() 公式估算误差累积
+// DEBUG: scrollRow = 已滚过的行 + 视口内可见的行
+// offset 用 (scrollerRect.top - gridRect.top)：两个 rect 都是 window 坐标，
+// 相减消掉滚动容器自身的 window 偏移，剩下的就是"grid 顶被推出 scroller 顶部多少 px"
+// 滚动容器是 .app-main（el-main 默认 overflow:auto）
 const updateScrollRow = () => {
   const gridEl = getGridEl()
   if (!gridEl) return
-  const top = gridEl.getBoundingClientRect().top
-  // 实测一张 poster-card 高度（poster + meta + actions）；找不到时退回公式估算
-  const firstCard = gridEl.querySelector('.poster-card')
-  const ch = firstCard ? (firstCard.offsetHeight + 16) : cardHeightPx()  // 16 = el-row gutter
-  const offsetIntoGrid = Math.max(0, -top)
-  const scrolledRows = Math.floor(offsetIntoGrid / ch)
-  const visibleRows = Math.max(1, Math.ceil(window.innerHeight / ch))
+  const scroller = document.querySelector('.app-main') || document.scrollingElement || document.documentElement
+  const viewportH = scroller ? scroller.clientHeight : window.innerHeight
+  // 实测：取第二张 poster-card（首张图常在 lazy load，offsetHeight 偏小）
+  const cards = gridEl.querySelectorAll('.poster-card')
+  const sample = cards[1] || cards[0]
+  const ch = sample ? (sample.offsetHeight + 16) : cardHeightPx()  // 16 = el-row gutter
+
+  const scrollerRect = scroller && scroller.getBoundingClientRect
+    ? scroller.getBoundingClientRect()
+    : { top: 0 }
+  const gridRect = gridEl.getBoundingClientRect()
+  const offset = Math.max(0, scrollerRect.top - gridRect.top)
+
+  const scrolledRows = Math.floor(offset / ch)
+  const visibleRows = Math.max(1, Math.ceil(viewportH / ch))
   debugInfo.scrollRow = scrolledRows + visibleRows
   writeDebug()
 }

@@ -2036,30 +2036,38 @@ const writeDebug = () => {
 
 
 // 用户当前已经看到第几行 = 已滚过的行 + 当前视口内可见的行
-// rowH 实测：从 DOM 第一个 grid-card / 表格行取真实高度，避免硬编码偏差累积
+// offset 用 (scrollerRect.top - elRect.top) —— 两个 boundingClientRect 都在 window 坐标系，
+// 相减消掉了滚动容器自身的 window 偏移，得到的是"基准元素的顶被推出滚动容器顶部多少 px"，
+// 跟 viewportH = scroller.clientHeight 同坐标系
 const updateScrollRow = () => {
-  const el = viewMode.value === 'grid'
-    ? document.querySelector('.items-card .grid-view')
-    : document.querySelector('.items-card .el-table__body')
-  if (!el) {
+  const scroller = document.querySelector('.items-card > .el-card__body')
+  if (!scroller) {
     debugInfo.scrollRow = 0
     return
   }
-  // 真正的滚动容器 → 视口高度
-  const scroller = document.querySelector('.items-card > .el-card__body')
-  const viewportH = scroller ? scroller.clientHeight : window.innerHeight
-  // 实测行高：grid 取第一张卡 offsetHeight + gap；list 取第一行
-  let rowH
+  const viewportH = scroller.clientHeight
+
+  // 实测行高
+  //   grid：用第二张卡（首张卡海报常常还在 lazy load，offsetHeight 可能偏小）
+  //   list：第一行 tr 高度通常已稳定
+  let rowH = 0
+  let el = null
   if (viewMode.value === 'grid') {
-    const firstCard = el.querySelector('.grid-card')
-    rowH = firstCard ? firstCard.offsetHeight + GRID_CARD_GAP : 240
+    el = document.querySelector('.items-card .grid-view')
+    const cards = el ? el.querySelectorAll('.grid-card') : []
+    const sample = cards[1] || cards[0]
+    rowH = sample ? sample.offsetHeight + GRID_CARD_GAP : 240
   } else {
-    const firstRow = el.querySelector('tr')
+    el = document.querySelector('.items-card .el-table__body')
+    const firstRow = el ? el.querySelector('tr') : null
     rowH = firstRow ? firstRow.offsetHeight : 80
   }
   if (rowH < 1) rowH = viewMode.value === 'grid' ? 240 : 80
-  const rect = el.getBoundingClientRect()
-  const offset = Math.max(0, -rect.top)
+
+  const offset = el
+    ? Math.max(0, scroller.getBoundingClientRect().top - el.getBoundingClientRect().top)
+    : scroller.scrollTop  // 兜底
+
   const scrolledRows = Math.floor(offset / rowH)
   const visibleRows = Math.max(1, Math.ceil(viewportH / rowH))
   debugInfo.scrollRow = scrolledRows + visibleRows
