@@ -1124,14 +1124,17 @@ const sortedItems = computed(() => {
 const GRID_CARD_W = 280
 const GRID_CARD_GAP = 18
 const GRID_POSTER_H = 158
+const GRID_VIEW_PADDING = 18    // .grid-view 自身 CSS padding（左右各 18 → 卡片可用宽度需扣 36）
 
-// 网格列数：list 模式恒为 1（el-table 单列），grid 用实测容器宽度
+// 网格列数：list 模式恒为 1（el-table 单列），grid 实测容器宽度并扣掉 grid-view 自身 padding
+// CSS auto-fill 公式：N <= (content_w + gap) / (card_w + gap)，content_w = clientWidth - 2*padding
 const cardsPerRow = () => {
   if (viewMode.value !== 'grid') return 1
   const el = gridViewRef.value
-  // 容器没挂上时按 viewport - sidebar(220) - padding(40) 估
-  const containerW = el ? el.clientWidth : Math.max(0, window.innerWidth - 220 - 40)
-  return Math.max(1, Math.floor((containerW + GRID_CARD_GAP) / (GRID_CARD_W + GRID_CARD_GAP)))
+  // 容器没挂上时按 viewport - 侧边栏(220) - app-main padding(40) - el-card body padding(40) - grid-view padding(36) 估
+  const clientW = el ? el.clientWidth : Math.max(0, window.innerWidth - 220 - 40 - 40)
+  const contentW = Math.max(0, clientW - 2 * GRID_VIEW_PADDING)
+  return Math.max(1, Math.floor((contentW + GRID_CARD_GAP) / (GRID_CARD_W + GRID_CARD_GAP)))
 }
 
 // 每次 IntersectionObserver 触发 loadMore 时 wanted 推进的"行数"对应条数
