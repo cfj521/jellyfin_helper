@@ -192,12 +192,14 @@ async def tasks_stream(request: Request):
     pubsub = get_pubsub()
     queue = pubsub.subscribe('tasks:any')
 
+    from web.backend.shutdown import is_shutting_down
+
     async def gen():
         try:
             # 连上就发一个 ping，让前端立即做一次基线刷新
             yield 'event: ping\ndata: {}\n\n'
             while True:
-                if await request.is_disconnected():
+                if is_shutting_down() or await request.is_disconnected():
                     break
                 item = await _async_queue_get(queue, _KEEPALIVE_INTERVAL_SEC)
                 if item is _SENTINEL_TIMEOUT:
@@ -223,6 +225,8 @@ async def task_stream(task_id: int, request: Request):
     # 反过来的话，"DB 读取" → "订阅" 之间的窗口里如果发生了更新，订阅前的事件会丢。
     queue = pubsub.subscribe(channel)
 
+    from web.backend.shutdown import is_shutting_down
+
     async def gen():
         try:
             # 1. 初始 snapshot（从 DB 一次性读出）
@@ -243,7 +247,7 @@ async def task_stream(task_id: int, request: Request):
 
             # 2. 流式推送后续更新
             while True:
-                if await request.is_disconnected():
+                if is_shutting_down() or await request.is_disconnected():
                     break
                 item = await _async_queue_get(queue, _KEEPALIVE_INTERVAL_SEC)
                 if item is _SENTINEL_TIMEOUT:

@@ -94,6 +94,14 @@ async def lifespan(app: FastAPI):
     # 确保 uvicorn.access / uvicorn.error 的输出也带上时间戳
     _patch_uvicorn_loggers()
 
+    # 提前装信号 handler：SIGTERM/SIGINT 进来就 set shutdown event
+    # 关键：得在 lifespan teardown 之前，否则 SSE 长连接死等"Waiting for connections to close"
+    try:
+        from web.backend.shutdown import install_signal_handlers
+        install_signal_handlers()
+    except Exception as e:
+        logger.warning(f"安装早期 shutdown 信号 handler 失败: {e}")
+
     # 启动时初始化数据库
     init_db()
 

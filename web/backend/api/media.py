@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -226,6 +226,90 @@ def run_media_scan(task_id: int, path: str, recursive: bool):
         db.close()
 
 
+def _resolution_label_from_dims(width: int, height: int) -> str:
+    """Width/Height → 标签（8K/4K/1080p/720p/480p/{H}p）。供 hash 与 metadata 两路共用。"""
+    if not height and not width:
+        return ''
+    if height >= 4000:
+        return '8K'
+    if height >= 2000 or width >= 3800:
+        return '4K'
+    if height >= 1000:
+        return '1080p'
+    if height >= 700:
+        return '720p'
+    if height >= 400:
+        return '480p'
+    return f'{height}p' if height else ''
+
+
+_FFPROBE_PATH = None
+_FFPROBE_CHECKED = False
+
+
+def _get_ffprobe() -> Optional[str]:
+    """惰性查找 ffprobe；进程级缓存。"""
+    global _FFPROBE_PATH, _FFPROBE_CHECKED
+    if not _FFPROBE_CHECKED:
+        import shutil
+        _FFPROBE_PATH = shutil.which("ffprobe")
+        _FFPROBE_CHECKED = True
+        if _FFPROBE_PATH is None:
+            logger.warning("未找到 ffprobe，hash 模式将不展示时长/分辨率")
+    return _FFPROBE_PATH
+
+
+def _probe_video_meta(path: Path, timeout: float = 8.0) -> dict:
+    """跑 ffprobe 拉一条视频的 duration_sec / width / height。失败返回 {}。"""
+    import subprocess
+    import json
+    ffprobe = _get_ffprobe()
+    if not ffprobe or not path.exists():
+        return {}
+    cmd = [
+        ffprobe, '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height:format=duration',
+        '-of', 'json',
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            encoding='utf-8', errors='replace',
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug(f"ffprobe 失败 {path}: {e}")
+        return {}
+    if proc.returncode != 0 or not proc.stdout:
+        return {}
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+    streams = data.get('streams') or []
+    width = height = 0
+    if streams:
+        v = streams[0]
+        try:
+            width = int(v.get('width') or 0)
+            height = int(v.get('height') or 0)
+        except (TypeError, ValueError):
+            pass
+    duration_sec = 0
+    fmt = data.get('format') or {}
+    try:
+        d = float(fmt.get('duration') or 0)
+        duration_sec = int(d) if d > 0 else 0
+    except (TypeError, ValueError):
+        pass
+    return {
+        'duration_sec': duration_sec,
+        'width': width,
+        'height': height,
+    }
+
+
 def _quick_hash(path: Path, chunk_size: int = 65536) -> Optional[str]:
     """
     对文件计算"首/中/尾 hash"——读首 64KB + 中 64KB + 末 64KB + 文件大小，做 sha1。
@@ -265,35 +349,21 @@ def _quick_hash(path: Path, chunk_size: int = 65536) -> Optional[str]:
         return None
 
 
-@router.get("/duplicates")
-def find_duplicates(
-    path: str,
-    use_hash: bool = True,
-    db: Session = Depends(get_db),
-):
-    """
-    查找重复视频文件。
-
-    use_hash=True 时做两层检测：
-      1. 按精确字节大小聚类
-      2. 对同大小文件计算首尾 hash，仅 hash 也相同的才算"完全相同"
-
-    use_hash=False 时退化为旧逻辑（仅按 MB 大小聚类，速度快但误报多）。
-    """
+def _hash_dup_impl(path: str, use_hash: bool, progress=None) -> dict:
+    """hash 模式重复检测核心。progress(event) 可选，event 形如
+    {'phase': 'scanning'|'hashing'|'probing', 'message': str, 'percent': int, 'current': str?}"""
     import time
+    progress = progress or (lambda _e: None)
     t0 = time.time()
-    logger.info(f"/media/duplicates 进入: path={path!r} use_hash={use_hash}")
+    logger.info(f"hash-dup 启动: path={path!r} use_hash={use_hash}")
+
     local_path = _resolve_local_path(path)
     scan_path = Path(local_path)
     if not scan_path.exists():
-        logger.warning(f"/media/duplicates 路径不存在: {local_path!r}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"路径不存在: {local_path}（前端传入: {path}）",
-        )
+        raise FileNotFoundError(f"路径不存在: {local_path}（前端传入: {path}）")
 
+    progress({'phase': 'scanning', 'message': '扫描视频文件...', 'percent': 2})
     VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v'}
-
     videos = []
     for item in scan_path.rglob("*"):
         if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS:
@@ -306,9 +376,13 @@ def find_duplicates(
                 })
             except OSError:
                 continue
+    progress({
+        'phase': 'scanning',
+        'message': f'扫描完成，共 {len(videos)} 个视频文件',
+        'percent': 12,
+    })
 
     if not use_hash:
-        # 旧逻辑：MB 级别聚类
         size_groups = defaultdict(list)
         for v in videos:
             size_mb = v["size"] // (1024 * 1024)
@@ -328,13 +402,23 @@ def find_duplicates(
     for v in videos:
         size_groups[v["size"]].append(v)
 
-    confirmed = []  # hash 相同 → 高置信
-    size_only = []  # 大小相同但 hash 不同 → 低置信
+    # 进度估算：以"需要 hash 的文件总数"作分母（只有大小冲突组才会进 hash）
+    candidates = [v for grp in size_groups.values() if len(grp) >= 2 for v in grp]
+    total_hashable = len(candidates)
+    progress({
+        'phase': 'hashing',
+        'message': f'同大小候选 {total_hashable} 个，准备计算 hash',
+        'percent': 15,
+    })
+
+    confirmed = []
+    size_only = []
+    hashed = 0
+    HASH_BAND = (15, 80)  # 进度区间
 
     for size, group in size_groups.items():
         if len(group) < 2:
             continue
-        # 对同大小组做 hash 二次分组
         hash_groups = defaultdict(list)
         for v in group:
             h = _quick_hash(v["_path_obj"])
@@ -342,6 +426,18 @@ def find_duplicates(
                 hash_groups[h].append(v)
             else:
                 hash_groups[f"_no_hash_{v['path']}"].append(v)
+            hashed += 1
+            # 每 hash 一个就推一次进度（含当前文件名）；频繁但事件本身小
+            if total_hashable:
+                pct = HASH_BAND[0] + int((HASH_BAND[1] - HASH_BAND[0]) * hashed / total_hashable)
+            else:
+                pct = HASH_BAND[1]
+            progress({
+                'phase': 'hashing',
+                'message': f'计算 hash {hashed}/{total_hashable}',
+                'percent': pct,
+                'current': Path(v['path']).name,
+            })
 
         for h, hg in hash_groups.items():
             if len(hg) > 1:
@@ -353,7 +449,6 @@ def find_duplicates(
                     "files": [{k: v[k] for k in ("path", "name", "size")} for v in hg],
                 })
 
-        # 检查"大小相同但分到不同 hash 组"的情况
         if len(hash_groups) > 1:
             outliers = [hg[0] for hg in hash_groups.values() if len(hg) == 1]
             if len(outliers) > 1:
@@ -366,54 +461,86 @@ def find_duplicates(
 
     confirmed.sort(key=lambda x: x["size"], reverse=True)
     size_only.sort(key=lambda x: x["size"], reverse=True)
+    final_groups = (confirmed + size_only)[:50]
+
+    # 富化：ffprobe 拿时长 + 分辨率
+    enrich_t0 = time.time()
+    total_files = sum(len(g['files']) for g in final_groups)
+    progress({
+        'phase': 'probing',
+        'message': f'ffprobe 富化 {total_files} 个文件...',
+        'percent': 82,
+    })
+    PROBE_BAND = (82, 98)
+    probed = 0
+    seen_path_meta: dict = {}
+    for g in final_groups:
+        for f in g['files']:
+            p = f.get('path')
+            if not p:
+                continue
+            if p not in seen_path_meta:
+                seen_path_meta[p] = _probe_video_meta(Path(p))
+            meta = seen_path_meta[p] or {}
+            if meta.get('duration_sec'):
+                f['duration_sec'] = meta['duration_sec']
+            label = _resolution_label_from_dims(meta.get('width', 0), meta.get('height', 0))
+            if label:
+                f['resolution'] = label
+            probed += 1
+            if total_files:
+                pct = PROBE_BAND[0] + int((PROBE_BAND[1] - PROBE_BAND[0]) * probed / total_files)
+            else:
+                pct = PROBE_BAND[1]
+            progress({
+                'phase': 'probing',
+                'message': f'ffprobe {probed}/{total_files}',
+                'percent': pct,
+                'current': Path(p).name,
+            })
 
     logger.info(
-        f"/media/duplicates 完成: path={local_path!r} videos={len(videos)} "
+        f"hash-dup 完成: path={local_path!r} videos={len(videos)} "
         f"confirmed_dup={len(confirmed)} size_only={len(size_only)} "
-        f"elapsed={time.time()-t0:.1f}s"
+        f"ffprobe={len(seen_path_meta)} ({time.time()-enrich_t0:.1f}s) "
+        f"total {time.time()-t0:.1f}s"
     )
 
     return {
         "total_videos": len(videos),
         "confirmed_duplicates": len(confirmed),
         "size_only_matches": len(size_only),
-        # 兼容旧前端字段
         "potential_duplicates": len(confirmed) + len(size_only),
-        "groups": (confirmed + size_only)[:50],
+        "groups": final_groups,
     }
 
 
-@router.get("/duplicates-by-metadata")
-def find_duplicates_by_metadata(
-    library_id: Optional[str] = None,
+@router.get("/duplicates")
+def find_duplicates(
+    path: str,
+    use_hash: bool = True,
+    db: Session = Depends(get_db),
 ):
-    """
-    基于 Jellyfin 元数据检测重复（语义重复，相对 /duplicates 的字节级重复）。
+    """同步版（一次性返回完整结果）。带进度的 SSE 见 /duplicates/stream。"""
+    try:
+        return _hash_dup_impl(path, use_hash)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    分组规则（按优先级，命中即停）：
-      Movie:
-        1. ProviderIds.Tmdb 相同 → match_type='tmdb'   （最强信号）
-        2. ProviderIds.Imdb 相同 → match_type='imdb'
-        3. normalize(Name) + ProductionYear 相同 → match_type='title_year'
-      Episode:
-        SeriesId + ParentIndexNumber + IndexNumber 相同 → match_type='episode'
-        （即 同剧·同季·同集 出现多次）
 
-    比起字节级 hash：能识别"同一作品的不同清晰度版本"等真正语义重复，
-    且不需要扫盘，对几千项目的库瞬时返回。
-    """
+def _metadata_dup_impl(library_id: Optional[str] = None, progress=None) -> dict:
+    """metadata 模式重复检测核心。progress(event) 可选。"""
     from web.backend.config import settings
     from common.jellyfin_client import JellyfinClient
+    progress = progress or (lambda _e: None)
 
     if not settings.jellyfin_api_key:
-        raise HTTPException(status_code=400, detail="未配置 Jellyfin API Key")
+        raise PermissionError("未配置 Jellyfin API Key")
 
     client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
-    # RunTimeTicks 顶层兜底：MediaSources 偶尔残缺时仍能从 item 顶层取到时长
-    # MediaStreams：拉视频流的 Width/Height 给前端展示分辨率（2160p/1080p 等）
     fields = "ProviderIds,ProductionYear,Path,MediaSources,MediaStreams,RunTimeTicks,SeriesName,SeriesId,ParentIndexNumber,IndexNumber"
 
-    logger.info(f"/media/duplicates-by-metadata 进入: library_id={library_id!r}")
+    logger.info(f"metadata-dup 启动: library_id={library_id!r}")
 
     def _fetch(types: str) -> list:
         params = {
@@ -431,10 +558,21 @@ def find_duplicates_by_metadata(
             logger.warning(f"jellyfin /Items 拉 {types} 失败: {e}")
             return []
 
+    progress({'phase': 'fetching', 'message': '从 Jellyfin 拉取 Movies...', 'percent': 10})
     movies = _fetch('Movie')
+    progress({
+        'phase': 'fetching',
+        'message': f'已拉取 {len(movies)} 部电影，继续拉取剧集...',
+        'percent': 40,
+    })
     episodes = _fetch('Episode')
+    progress({
+        'phase': 'fetching',
+        'message': f'已拉取 {len(episodes)} 集，准备分组',
+        'percent': 70,
+    })
     logger.info(
-        f"/media/duplicates-by-metadata: 拉到 movies={len(movies)} episodes={len(episodes)}"
+        f"metadata-dup: 拉到 movies={len(movies)} episodes={len(episodes)}"
     )
 
     def _file_size(item: dict) -> int:
@@ -460,38 +598,19 @@ def find_duplicates_by_metadata(
         return 0
 
     def _resolution_label(item: dict) -> str:
-        """从 MediaSources[0].MediaStreams 找第一个 Video 流的 Height，转成标签
-        ("2160p" / "1080p" / "720p" / "480p" / "{H}p"）。拿不到返回 ''."""
+        """从 MediaSources[0].MediaStreams 第一个 Video 流取宽高，调共用映射。"""
         ms = item.get('MediaSources') or []
         streams = []
         if ms and isinstance(ms, list):
             streams = ms[0].get('MediaStreams') or []
-        height = 0
-        width = 0
         for s in streams:
             if (s.get('Type') or '').lower() == 'video':
-                h = s.get('Height') or 0
                 w = s.get('Width') or 0
-                if isinstance(h, int) and h > height:
-                    height = h
-                if isinstance(w, int) and w > width:
-                    width = w
-                # 第一个 video 流即可（多视频流极罕见，PIP 之类）
-                break
-        if not height:
-            return ''
-        # 行业惯例标签：按短边（height）映射；4K/8K 用 UHD 习惯
-        if height >= 4000:
-            return '8K'
-        if height >= 2000 or width >= 3800:
-            return '4K'
-        if height >= 1000:
-            return '1080p'
-        if height >= 700:
-            return '720p'
-        if height >= 400:
-            return '480p'
-        return f'{height}p'
+                h = s.get('Height') or 0
+                w = w if isinstance(w, int) else 0
+                h = h if isinstance(h, int) else 0
+                return _resolution_label_from_dims(w, h)
+        return ''
 
     from web.backend.path_translator import translate_path_with_settings
 
@@ -617,6 +736,8 @@ def find_duplicates_by_metadata(
             ),
         })
 
+    progress({'phase': 'grouping', 'message': '按 TMDB/IMDB/标题分组...', 'percent': 90})
+
     all_groups = movie_groups + episode_groups
     # 按浪费空间排序：组内"非最大文件"的总大小 = 可释放空间
     def _waste(g):
@@ -636,6 +757,125 @@ def find_duplicates_by_metadata(
         "episode_dup_groups": len(episode_groups),
         "groups": all_groups[:200],
     }
+
+
+@router.get("/duplicates-by-metadata")
+def find_duplicates_by_metadata(library_id: Optional[str] = None):
+    """同步版（一次性返回完整结果）。带进度的 SSE 见 /duplicates-by-metadata/stream。"""
+    try:
+        return _metadata_dup_impl(library_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# SSE 进度流：跟同名 GET 一致的查询参数，返回 text/event-stream
+# 事件 data 是 JSON: {phase, message, percent, current?, result?}
+#   phase: 'scanning' / 'hashing' / 'probing' / 'fetching' / 'grouping' / 'done' / 'error'
+#   done 事件携带 result（完整结果 dict）。前端拿到 done 即可关流。
+# ============================================================================
+
+_SSE_HEADERS = {
+    'Cache-Control': 'no-cache, no-transform',
+    'X-Accel-Buffering': 'no',
+    'Connection': 'keep-alive',
+}
+
+
+class _WorkerAborted(Exception):
+    """worker 线程检测到客户端断开 / 进程关闭 → 主动 bail。"""
+
+
+def _make_dup_stream(work, request):
+    """work(progress_cb) -> result_dict。把同步 impl 跑在线程池，progress 通过 asyncio.Queue 串到 SSE 流。
+
+    关 reload / 客户端断开时：
+      - gen() 周期 wait_for(timeout) 检查 request.is_disconnected()，超时时发 keepalive
+      - 触发 abort_evt，下次 progress() 调用就抛 _WorkerAborted，impl 主动停
+      - 处理 asyncio.CancelledError（uvicorn 给 handler 发的关闭信号）
+    """
+    import asyncio
+    import threading
+    import json
+    from fastapi.responses import StreamingResponse
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    abort_evt = threading.Event()
+
+    def progress(event):
+        # worker 线程调用：先看 abort，再跨线程 put 到 asyncio.Queue
+        if abort_evt.is_set():
+            raise _WorkerAborted()
+        try:
+            asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+        except RuntimeError:
+            # loop 已经关：进程在退出，直接 bail
+            raise _WorkerAborted()
+
+    async def runner():
+        try:
+            result = await asyncio.to_thread(work, progress)
+            if not abort_evt.is_set():
+                await queue.put({'phase': 'done', 'result': result, 'percent': 100})
+        except _WorkerAborted:
+            logger.info("dup-stream worker aborted（客户端断开 / 进程关闭）")
+        except Exception as e:
+            logger.exception("dup-stream worker 异常")
+            if not abort_evt.is_set():
+                try:
+                    await queue.put({'phase': 'error', 'message': str(e)})
+                except Exception:
+                    pass
+
+    runner_task = asyncio.create_task(runner())
+
+    from web.backend.shutdown import is_shutting_down
+
+    async def gen():
+        try:
+            while True:
+                # 多信号：超时（5s）做 keepalive + disconnect 检查 + 进程级 shutdown 检查
+                if is_shutting_down():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected() or is_shutting_down():
+                        break
+                    yield ': keepalive\n\n'
+                    continue
+                yield f'data: {json.dumps(event, default=str)}\n\n'
+                if event.get('phase') in ('done', 'error'):
+                    break
+        except asyncio.CancelledError:
+            # uvicorn 关进程 / 客户端强断
+            raise
+        finally:
+            # 通知 worker bail（下次 progress() 抛 _WorkerAborted）
+            abort_evt.set()
+            if not runner_task.done():
+                runner_task.cancel()
+
+    return StreamingResponse(gen(), media_type='text/event-stream', headers=_SSE_HEADERS)
+
+
+@router.get("/duplicates/stream")
+async def find_duplicates_stream(request: Request, path: str, use_hash: bool = True):
+    """SSE 进度流版的 /duplicates。"""
+    return _make_dup_stream(
+        lambda prog: _hash_dup_impl(path, use_hash, progress=prog),
+        request,
+    )
+
+
+@router.get("/duplicates-by-metadata/stream")
+async def find_duplicates_by_metadata_stream(request: Request, library_id: Optional[str] = None):
+    """SSE 进度流版的 /duplicates-by-metadata。"""
+    return _make_dup_stream(
+        lambda prog: _metadata_dup_impl(library_id, progress=prog),
+        request,
+    )
 
 
 @router.get("/storage")
