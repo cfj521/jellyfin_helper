@@ -19,6 +19,7 @@ from typing import Dict, Optional
 from web.backend.database import SessionLocal, DownloadDispatchMap
 from tools.dispatch.phases import (
     PHASE_JELLYFIN_RECOGNIZE_DONE,
+    PHASE_SUBTITLE_ALIGNING,
     PHASE_SUBTITLE_FETCHING, PHASE_AUDIO_TRACK_ORDER_ADJUSTING, PHASE_ALL_JOBS_DONE,
     STATUS_RUNNING, STATUS_SUCCEEDED, STATUS_FAILED, STATUS_WARNED, STATUS_SKIPPED,
 )
@@ -42,7 +43,7 @@ class PostProcessWorker:
 
     def _claim_next(self) -> Optional[Dict]:
         """取下一条要处理的种子。优先级：
-          ① 链式段中断恢复（subtitle_fetching / audio_track_order_adjusting + status=running）
+          ① 链式段中断恢复（subtitle_aligning / subtitle_fetching / audio_track_order_adjusting + status=running）
           ② 新行（jellyfin_recognize_done + status ∈ {running, succeeded, warned, skipped}）
 
         warned/skipped 也认领：jellyfin 没识别到不阻断字幕/音轨处理。
@@ -52,6 +53,7 @@ class PostProcessWorker:
             row = (
                 db.query(DownloadDispatchMap)
                 .filter(DownloadDispatchMap.phase.in_([
+                    PHASE_SUBTITLE_ALIGNING,
                     PHASE_SUBTITLE_FETCHING, PHASE_AUDIO_TRACK_ORDER_ADJUSTING,
                 ]))
                 .filter(DownloadDispatchMap.phase_status == STATUS_RUNNING)
@@ -60,8 +62,8 @@ class PostProcessWorker:
             )
             if row:
                 logger.info(f"恢复后处理: {row.torrent_hash[:16]}.. (phase={row.phase})")
-                # 重置回 subtitle_fetching 起点重跑（subtitle/audio 已落位的不会重做）
-                row.phase = PHASE_SUBTITLE_FETCHING
+                # 重置回 subtitle_aligning 起点重跑（align/subtitle/audio 都设计成幂等）
+                row.phase = PHASE_SUBTITLE_ALIGNING
                 row.phase_status = STATUS_RUNNING
                 row.status_message = '从中断点恢复后处理...'
                 db.commit()
@@ -76,14 +78,16 @@ class PostProcessWorker:
             )
             if not row:
                 return None
-            row.phase = PHASE_SUBTITLE_FETCHING
+            row.phase = PHASE_SUBTITLE_ALIGNING
             row.phase_status = STATUS_RUNNING
-            row.status_message = '准备字幕处理...'
+            row.status_message = '准备字幕对齐...'
             db.commit()
             return _row_to_dict(row)
 
     def run_forever(self):
-        from tools.dispatch.post_process import post_process_subtitle, post_process_audio
+        from tools.dispatch.post_process import (
+            post_process_subtitle, post_process_audio, post_process_subtitle_align,
+        )
 
         logger.info(f"PostProcessWorker 启动（事件驱动 + {WAIT_TIMEOUT}s 兜底）")
         last_heartbeat = time.time()
@@ -112,6 +116,26 @@ class PostProcessWorker:
                 continue
 
             try:
+                # Step 0: subtitle_aligning —— release 自带的无 lang 标签 sidecar 嗅探内容并改名
+                # 必须先于 subtitle_fetching，否则下载器会因 sidecar 没 lang 标签当作"缺 chs"重复下
+                t0 = time.time()
+                _set_phase(h, PHASE_SUBTITLE_ALIGNING, STATUS_RUNNING, message='字幕文件名对齐中...')
+                status, info = post_process_subtitle_align(files)
+                _set_phase(h, PHASE_SUBTITLE_ALIGNING, _normalize_status(status),
+                           message=str(info)[:200])
+                _record_phase_timing(h, PHASE_SUBTITLE_ALIGNING, time.time() - t0)
+
+                # 如果 align 改了名，刷新 row 里的 dispatched_files —— 下载器要按新名扫
+                if isinstance(info, dict) and info.get('renamed_details'):
+                    rename_map = dict(info['renamed_details'])
+                    files = [rename_map.get(f, f) for f in files]
+                    # 同步写库，避免别处再读到旧路径
+                    with SessionLocal() as db:
+                        r = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+                        if r:
+                            r.dispatched_files = files
+                            db.commit()
+
                 # Step 1: subtitle_fetching
                 t0 = time.time()
                 _set_phase(h, PHASE_SUBTITLE_FETCHING, STATUS_RUNNING, message='字幕处理中...')
