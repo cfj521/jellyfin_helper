@@ -1008,7 +1008,7 @@
               <template #header>
                 <div class="cfg-card-head">
                   <span class="badge llm-badge">LLM</span>
-                  <span>识别兜底 AI</span>
+                  <span>LLM 媒体识别</span>
                   <el-tag size="small" :type="form.llm.api_key ? 'success' : 'info'" effect="plain">
                     {{ form.llm.api_key ? '已配置' : '未配置' }}
                   </el-tag>
@@ -1031,6 +1031,14 @@
                   </span>
                 </el-form-item>
 
+                <el-form-item label="优先采用 LLM 识别">
+                  <el-switch v-model="form.llm.prefer_first" :disabled="!form.llm.enabled" />
+                  <span class="form-hint" style="margin-left: 8px">
+                    默认关闭：LLM 作为兜底（番号 → 动漫 → TMDB → LLM）。
+                    开启后 LLM 排在识别链首位，规则/TMDB 作为兜底
+                  </span>
+                </el-form-item>
+
                 <el-form-item label="Provider">
                   <el-select v-model="form.llm.provider" style="width: 100%" @change="onLlmProviderChange">
                     <el-option label="阿里通义千问 (qwen)" value="qwen" />
@@ -1050,11 +1058,6 @@
 
                 <el-form-item label="模型">
                   <el-input v-model="form.llm.model" placeholder="如 qwen-plus / gpt-4o-mini" />
-                </el-form-item>
-
-                <el-form-item label="信心阈值">
-                  <el-input-number v-model="form.llm.confidence_threshold" :min="0.5" :max="1.0" :step="0.05" :precision="2" controls-position="right" />
-                  <span class="form-hint" style="margin-left: 8px">流水线识别中，信心阈值 ≥ 此值直接采用，否则进入待审核（推荐 0.80–0.90）</span>
                 </el-form-item>
 
                 <el-form-item label="超时(秒)">
@@ -1366,7 +1369,7 @@ const blank = () => ({
     ffmpeg_dir: '',
     mkvtoolnix_dir: '',
   },
-  // LLM 兜底识别配置
+  // LLM 媒体识别配置
   llm: {
     enabled: false,
     provider: 'qwen',
@@ -1376,7 +1379,7 @@ const blank = () => ({
     timeout_seconds: 180,
     max_retries: 1,
     cache_ttl_days: 30,
-    confidence_threshold: 0.85,
+    prefer_first: false,
   },
   // 入库流水线（每 media_type 仅配 library_id + location_template；
   // file_template 由 organizer 内置；move_mode 由全局 default_move_mode 统一）

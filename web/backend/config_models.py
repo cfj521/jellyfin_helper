@@ -94,7 +94,7 @@ class DispatchConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     """
-    LLM 类型识别配置。
+    LLM 媒体识别配置。
     Spike 实测：qwen-plus 30/30 准确率 100%，¥0.74 / 1000 调用。
     """
     enabled: bool = True
@@ -105,7 +105,8 @@ class LLMConfig(BaseModel):
     timeout_seconds: int = 180
     max_retries: int = 1
     cache_ttl_days: int = 30
-    confidence_threshold: float = 0.85     # < 阈值落用户确认
+    # 优先级：默认 False = LLM 兜底；True = LLM 排在识别链首位，规则正则作为兜底
+    prefer_first: bool = False
 
 
 # ============ 第三方推荐源（Trakt / AniList / 豆瓣 doulist）============
