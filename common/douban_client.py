@@ -339,12 +339,14 @@ class DoubanClient:
 
     def search_id_by_imdb(self, imdb_id: str) -> Optional[str]:
         """
-        按 IMDb tt 串在豆瓣电影搜索里命中条目。
+        按 IMDb tt 串在豆瓣 subject_search 里命中条目。
 
-        实测：豆瓣对**欧美电影**的条目页 IMDb 字段做了文本索引，
-              search_text='tt0468569' 能直接命中唯一项（黑暗骑士 → 1851857）。
-        中文电影 / 所有剧集的条目 IMDb 字段未被索引——这里搜不到时返回 None，
-        让上层走 title 退化路径。
+        覆盖情况（实测，会随时变化）：
+          - 欧美电影：稳定命中（条目页 IMDb 字段被索引）
+          - 剧集：部分覆盖（看条目维护情况，不少美剧能查到）
+          - 中文电影：基本不命中
+        不命中返回 None，让上层走 title 退化路径——所以即便覆盖率不完美也无副作用，
+        多一次 HTTP 而已。
         """
         if not imdb_id or not imdb_id.startswith('tt'):
             return None
@@ -1008,18 +1010,21 @@ class DoubanClient:
         """
         IMDb 优先 + 片名退化 的统一查询：
 
-          1) 有 imdb_id 且 media_type='movie' → 用 imdb 串走 subject_search
-             （欧美电影通常一击即中，零消歧成本）
-          2) 失败 → 用 name + year 走 subject_search（中文片、剧集、imdb 缺失场景必走）
+          1) 有 imdb_id → 先用 imdb 串走 subject_search（电影 + 剧集都试一遍）
+             - 欧美电影通常一击即中
+             - 剧集命中率不稳定（豆瓣对剧集 IMDb 字段的索引覆盖看条目），
+               但既然 ratings.py 已经传了 imdb_id 进来，试一次比直接丢弃强；
+               不中自动回退到 (2)，多一次 HTTP 而已
+          2) 失败 → 用 name + year 走 subject_search（中文片 / imdb 失败场景必走）
           3) 都失败 → (None, None)
-
-        media_type='tv' 时跳过 imdb 搜（实测豆瓣对剧集 IMDb 字段未索引，省一次 HTTP）。
         """
         douban_id: Optional[str] = None
-        if imdb_id and media_type != 'tv':
+        if imdb_id:
             douban_id = self.search_id_by_imdb(imdb_id)
             if douban_id:
-                logger.debug(f"豆瓣 imdb 直命中 imdb={imdb_id} → {douban_id}")
+                logger.debug(
+                    f"豆瓣 imdb 直命中 media={media_type} imdb={imdb_id} → {douban_id}"
+                )
         if not douban_id and name:
             douban_id = self.search_id(name, year)
         if not douban_id:
