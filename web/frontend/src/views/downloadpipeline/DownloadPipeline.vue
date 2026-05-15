@@ -262,6 +262,11 @@
                     command="retry_dispatch"
                     style="color: #409eff"
                   >重试此阶段</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canEditRow(row)"
+                    command="edit_dispatch"
+                    style="color: #409eff"
+                  >编辑识别/目标</el-dropdown-item>
                   <el-dropdown-item command="force_start">强制启动</el-dropdown-item>
                   <el-dropdown-item command="recheck">重新校验</el-dropdown-item>
                   <el-dropdown-item command="reannounce">重新汇报</el-dropdown-item>
@@ -278,10 +283,12 @@
     </el-card>
     </div>
 
-    <!-- 人工审核 modal：从主表中点"人工审核"按钮触发 -->
+    <!-- 人工审核 / 编辑识别 modal：复用同一界面
+         - phase_status='needs_review'（adopt 低置信认领）→ 审核入流水线
+         - 其它非终态行 → 仅编辑字段（不强制 phase 流转） -->
     <el-dialog
       v-model="reviewVisible"
-      title="人工审核：自动认领的低置信种子"
+      :title="reviewIsConfirm ? '人工审核：自动认领的低置信种子' : '编辑识别 / 目标'"
       width="640"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
@@ -359,25 +366,48 @@
             <el-input v-model="reviewForm.series_name" placeholder="剧集 / 番剧名" clearable />
           </el-form-item>
 
-          <el-form-item label="目标库">
-            <span class="auto-target">
-              <strong v-if="reviewTarget.dispatch?.target_library_name">{{ reviewTarget.dispatch.target_library_name }}</strong>
-              <span v-else class="muted">⚠ 该 media_type 未配置库</span>
-              <span class="muted" style="margin-left: 8px">（确认后按规则自动重算；未配库需先去设置→入库流水线选）</span>
-            </span>
+          <el-form-item label="目标解析">
+            <el-radio-group v-model="reviewForm._target_mode">
+              <el-radio value="auto">按规则自动重算（推荐）</el-radio>
+              <el-radio value="manual">手动指定</el-radio>
+            </el-radio-group>
           </el-form-item>
 
-          <el-form-item label="目标路径">
-            <span class="auto-target path-text" v-if="reviewTarget.dispatch?.target_path">{{ reviewTarget.dispatch.target_path }}</span>
-            <span v-else class="muted">—</span>
+          <template v-if="reviewForm._target_mode === 'auto'">
+            <el-form-item label="目标库">
+              <span class="auto-target">
+                <strong v-if="reviewTarget.dispatch?.target_library_name">{{ reviewTarget.dispatch.target_library_name }}</strong>
+                <span v-else class="muted">⚠ 该 media_type 未配置库</span>
+                <span class="muted" style="margin-left: 8px">（保存后按 media_type 规则自动重算）</span>
+              </span>
+            </el-form-item>
+            <el-form-item label="目标路径">
+              <span class="auto-target path-text" v-if="reviewTarget.dispatch?.target_path">{{ reviewTarget.dispatch.target_path }}</span>
+              <span v-else class="muted">—</span>
+            </el-form-item>
+          </template>
+
+          <template v-else>
+            <el-form-item label="目标库 ID">
+              <el-input v-model="reviewForm.target_library_id" placeholder="Jellyfin library_id (在设置→入库流水线 查)" clearable />
+            </el-form-item>
+            <el-form-item label="目标路径">
+              <el-input v-model="reviewForm.target_path" placeholder="后端视角绝对路径（如 /library/videos/movie/Movie (2024)）" clearable />
+            </el-form-item>
+          </template>
+
+          <el-form-item v-if="reviewAfterCopy">
+            <span class="muted" style="font-size: 12px; color: #f59e0b">
+              ⚠ 已进入复制阶段，仅修改 DB 字段；已落地文件需自行迁移
+            </span>
           </el-form-item>
         </el-form>
       </div>
 
       <template #footer>
         <div class="review-footer">
-          <!-- 拒绝 3 按钮平铺，越往右越激进 -->
-          <div class="footer-left">
+          <!-- 拒绝 3 按钮平铺，越往右越激进；仅 needs_review 流程显示 -->
+          <div class="footer-left" v-if="reviewIsConfirm">
             <el-button title="保留种子和文件" @click="onReviewDismissCmd('dismiss')">
               拒绝
             </el-button>
@@ -388,9 +418,12 @@
               移除文件
             </el-button>
           </div>
+          <div class="footer-left" v-else></div>
           <div class="footer-right">
             <el-button @click="reviewVisible = false">取消</el-button>
-            <el-button type="primary" :loading="reviewSaving" @click="submitReview">确认入流水线</el-button>
+            <el-button type="primary" :loading="reviewSaving" @click="submitReview">
+              {{ reviewIsConfirm ? '确认入流水线' : '保存' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -1203,6 +1236,10 @@ const reviewForm = reactive({
   title: '',
   year: null,
   series_name: '',
+  // 目标解析模式：'auto'（按规则）/ 'manual'（用户手填）
+  _target_mode: 'auto',
+  target_library_id: '',
+  target_path: '',
 })
 
 // copy-phase 冲突弹窗状态（跟 reviewVisible 互斥；同样从"人工审核"按钮触发）
@@ -1229,12 +1266,15 @@ const openReview = async (row) => {
     }
     return
   }
-  // 默认走 analyzing 低置信审核
+  // 默认走 analyzing 低置信审核 / 普通编辑（按 phase_status 在 submit 时分流）
   reviewTarget.value = row
   reviewForm.media_type = (d.media_type && d.media_type !== 'unknown') ? d.media_type : 'movie'
   reviewForm.title = d.title || ''
   reviewForm.year = d.year || null
   reviewForm.series_name = d.series_name || ''
+  reviewForm._target_mode = 'auto'
+  reviewForm.target_library_id = d.target_library_id || ''
+  reviewForm.target_path = d.target_path || ''
   reviewVisible.value = true
 }
 
@@ -1257,6 +1297,32 @@ const resolveCopyConflict = async (action) => {
   } finally {
     copyConflictBusy.value = false
   }
+}
+
+// ---- 手动编辑识别 / 目标：复用 review modal 状态 ----
+// 终态 phase 拒绝编辑（再编辑无意义）；编辑后已落盘文件不会迁移，仅修 DB
+const TERMINAL_PHASES = new Set(['cleaned', 'dismissed', 'all_jobs_done'])
+const PRE_COPY_PHASES = new Set(['analyzing', 'dispatch_queued', 'downloading', 'download_done'])
+
+const canEditRow = (row) => {
+  const phase = row?.dispatch?.phase
+  if (!phase) return false   // 没 dispatch_map 行 → 不能改
+  return !TERMINAL_PHASES.has(phase)
+}
+
+// 当前 review modal 是否走"审核确认"流程（vs 普通编辑）：看 phase_status
+const reviewIsConfirm = computed(
+  () => reviewTarget.value?.dispatch?.phase_status === 'needs_review'
+)
+// 当前行是否已进入复制阶段（warning 用）
+const reviewAfterCopy = computed(() => {
+  const ph = reviewTarget.value?.dispatch?.phase
+  return ph && !PRE_COPY_PHASES.has(ph)
+})
+
+const openEdit = (row) => {
+  // 复用 openReview 的填表逻辑；走的是同一弹窗
+  openReview(row)
 }
 
 // 主表数据更新后调一次：手动添加的种子若分析后落到 needs_review，自动弹审核 modal
@@ -1289,28 +1355,54 @@ const onReviewTypeChange = () => {
   // 实际重算在 submit 时由后端做（不传 target 字段就触发）
 }
 
-// 确认入流水线
+// 提交：phase_status=needs_review 走"审核确认入流水线"（强制 phase 流转），
+// 其它走"编辑"（仅改字段，不动 phase）
 const submitReview = async () => {
   if (!reviewTarget.value) return
   if (!reviewForm.media_type) {
     ElMessage.warning('请选媒体类型')
     return
   }
+  if (reviewForm._target_mode === 'manual'
+      && (!reviewForm.target_library_id || !reviewForm.target_path)) {
+    ElMessage.warning('手动指定目标时，target_library_id 和 target_path 都不能为空')
+    return
+  }
+
   reviewSaving.value = true
   try {
-    await dispatchApi.confirmNeedsReview(reviewTarget.value.hash, {
+    const basePayload = {
       media_type: reviewForm.media_type,
-      // 不传 target_library_id / target_path → 后端按 media_type 规则自动重算
       title: reviewForm.title || null,
       year: reviewForm.year || null,
       series_name: reviewForm.series_name || null,
-    })
-    ElMessage.success('已通过审核 → 流水线接管')
+    }
+    if (reviewForm._target_mode === 'manual') {
+      basePayload.target_library_id = reviewForm.target_library_id
+      basePayload.target_path = reviewForm.target_path
+    }
+
+    if (reviewIsConfirm.value) {
+      // 审核确认入流水线（confirm_needs_review 接口自动推进 phase）
+      await dispatchApi.confirmNeedsReview(reviewTarget.value.hash, basePayload)
+      ElMessage.success('已通过审核 → 流水线接管')
+    } else {
+      // 普通编辑（edit_dispatch_row 接口仅改字段）
+      const payload = { ...basePayload }
+      if (reviewForm._target_mode === 'auto') {
+        payload.recompute_target = true
+      }
+      const r = await dispatchApi.editDispatchRow(reviewTarget.value.hash, payload)
+      if (r.data?.warning) {
+        ElMessage.warning(r.data.warning)
+      } else {
+        ElMessage.success(`已保存：→ ${r.data?.after?.target_path || ''}`)
+      }
+    }
     reviewVisible.value = false
-    // 主表立刻刷新，那一行 phase_status 会变 running，"人工审核"按钮消失
     load(true)
   } catch (e) {
-    ElMessage.error('确认失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('保存失败：' + (e.response?.data?.detail || e.message))
   } finally {
     reviewSaving.value = false
   }
@@ -1491,6 +1583,9 @@ const onRowCommand = async (cmd, row) => {
     } else if (cmd === 'retry_dispatch') {
       const r = await discoverApi.retryDispatchRow(row.hash)
       ElMessage.success(`已重试：${r.data?.old_phase || ''} → ${r.data?.new_phase || ''}`)
+    } else if (cmd === 'edit_dispatch') {
+      openEdit(row)
+      return    // 弹窗自己 load，不走下面的 await load()
     } else if (cmd === 'delete' || cmd === 'delete_files') {
       const deleteFiles = cmd === 'delete_files'
       try {
