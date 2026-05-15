@@ -24,7 +24,8 @@ from web.backend.database import SessionLocal, DownloadDispatchMap
 from tools.dispatch.phases import (
     PHASE_ANALYZING, PHASE_DISPATCH_QUEUED, PHASE_DOWNLOADING, PHASE_DOWNLOAD_DONE,
     PHASE_COPYING, PHASE_ORGANIZING, PHASE_JELLYFIN_RECOGNIZING, PHASE_JELLYFIN_RECOGNIZE_DONE,
-    PHASE_SUBTITLE_FETCHING, PHASE_AUDIO_TRACK_ORDER_ADJUSTING, PHASE_ALL_JOBS_DONE,
+    PHASE_SUBTITLE_ALIGNING, PHASE_SUBTITLE_FETCHING,
+    PHASE_AUDIO_TRACK_ORDER_ADJUSTING, PHASE_ALL_JOBS_DONE,
     PHASE_CLEANED, PHASE_DISMISSED,
     PIPELINE_CHAIN_PHASES, POSTPROCESS_CHAIN_PHASES,
     STATUS_RUNNING, STATUS_FAILED,
@@ -173,7 +174,7 @@ def _recover_target_phase(current_phase: str) -> str:
 
     映射规则：
       - 链式段（copying/organizing/jellyfin_recognizing）→ copying（从头跑，幂等）
-      - 后处理链（subtitle_fetching/audio_track_order_adjusting）→ subtitle_fetching
+      - 后处理链（subtitle_aligning/subtitle_fetching/audio_track_order_adjusting）→ subtitle_aligning
       - 等待段（downloading）→ 自己重跑（watcher 自然处理）
       - jellyfin_recognizing → 单独：让 jellyfin-watcher 重新查
       - download_done / dispatch_queued / analyzing / jellyfin_recognize_done → 各自原地重跑
@@ -187,9 +188,9 @@ def _recover_target_phase(current_phase: str) -> str:
     if current_phase in PIPELINE_CHAIN_PHASES:
         return PHASE_COPYING
 
-    # 后处理链重头跑
+    # 后处理链重头跑（从 align 起，align/fetch/audio 都设计成幂等）
     if current_phase in POSTPROCESS_CHAIN_PHASES:
-        return PHASE_SUBTITLE_FETCHING
+        return PHASE_SUBTITLE_ALIGNING
 
     # 其他原地重置（让对应 worker 重新看）
     return current_phase

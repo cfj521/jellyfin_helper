@@ -9,9 +9,81 @@
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# 字幕扩展名（跟 organizer 一致）
+_SUB_EXTS = ('.srt', '.ass', '.ssa', '.sub', '.vtt', '.sup', '.idx', '.smi')
+
+
+def post_process_subtitle_align(
+    dispatched_files: List[str],
+    progress_cb: Optional[Callable[[int, str], None]] = None,
+) -> Tuple[str, Dict]:
+    """字幕文件名对齐：release 自带的 sidecar 字幕没有 lang 标签时，
+    用 SubtitleRenamer 嗅探内容主语言，重命名为 ``<video_stem>.<lang>.<ext>``。
+
+    场景：BD release 经常带 .srt 但文件名是 ``Movie.2024.srt``（无 lang token），
+    后续 subtitle_fetcher 把它视作 "lang=未知" → 不满足 preferred_langs → 又下一份。
+    本步在 fetch 前先嗅探重命名，避免重复下载。
+
+    实现：复用 ``SubtitleRenamer.process_directory``（已有内容嗅探 + 电影/剧集模式拆分）。
+    输入 dispatched_files 收齐所在目录，每个目录跑一遍 process_directory。
+
+    返回 (status, info)：status ∈ {'ok','skipped','warned'}；
+    info.renamed_details 是 [(old_path, new_path)] 供调用方更新 dispatched_files 路径。
+    """
+    if not dispatched_files:
+        return ('skipped', {'reason': 'no dispatched files'})
+
+    # 收集字幕所在的目录（去重）
+    sidecar_dirs = sorted({
+        Path(p).parent for p in dispatched_files
+        if Path(p).suffix.lower() in _SUB_EXTS and Path(p).exists()
+    })
+    if not sidecar_dirs:
+        return ('skipped', {'reason': 'no sidecar subtitles in dispatched_files'})
+
+    from tools.subtitle_manager.renamer import SubtitleRenamer
+    renamer = SubtitleRenamer()
+    logger.info(
+        f"post_process_subtitle_align: 扫描 {len(sidecar_dirs)} 个目录"
+        f"（共 {sum(1 for p in dispatched_files if Path(p).suffix.lower() in _SUB_EXTS)} 个 sidecar）"
+    )
+
+    all_results: List[Dict] = []
+    for d in sidecar_dirs:
+        try:
+            results = renamer.process_directory(
+                d, dry_run=False, recursive=False, verbose=False,
+            )
+        except Exception as e:
+            logger.warning(f"align process_directory {d} 异常: {e}")
+            continue
+        all_results.extend(results)
+
+    renamed_pairs = [
+        (r['old_path'], r['new_path']) for r in all_results
+        if r.get('success') and not r.get('dry_run') and r.get('old_path') != r.get('new_path')
+    ]
+    failed = [r for r in all_results if r.get('error')]
+
+    info = {
+        'directories': len(sidecar_dirs),
+        'renamed': len(renamed_pairs),
+        'failed': len(failed),
+        'renamed_details': renamed_pairs[:20],     # 限长，避免 status_message 爆
+    }
+    if failed:
+        logger.warning(f"post_process_subtitle_align: 部分失败 {len(failed)}")
+        info['failed_details'] = [r.get('error') for r in failed[:10]]
+        return ('warned', info)
+    logger.info(f"post_process_subtitle_align: ok renamed={len(renamed_pairs)}")
+    return ('ok', info)
 
 
 def post_process_subtitle(

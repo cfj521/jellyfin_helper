@@ -21,6 +21,7 @@ PHASE_COPYING                  = 'copying'                  # 复制源文件到
 PHASE_ORGANIZING               = 'organizing'               # 按模板改名 + SxxExx 拆 Season + trash 分流
 PHASE_JELLYFIN_RECOGNIZING     = 'jellyfin_recognizing'     # 已通知 jellyfin refresh，等 jellyfin-watcher 确认入库
 PHASE_JELLYFIN_RECOGNIZE_DONE  = 'jellyfin_recognize_done'  # jellyfin 已认到 item，等 post-process claim
+PHASE_SUBTITLE_ALIGNING        = 'subtitle_aligning'        # 给 release 自带的字幕加 lang 后缀（无后缀的按内容嗅探）
 PHASE_SUBTITLE_FETCHING        = 'subtitle_fetching'        # 抓字幕
 PHASE_AUDIO_TRACK_ORDER_ADJUSTING = 'audio_track_order_adjusting'  # 调音轨顺序
 PHASE_ALL_JOBS_DONE            = 'all_jobs_done'            # 全流程完结，进入做种期
@@ -39,6 +40,7 @@ PHASE_PIPELINE_ORDER = [
     PHASE_ORGANIZING,
     PHASE_JELLYFIN_RECOGNIZING,
     PHASE_JELLYFIN_RECOGNIZE_DONE,
+    PHASE_SUBTITLE_ALIGNING,
     PHASE_SUBTITLE_FETCHING,
     PHASE_AUDIO_TRACK_ORDER_ADJUSTING,
     PHASE_ALL_JOBS_DONE,
@@ -53,6 +55,7 @@ PIPELINE_CHAIN_PHASES = {
 }
 # post-process 链
 POSTPROCESS_CHAIN_PHASES = {
+    PHASE_SUBTITLE_ALIGNING,
     PHASE_SUBTITLE_FETCHING,
     PHASE_AUDIO_TRACK_ORDER_ADJUSTING,
 }
