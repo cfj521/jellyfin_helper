@@ -553,7 +553,8 @@ const guardAgainstDuplicate = async (btn) => {
 }
 
 /**
- * 触发某个按钮：调 handler → 收 task_id → 跳 /tasks
+ * 触发某个按钮：调 handler → 收 task_id → 弹提示（任务 # 号 + 标签）
+ * 不再自动跳 /tasks —— 用户希望就地继续操作，需要时手动去任务页查看。
  * opts：透传给 handler，含 { dryRun, audioLang }
  */
 const triggerHandler = async (btn, opts = {}) => {
@@ -570,7 +571,6 @@ const triggerHandler = async (btn, opts = {}) => {
     } else {
       ElMessage.success(`${modePrefix}任务已启动（${btn.label}）`)
     }
-    router.push({ path: '/tasks' })
   } catch (e) {
     console.error(`[MediaToolbar] ${btn.key} 启动失败:`, e)
   } finally {
@@ -698,8 +698,9 @@ const confirmRunAll = async () => {
     const modePrefix = dryRun ? '【测试】' : ''
     if (taskId) {
       ElMessage.success(`${modePrefix}一键修复已启动 #${taskId}（共 ${enabledStepCount.value} 步）`)
+    } else {
+      ElMessage.success(`${modePrefix}一键修复已启动（共 ${enabledStepCount.value} 步）`)
     }
-    router.push({ path: '/tasks' })
   } catch (e) {
     console.error('[MediaToolbar] run-all 启动失败', e)
   } finally {
