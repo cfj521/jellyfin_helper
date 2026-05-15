@@ -21,9 +21,9 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-logger = logging.getLogger(__name__)
+from web.backend.api._media_exts import VIDEO_EXTS
 
-VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '.ts'}
+logger = logging.getLogger(__name__)
 
 # 同一个库 X 秒内不重复扫描（去抖）
 LIBRARY_COOLDOWN_SEC = 5 * 60

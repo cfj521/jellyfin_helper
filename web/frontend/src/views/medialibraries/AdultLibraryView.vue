@@ -115,12 +115,11 @@
       </el-card>
     </div>
 
-    <!-- 列表卡片：filter 行在 header，table 在 body -->
-    <el-card shadow="never" class="items-card">
-      <template #header>
-        <div class="card-header items-header">
-          <!-- 排序栏 + 派生 filter chip（与普通库 LibraryDetail 风格一致） -->
-          <div class="sort-bar">
+    <!-- 排序/筛选栏：独立 sticky div，钉在视口顶（不在 el-card header 里，避免 el-card overflow 限制 sticky 滚动容器）-->
+    <div class="items-sort-bar">
+      <div class="card-header items-header">
+        <!-- 排序栏 + 派生 filter chip（与普通库 LibraryDetail 风格一致） -->
+        <div class="sort-bar">
             <span class="sort-label">排序：</span>
             <button
               v-for="opt in sortOptions"
@@ -196,14 +195,12 @@
             </el-select>
           </div>
 
-          <!-- 无限滚动模式：替代原分页器 -->
-          <span v-if="itemsTotal > 0" class="items-progress">
-            已加载 {{ items.length }} / 共 {{ itemsTotal }}
-          </span>
-          <ViewModeToggle v-model="viewMode" />
-        </div>
-      </template>
+        <ViewModeToggle v-model="viewMode" />
+      </div>
+    </div>
 
+    <!-- 列表卡片：仅 body（grid/table），header 已抽到上方 .items-sort-bar -->
+    <el-card shadow="never" class="items-card">
       <!-- 网格视图：海报卡片 grid -->
       <div v-if="viewMode === 'grid'" ref="gridViewRef" v-loading="loading" class="grid-view">
         <div
@@ -271,12 +268,6 @@
         :row-class-name="rowClassName"
       >
         <el-table-column type="selection" width="44" />
-
-        <el-table-column label="#" width="56" align="center" class-name="col-row-index">
-          <template #default="{ $index }">
-            <span class="row-index">{{ $index + 1 }}</span>
-          </template>
-        </el-table-column>
 
         <el-table-column label="封面" width="180">
           <template #default="{ row }">
@@ -636,10 +627,22 @@ const loadMore = (presetState = null) => {
 }
 
 const _currentScrollState = () => {
-  const scroller = document.querySelector('.adult-lib-view .items-card > .el-card__body')
+  // 滚动容器现在是 .app-main（页面级滚动），跟 LibraryDetail 对齐
+  const scroller = document.querySelector('.app-main')
   if (!scroller) return { scrolled: 0, visible: 0 }
   const scrollerRect = scroller.getBoundingClientRect()
   let viewportTop = scrollerRect.top
+
+  // sticky .items-sort-bar 钉在视口顶时遮挡内容，把它的可见高度从 viewportTop 减下来
+  // （rect.top ≈ scrollerRect.top 才算"当前真的钉住了"，避免未 stuck 时误补偿）
+  const sortBar = document.querySelector('.adult-lib-view .items-sort-bar')
+  if (sortBar) {
+    const r = sortBar.getBoundingClientRect()
+    if (Math.abs(r.top - scrollerRect.top) < 2) {
+      viewportTop += Math.max(0, r.bottom - scrollerRect.top)
+    }
+  }
+
   if (viewMode.value === 'list') {
     const header = document.querySelector('.adult-lib-view .el-table__header-wrapper')
     if (header) viewportTop += header.offsetHeight
@@ -1331,13 +1334,9 @@ onUnmounted(() => {
 
 <style lang="scss" scoped>
 .adult-lib-view {
-  // 本视图嵌在 LibraryDetail 的 .page-container（flex column）里，跟 page-header 并列。
-  // 用 flex: 1 + min-height: 0 吃 header 之外的剩余空间；
-  // 之前用 height: 100% 是相对父容器全高（含 header），会把总内容撑出视口 → 外层出滚动条。
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
+  // 跟 LibraryDetail 对齐：页面级滚动（外层 .app-main 滚），本视图内容自然撑开高度。
+  // 配合 :has(.lib-detail-root) .app-main { padding-top: 0 } 全局规则 + .items-sort-bar sticky top:0，
+  // 排序栏滚到视口顶时就贴住不动。
 
   // ---- toolbar（与普通库 MediaToolbar 视觉一致） ----
   .media-toolbar {
@@ -1501,22 +1500,17 @@ onUnmounted(() => {
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  // ---- items-card ----
-  .items-card {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-
-    :deep(.el-card__header) { padding: 10px 14px; }
-    :deep(.el-card__body) {
-      padding: 0;
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: auto;
-    }
+  // ---- items-sort-bar：与 LibraryDetail 同款 sticky 顶栏 ----
+  // 顶部 .app-main padding-top 被全局 :has(.lib-detail-root) 清 0，所以这里 top:0 真正贴视口顶
+  .items-sort-bar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #fff;
+    border: 1px solid var(--el-card-border-color, #e4e7ed);
+    border-radius: var(--el-card-border-radius, 4px) var(--el-card-border-radius, 4px) 0 0;
+    padding: 12px 20px;
+    margin-bottom: 0;
 
     .items-header {
       display: flex;
@@ -1530,6 +1524,18 @@ onUnmounted(() => {
       gap: 10px;
       flex-wrap: wrap;
       flex: 1;
+    }
+  }
+
+  // ---- items-card ----
+  // 顶边和顶圆角去掉：让上方 sort-bar 的 border-bottom 充当两者共用分割线
+  .items-card {
+    border-top: none;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+
+    :deep(.el-card__body) {
+      padding: 0;
     }
   }
 
@@ -1894,26 +1900,9 @@ onUnmounted(() => {
     }
   }
 
-  // 无限滚动进度文字（替代原 el-pagination）
-  .items-progress {
-    color: #6b7280;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
-  // 无限滚动哨兵：闲置时极薄，仅在显示提示文字时撑开
   // 无限滚动哨兵：仅作位置锚点，不可见
   .scroll-sentinel {
     height: 1px;
-  }
-
-  // 行号列：弱化展示
-  .row-index {
-    color: #94a3b8;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
   }
 }
 </style>

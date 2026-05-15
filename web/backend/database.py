@@ -179,6 +179,57 @@ class MediaRating(Base):
     )
 
 
+class MediaMetadata(Base):
+    """
+    媒体元数据实体表（L3 长缓存）。一行 = 某外部 source 的某个 ID 的元数据快照。
+
+    设计原则：
+      - 主键：(source, source_id) 唯一。同一部影视可能在多个 source 都有行
+        （TMDB / AniList / 豆瓣），通过 tmdb_id / imdb_id / anilist_id 三个桥接 ID 关联
+      - 用户**不**直接 refresh（详见 PRD §4.3 三层数据哲学）
+      - 系统维护：cache miss / stale TTL / 每日 LRU 清理
+      - 评分独立走 media_ratings 表，本表不存评分（豆瓣行 ext 里有副本，但不是 SOT）
+
+    详见 docs/2026-05-15-media-metadata-store.md
+    """
+    __tablename__ = "media_metadata"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    # ----- 自家 ID（强约束）-----
+    source = Column(String(16), nullable=False)       # 'tmdb' / 'anilist' / 'douban'
+    source_id = Column(String(32), nullable=False)    # 该 source 内的唯一 ID
+
+    # ----- 跨 source 桥接 ID（弱约束，部分索引在 migration 里建）-----
+    tmdb_id = Column(BigInteger)
+    imdb_id = Column(String(16))
+    anilist_id = Column(BigInteger)
+
+    # ----- 高频列表查询字段（前端卡片直接用）-----
+    media_type = Column(String(16))                   # 'movie' / 'tv' / 'anime'
+    # title 永远保存英文标题（用于种子站搜索/跨源桥接锚点；PT 站点几乎都用英文归档）
+    title = Column(String(512))
+    # 中文标题（前端列表卡片首选展示；为空时 fallback 到 title）
+    title_zh = Column(String(512))
+    original_title = Column(String(512))              # 原始制作语言的标题（日文/韩文/中文/英文）
+    year = Column(Integer)
+    release_date = Column(String(20))                 # 'YYYY-MM-DD' / 'YYYY-MM' / 'YYYY'
+    poster_url = Column(String(512))
+
+    # ----- 详情字段（JSONB，按 source 字段约定见 PRD §1.2）-----
+    ext = Column(JSONB)
+
+    # ----- 生命周期 -----
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('source', 'source_id', name='uq_media_metadata_source_id'),
+        Index('ix_media_metadata_last_seen_at', 'last_seen_at'),
+        # 跨 source 桥接的部分索引（仅 NOT NULL 项进索引，省空间）在 _ONESHOT_MIGRATIONS 建
+    )
+
+
 class AdultItem(Base):
     """成人内容"""
     __tablename__ = "adult_items"
@@ -418,6 +469,28 @@ def _apply_schema_patches():
 # 跑成功 → INSERT 标记到 schema_migrations，重启不会重复跑
 # 跑失败 → 不写标记，下次重启再试
 _ONESHOT_MIGRATIONS = [
+    (
+        "2026-05-15__media_metadata_title_zh",
+        # 加 title_zh 列；同时 TRUNCATE 现有数据（语义变更：title 必须是英文）
+        # 开发期遵循"开发阶段不维护历史数据"原则，直接清表让代码按新语义重写
+        [
+            "ALTER TABLE media_metadata ADD COLUMN IF NOT EXISTS title_zh VARCHAR(512)",
+            "TRUNCATE TABLE media_metadata RESTART IDENTITY",
+        ],
+    ),
+    (
+        "2026-05-15__media_metadata_partial_indexes",
+        # 给 media_metadata 的 3 个跨源桥接 ID 建部分索引（仅 NOT NULL 行进索引，省空间）
+        # 部分索引 SQLAlchemy DDL 表达不干净，单独 SQL 写更稳。
+        [
+            "CREATE INDEX IF NOT EXISTS ix_media_metadata_tmdb_id "
+            "  ON media_metadata (tmdb_id) WHERE tmdb_id IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_media_metadata_imdb_id "
+            "  ON media_metadata (imdb_id) WHERE imdb_id IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_media_metadata_anilist_id "
+            "  ON media_metadata (anilist_id) WHERE anilist_id IS NOT NULL",
+        ],
+    ),
     (
         "2026-05-10__pipeline_v2_phase_rename",
         # dispatch 流水线 v2：phase/status 全部重命名 + 字段扩宽 + 清理 DownloadTask 旧表

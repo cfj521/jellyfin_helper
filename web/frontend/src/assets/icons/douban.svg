@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 32" preserveAspectRatio="xMidYMid meet" aria-label="豆瓣">
+  <rect width="64" height="32" rx="6" ry="6" fill="#007722"/>
+  <g fill="#fff" font-family="'PingFang SC', 'Microsoft YaHei', 'Helvetica', Arial, sans-serif" font-weight="700" font-size="22" text-anchor="middle">
+    <text x="32" y="24">豆瓣</text>
+  </g>
+</svg>

@@ -58,10 +58,19 @@
       />
 
       <div v-if="currentTask.status === 'completed' && currentTask.result" class="result-block">
-        <el-descriptions :column="5" border>
+        <el-descriptions :column="6" border>
           <el-descriptions-item label="扫描条目">{{ currentTask.result.scanned || 0 }}</el-descriptions-item>
           <el-descriptions-item label="未识别项">
             <el-tag type="warning">{{ currentTask.result.unrecognized_count || 0 }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="已跳过 (无主体文件)">
+            <el-tooltip placement="top">
+              <template #content>
+                按库类型检查目录内是否有主体文件（电影/剧集要视频、音乐要音频、书籍要电子书等），<br>
+                没有的目录被判为"空壳"——多是字幕包 / 缩略图缓存 / 孤儿 NFO 目录——直接跳过不送 TMDB
+              </template>
+              <el-tag type="info">{{ currentTask.result.skipped_count || 0 }}</el-tag>
+            </el-tooltip>
           </el-descriptions-item>
           <el-descriptions-item label="已修复">
             <el-tag type="success">{{ currentTask.result.fixed_count || 0 }}</el-tag>
@@ -75,6 +84,22 @@
             </el-tag>
           </el-descriptions-item>
         </el-descriptions>
+
+        <!-- 跳过条目列表：折叠默认收起，展开能看到具体被哪些路径跳过了 -->
+        <el-collapse v-if="(currentTask.result.skipped?.length || 0) > 0" style="margin-top: 12px">
+          <el-collapse-item :title="`已跳过的空壳目录（${currentTask.result.skipped.length}）`" name="skipped">
+            <el-table :data="currentTask.result.skipped" stripe size="small" max-height="300">
+              <el-table-column prop="path" label="路径" min-width="320" show-overflow-tooltip />
+              <el-table-column prop="item_name" label="名称" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="collection_type" label="库类型" width="120" />
+              <el-table-column label="原因" width="160">
+                <template #default="{ row }">
+                  <el-tag size="small" type="info">{{ row.reason === 'no_media_files' ? '无主体文件' : row.reason }}</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
 
         <div v-if="currentTask.result.libraries_refreshed?.length" class="muted hint-line">
           已通知 Jellyfin 重扫：{{ currentTask.result.libraries_refreshed.length }} 个库

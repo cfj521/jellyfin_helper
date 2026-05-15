@@ -3,9 +3,6 @@
     <div class="page-header">
       <h2>
         热门推荐
-        <el-tag v-if="cached" type="info" size="small" effect="plain" class="cache-tag">
-          缓存
-        </el-tag>
         <span v-if="loading || loadingMore" class="loading-tip">
           <el-icon class="spin"><Loading /></el-icon>
           {{ loadingMore ? '加载更多...' : '加载中...' }}
@@ -182,10 +179,34 @@
                 <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-3.33 0-10 1.67-10 5v3h20v-3c0-3.33-6.67-5-10-5Z"/>
               </svg>
             </div>
-            <div class="rating" v-if="item.rating != null">
-              <el-icon><Star /></el-icon>
-              {{ item.rating.toFixed(1) }}
+            <!-- 主源评分徽章（按 source 上色，跟下方展开列表风格一致）-->
+            <div
+              class="source-rating-badge"
+              v-if="item.rating != null"
+              :class="[
+                sourceBadgeInfo.cls,
+                {
+                  clickable: (item.tmdb_id || item.douban_id) && item.media_type !== 'person',
+                  expanded: expandedRatings[item._key],
+                }
+              ]"
+              :title="(item.tmdb_id || item.douban_id) && item.media_type !== 'person' ? '点击展开/收起多维评分' : ''"
+              @click.stop="(item.tmdb_id || item.douban_id) && item.media_type !== 'person' && toggleRatings(item)"
+            >
+              <img v-if="sourceBadgeInfo.iconSrc" :src="sourceBadgeInfo.iconSrc" :alt="source" class="src-img" />
+              <span v-else-if="sourceBadgeInfo.label" class="src">{{ sourceBadgeInfo.label }}</span>
+              <span class="val">{{ item.rating.toFixed(1) }}</span>
             </div>
+            <!-- 多维评分：紧跟主源徽章下方展开（竖排）；豆瓣条目通过 douban_id 桥接索引 -->
+            <RatingsBadges
+              v-if="expandedRatings[item._key] && (item.tmdb_id || item.douban_id) && item.media_type !== 'person'"
+              compact
+              direction="column"
+              :rating="ratingForItem(item)"
+              :exclude-source="currentExcludeSource"
+              class="ratings-expanded"
+              @click.stop
+            />
             <div v-if="item.badge" class="src-badge">{{ item.badge }}</div>
             <div
               v-if="overviewVisible[item._key]"
@@ -222,12 +243,6 @@
               <span v-else class="meta-placeholder"></span>
               <span class="year">{{ item.year || '' }}</span>
             </div>
-            <RatingsBadges
-              v-if="item.tmdb_id && item.media_type !== 'person'"
-              compact
-              :rating="ratingsByKey[`${item.tmdb_id}-${item.media_type === 'tv' ? 'tv' : 'movie'}`]"
-              class="ratings-row"
-            />
             <div class="actions-row">
               <el-button
                 size="small"
@@ -266,6 +281,8 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Star, Search, Document, Close, Loading } from '@element-plus/icons-vue'
 import { discoverApi, ratingsApi } from '@/api'
 import RatingsBadges from '@/components/RatingsBadges.vue'
+import tmdbLogo from '@/assets/icons/tmdb.svg'
+import doubanLogo from '@/assets/icons/douban.svg'
 import { debugInfo } from '@/composables/useDebugInfo'
 
 // 让 App.vue 的 <keep-alive :include="[...]"> 能命中：用户从详情页返回时保留 tab/筛选/滚动位置
@@ -300,6 +317,31 @@ const loadingMore = ref(false)    // 触底追加 loading（不清 items）
 const cached = ref(false)
 const overviewVisible = reactive({})
 const ratingsByKey = reactive({})
+// 点击海报右上角 5 角星 → 切换展开"多维评分徽章"（默认折叠，省卡片空间）
+const expandedRatings = reactive({})
+const toggleRatings = (item) => {
+  expandedRatings[item._key] = !expandedRatings[item._key]
+}
+// 展开列表排除当前 source 对应的徽章（主源已在五角星上展示，避免重复）
+// 桥接失败时 RatingsBadges 内部走 empty 分支显示"暂无评分"占位，不会空白
+const currentExcludeSource = computed(() => {
+  const s = source.value
+  if (s === 'tmdb') return 'tmdb'
+  if (s === 'trakt') return 'trakt'
+  if (s === 'douban') return 'douban'
+  return ''   // anilist 等：RatingsBadges 本来没该源徽章，无需排除
+})
+
+// 当前 source 的"主评分徽章"样式：跟下方展开列表保持视觉一致
+// returns { cls, label, iconSrc(可空，有 SVG 时用它代替 label 文字) }
+const sourceBadgeInfo = computed(() => {
+  const s = source.value
+  if (s === 'tmdb')    return { cls: 'tmdb',    label: '',       iconSrc: tmdbLogo }
+  if (s === 'trakt')   return { cls: 'trakt',   label: 'Trakt',  iconSrc: null }
+  if (s === 'anilist') return { cls: 'anilist', label: 'AniList',iconSrc: null }
+  if (s === 'douban')  return { cls: 'douban',  label: '',       iconSrc: doubanLogo }
+  return { cls: 'default', label: '', iconSrc: null }
+})
 // "搜种子"按钮 in-flight：豆瓣分支要先 detail → titleEnByImdb，期间这张卡的按钮转 spin
 // 用 Set + reactive，按 item._key 跟踪；用户狂连点也只触发一次（在 set 里的 key 不会重复)
 const searchingKeys = reactive(new Set())
@@ -689,11 +731,15 @@ const loadMore = async () => {
 }
 
 // ---- 评分批量 ----
+// 支持两种条目：
+//   - 有 tmdb_id 的（TMDB/Trakt/AniList 等）：直接查
+//   - 仅有 douban_id 的（豆瓣源条目）：后端通过 media_metadata 反查桥接到 tmdb_id
 const fetchRatings = async () => {
   const payload = displayItems.value
-    .filter((x) => x.tmdb_id && x.media_type !== 'person' && x.media_type !== 'anime')
+    .filter((x) => (x.tmdb_id || x.douban_id) && x.media_type !== 'person' && x.media_type !== 'anime')
     .map((x) => ({
-      tmdb_id: x.tmdb_id,
+      tmdb_id: x.tmdb_id || null,
+      douban_id: x.douban_id || null,
       media_type: x.media_type === 'tv' ? 'tv' : 'movie',
       title: x.title || x.original_title,
       year: x.year ? parseInt(x.year) : null,
@@ -702,11 +748,36 @@ const fetchRatings = async () => {
   try {
     const res = await ratingsApi.batch(payload)
     for (const r of res.data.ratings || []) {
-      ratingsByKey[`${r.tmdb_id}-${r.media_type}`] = r
+      // 主索引：tmdb_id-media_type（兼容旧路径）
+      if (r.tmdb_id) {
+        ratingsByKey[`${r.tmdb_id}-${r.media_type}`] = r
+      }
+      // 桥接索引：豆瓣条目按 douban_id 直查（用 echo 的 request_douban_id）
+      if (r.request_douban_id) {
+        ratingsByKey[`douban-${r.request_douban_id}`] = r
+      }
     }
   } catch (e) {
     console.warn('评分批量拉取失败', e)
   }
+}
+
+// 当前 item 对应的 rating 对象（两种索引方式 fallback）
+// 找不到时给一个最小占位（含 request_douban_id / tmdb_id），
+// 让 RatingsBadges 走 pending 分支显示"拉取中"而不是完全空白
+const ratingForItem = (item) => {
+  if (item.tmdb_id) {
+    const mt = item.media_type === 'tv' ? 'tv' : 'movie'
+    const cached = ratingsByKey[`${item.tmdb_id}-${mt}`]
+    if (cached) return cached
+    return { tmdb_id: item.tmdb_id, media_type: mt, mdblist_status: 'missing', douban_status: 'missing' }
+  }
+  if (item.douban_id) {
+    const cached = ratingsByKey[`douban-${item.douban_id}`]
+    if (cached) return cached
+    return { request_douban_id: String(item.douban_id), media_type: 'movie', mdblist_status: 'missing', douban_status: 'missing' }
+  }
+  return null
 }
 
 // ---- source 切换 ----
@@ -1300,18 +1371,85 @@ onBeforeUnmount(_detachRuntime)
       font-size: 12px;
     }
 
-    .rating {
+    // 主源评分徽章：按 source 上色，跟 RatingsBadges compact 风格完全一致
+    // padding / font-size / min-width 必须跟下方 .badge 等同，否则两列高度对不齐
+    .source-rating-badge {
       position: absolute;
       top: 8px;
       right: 8px;
-      background: rgba(0, 0, 0, 0.7);
-      color: #ffd700;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-size: 12px;
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      gap: 3px;
+      justify-content: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      line-height: 1.4;
+      font-weight: 500;
+      min-width: 68px;
+      box-sizing: border-box;
+      z-index: 3;
+      transition: filter 0.15s, transform 0.15s;
+      .src {
+        opacity: 0.85;
+        font-weight: 500;
+        font-size: 11px;
+      }
+      .src-img {
+        height: 11px;
+        width: auto;
+        display: block;
+        flex-shrink: 0;
+      }
+      .val { font-weight: 700; }
+
+      // 各 source 配色（与 RatingsBadges 同款）
+      &.tmdb    { background: #0d253f; color: #fff; border: 1px solid #0d253f; }
+      &.trakt   { background: #ed1c24; color: #fff; border: 1px solid #c41318; }
+      &.anilist { background: #02a9ff; color: #fff; border: 1px solid #0288d1; }
+      &.douban  { background: #007722; color: #fff; border: 1px solid #00691e; }
+      &.default { background: rgba(0,0,0,0.7); color: #ffd700; border: 1px solid rgba(0,0,0,0.85); }
+
+      &.clickable {
+        cursor: pointer;
+        &:hover { filter: brightness(1.08); transform: scale(1.04); }
+      }
+      // 展开时：底部圆角去掉 + 边框去掉 → 跟下方第一个徽章贴合
+      &.expanded {
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+      }
+    }
+    // 展开的多维评分（竖排，紧贴 source-rating-badge 下方）
+    // 关键：跟上方主源徽章用相同的 padding / font-size / min-width，避免高度差
+    .ratings-expanded {
+      position: absolute;
+      // top 跟主源徽章贴合：top(8) + 主源徽章 height(font 11px * 1.4 + padding 2*2 = ~19px+边框 2) ≈ 29
+      top: 29px;
+      right: 8px;
+      z-index: 2;
+      padding: 0;
+      background: transparent;
+      backdrop-filter: none;
+      max-width: calc(100% - 16px);
+
+      // 覆盖 RatingsBadges 的 column gap 让徽章无缝串联
+      :deep(.dir-column) { gap: 0; }
+      :deep(.badge) {
+        // 跟主源徽章一致
+        border-radius: 0;
+        min-width: 68px;
+        padding: 2px 7px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      :deep(.badge:last-child) {
+        border-bottom-left-radius: 4px;
+        border-bottom-right-radius: 4px;
+      }
+      :deep(.badge .src-img) {
+        height: 11px;
+      }
     }
 
     .src-badge {

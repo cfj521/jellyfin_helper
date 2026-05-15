@@ -23,6 +23,10 @@ from web.backend.api._item_health import (
     _looks_like_release_dir, _looks_like_file, _basename,
     compute_health, extract_suggested_title_year,
 )
+from web.backend.api._media_exts import (
+    VIDEO_EXTS as _VIDEO_EXTS,
+    has_primary_media,
+)
 from web.backend.api.tasks import create_task, update_task_progress, complete_task
 from web.backend.config import settings
 from web.backend.database import get_db
@@ -30,10 +34,6 @@ from web.backend.path_translator import translate_path_with_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-# 视频扩展名（跟 audio_manager / sample_evidence 保持一致）
-_VIDEO_EXTS = {'.mkv', '.mp4', '.m4v', '.mov', '.avi', '.wmv', '.flv', '.ts', '.rmvb'}
 
 
 # ---------- 通用 scope 解析 ----------
@@ -170,11 +170,23 @@ def _enumerate_items_in_scope(target: Dict) -> List[Dict]:
 
     - mode='items'：只取 path 命中的 item（按 Path 完全匹配）
     - mode='paths'：取所有相关库的所有 items
+
+    给每个 item 打两个内部标记，供下游使用：
+      _library_id              ：所属库 id（任务完成后刷新该库）
+      _library_collection_type ：所属库类型（auto-identify 据此过滤"无主体文件"目录）
     """
     client = _client()
     library_ids = sorted({lid for lid in target['library_id_by_path'].values() if lid})
     if not library_ids:
         return []
+
+    # 库 id → collection_type 映射（auto-identify 过滤"无主体文件"目录需要）
+    try:
+        libs_meta = client.get_libraries_normalized()
+        coll_type_by_lib = {lib['id']: lib.get('collection_type') for lib in libs_meta}
+    except Exception as e:
+        logger.warning(f"拉库元数据失败，collection_type 标记降级为 None: {e}")
+        coll_type_by_lib = {}
 
     fields = (
         "Path,ProductionYear,ImageTags,ProviderIds,People,"
@@ -184,6 +196,7 @@ def _enumerate_items_in_scope(target: Dict) -> List[Dict]:
 
     all_items: List[Dict] = []
     for lid in library_ids:
+        coll = coll_type_by_lib.get(lid)
         start = 0
         while True:
             try:
@@ -197,7 +210,8 @@ def _enumerate_items_in_scope(target: Dict) -> List[Dict]:
             if not items:
                 break
             for it in items:
-                it['_library_id'] = lid  # 内部标记，用于刷新
+                it['_library_id'] = lid                       # 用于完成后刷新
+                it['_library_collection_type'] = coll         # 用于主体文件过滤
             all_items.extend(items)
             total = page.get('total') or 0
             start += len(items)
@@ -574,21 +588,56 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
         _progress(10, f"共 {len(all_items)} 个条目，正在筛选未识别项...")
 
         # 过滤未识别
-        unrecognized = []
+        unrecognized_raw = []
         for it in all_items:
             health = compute_health(it)
             if any(iss['code'] == 'unrecognized' for iss in health.get('issues', [])):
+                unrecognized_raw.append(it)
+
+        raw_total = len(unrecognized_raw)
+        _progress(12, f"找到 {raw_total} 个未识别条目，正在过滤无主体文件目录...")
+
+        # 二次过滤：剔除"目录里完全没有该库类型期望的主体文件"的空壳目录
+        # （如：电影库里只有字幕包/缩略图缓存/被误移走视频的孤儿 NFO 目录）
+        unrecognized: List[Dict] = []
+        skipped: List[Dict] = []
+        for it in unrecognized_raw:
+            raw_path = it.get('Path')
+            local_path = translate_path_with_settings(raw_path) if raw_path else None
+            coll_type = it.get('_library_collection_type')
+
+            if not local_path:
+                # 路径缺失：保留进入下游（让 extract_suggested_title_year 那一关报错）
                 unrecognized.append(it)
+                continue
+
+            if has_primary_media(local_path, coll_type):
+                unrecognized.append(it)
+            else:
+                skipped.append({
+                    'item_id': it.get('Id'),
+                    'item_name': it.get('Name') or '(无标题)',
+                    'item_type': it.get('Type') or 'Folder',
+                    'path': local_path,
+                    'collection_type': coll_type,
+                    'reason': 'no_media_files',
+                })
 
         total = len(unrecognized)
-        _progress(15, f"找到 {total} 个未识别条目，开始搜索 + 应用...")
+        skipped_count = len(skipped)
+        _progress(
+            15,
+            f"主体文件过滤后剩 {total} 个待识别（跳过 {skipped_count} 个空壳目录），开始搜索 + 应用...",
+        )
 
         if total == 0:
             with SessionLocal() as db:
                 complete_task(db, task_id, {
                     'dry_run': dry_run,
                     'scanned': len(all_items),
-                    'unrecognized_count': 0,
+                    'unrecognized_count': raw_total,
+                    'skipped_count': skipped_count,
+                    'skipped': skipped[:500],
                     'fixed_count': 0,
                     'no_match_count': 0,
                     'errors': [],
@@ -621,7 +670,9 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                 patch=({
                     'dry_run': dry_run,
                     'scanned': len(all_items),
-                    'unrecognized_count': total,
+                    'unrecognized_count': raw_total,
+                    'skipped_count': skipped_count,
+                    'skipped': skipped[:500],
                     'fixed_count': fixed_count,
                     'no_match_count': no_match_count,
                     'details': results[:500],
@@ -704,7 +755,9 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
             complete_task(db, task_id, {
                 'dry_run': dry_run,
                 'scanned': len(all_items),
-                'unrecognized_count': total,
+                'unrecognized_count': raw_total,
+                'skipped_count': skipped_count,
+                'skipped': skipped[:500],
                 'fixed_count': fixed_count,
                 'no_match_count': no_match_count,
                 'errors': [r for r in results if r.get('error') and r['error'] != '(预览模式)'],
@@ -964,6 +1017,7 @@ def _summarize_step_result(step_name: str, result: Optional[dict]) -> dict:
     elif step_name == 'auto_identify':
         summary = {
             'unrecognized_count': result.get('unrecognized_count'),
+            'skipped_count': result.get('skipped_count'),
             'fixed_count': result.get('fixed_count'),
             'no_match_count': result.get('no_match_count'),
         }

@@ -36,10 +36,14 @@ from web.backend.database import KvCache, SessionLocal
 logger = logging.getLogger(__name__)
 
 
-def get_cached(scope: str, key: str, ttl_seconds: int) -> Optional[Dict[str, Any]]:
+def get_cached(
+    scope: str, key: str, ttl_seconds: int,
+    allow_stale: bool = False,
+) -> Optional[Dict[str, Any]]:
     """读缓存。
-    命中且未过期 → 返回 dict（附带 _cached=True / _cached_at / _cache_age_seconds 三个元字段）
-    未命中 / 过期 → None
+    命中且未过期 → 返回 dict（附带 _cached / _cached_at / _cache_age_seconds 三个元字段）
+    未命中 → None
+    过期：allow_stale=False（默认）返回 None；allow_stale=True 返回过期数据并附 _cache_stale=True
     """
     if not scope or not key:
         return None
@@ -53,7 +57,8 @@ def get_cached(scope: str, key: str, ttl_seconds: int) -> Optional[Dict[str, Any
             if not row:
                 return None
             age = datetime.utcnow() - row.cached_at
-            if age > timedelta(seconds=max(0, ttl_seconds)):
+            is_stale = age > timedelta(seconds=max(0, ttl_seconds))
+            if is_stale and not allow_stale:
                 return None
             try:
                 data = json.loads(row.data)
@@ -61,11 +66,12 @@ def get_cached(scope: str, key: str, ttl_seconds: int) -> Optional[Dict[str, Any
                 logger.warning(f"kv_cache scope={scope} key={key[:80]} JSON 反序列化失败: {e}")
                 return None
             if not isinstance(data, dict):
-                # 调用方一律传 dict；其它类型返回原值（极少见）
                 return data
             data['_cached'] = True
             data['_cached_at'] = row.cached_at.isoformat()
             data['_cache_age_seconds'] = int(age.total_seconds())
+            if is_stale:
+                data['_cache_stale'] = True
             return data
     except Exception as e:
         logger.warning(f"kv_cache get 异常 scope={scope} key={key[:80]}: {e}")

@@ -34,14 +34,13 @@
             </div>
             <div v-if="data.tagline" class="tagline">"{{ data.tagline }}"</div>
 
-            <!-- 评分 / 类型 / 时长 -->
+            <!-- 多维评分（替换原来的单一 TMDB 5 角星）-->
+            <div class="detail-ratings">
+              <RatingsBadges :rating="rating" />
+            </div>
+
+            <!-- 类型 / 时长 / 状态 -->
             <div class="meta-row">
-              <span class="rating-big">
-                <el-icon class="star-icon"><StarFilled /></el-icon>
-                <span class="score">{{ (data.vote_average || 0).toFixed(1) }}</span>
-                <span class="vote-count">/ 10 · {{ data.vote_count || 0 }} 票</span>
-              </span>
-              <el-divider direction="vertical" v-if="data.runtime || data.episode_runtime?.length" />
               <span v-if="data.runtime" class="meta-item">{{ data.runtime }} 分钟</span>
               <span v-else-if="data.episode_runtime?.length" class="meta-item">每集 {{ data.episode_runtime[0] }} 分钟</span>
               <el-divider direction="vertical" v-if="data.status" />
@@ -106,10 +105,6 @@
               </el-link>
             </div>
 
-            <!-- 评分聚合（IMDb / RT / Metacritic / Trakt / Letterboxd / 豆瓣） -->
-            <div class="ratings-section">
-              <RatingsBadges :rating="rating" />
-            </div>
           </div>
         </div>
       </div>
@@ -453,26 +448,6 @@ onUnmounted(() => {
       font-size: 14px;
       flex-wrap: wrap;
 
-      .rating-big {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-
-        .star-icon {
-          color: #fbbf24;
-          font-size: 22px;
-        }
-
-        .score {
-          font-size: 22px;
-          font-weight: 700;
-        }
-
-        .vote-count {
-          opacity: 0.7;
-        }
-      }
-
       .meta-item {
         opacity: 0.85;
       }
@@ -480,6 +455,10 @@ onUnmounted(() => {
       :deep(.el-divider--vertical) {
         background-color: rgba(255, 255, 255, 0.3);
       }
+    }
+
+    .detail-ratings {
+      margin: 12px 0;
     }
 
     .genres {

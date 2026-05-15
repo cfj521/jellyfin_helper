@@ -16,6 +16,7 @@
 本客户端不做代理逻辑，靠 requests 自动读 HTTP(S)_PROXY 环境变量）。
 """
 import hashlib
+import json
 import logging
 import re
 import time
@@ -28,7 +29,10 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
+# 大搜索页（www.douban.com/search）—— 初始 HTML 不带结果（SPA），保留仅为兼容引用
 SEARCH_URL = "https://www.douban.com/search"
+# 电影专搜：返回 window.__DATA__ = {...} JSON，items[].id/title/cover_url/rating，
+# 中英文均可命中。是 search_id 的正确端点。
 SUBJECT_SEARCH_URL = "https://search.douban.com/movie/subject_search"
 SUBJECT_DETAIL_URL = "https://movie.douban.com/subject/{id}/"
 # 片单页：每页 25 条，?start=N 翻页
@@ -200,25 +204,105 @@ class DoubanClient:
 
     # ---------- 搜索 ID ----------
 
+    def _search_items(self, query: str) -> Optional[list]:
+        """
+        调 search.douban.com/movie/subject_search?search_text={query}&cat=1002，
+        从 window.__DATA__ 嵌入的 JSON 取 items[]。失败返回 None，空结果返回 []。
+
+        query 可以是片名（中英文均可）或 IMDb tt 串。
+        items[] 结构：{ id, title (末尾带 "(YYYY)"), rating: {value, count}, cover_url, ... }
+        """
+        if not query:
+            return None
+        html = self._get(SUBJECT_SEARCH_URL, params={'search_text': query, 'cat': '1002'})
+        if not html:
+            return None
+        # window.__DATA__ = {...}; 后面跟其它 JS——用 raw_decode 切出第一个 JSON 对象
+        m = re.search(r'window\.__DATA__\s*=\s*\{', html)
+        if not m:
+            return None
+        try:
+            data, _ = json.JSONDecoder().raw_decode(html[m.end() - 1:])
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"豆瓣 subject_search JSON 解析失败 q={query!r}: {e}")
+            return None
+        return data.get('items') or []
+
+    def search_id_by_imdb(self, imdb_id: str) -> Optional[str]:
+        """
+        按 IMDb tt 串在豆瓣电影搜索里命中条目。
+
+        实测：豆瓣对**欧美电影**的条目页 IMDb 字段做了文本索引，
+              search_text='tt0468569' 能直接命中唯一项（黑暗骑士 → 1851857）。
+        中文电影 / 所有剧集的条目 IMDb 字段未被索引——这里搜不到时返回 None，
+        让上层走 title 退化路径。
+        """
+        if not imdb_id or not imdb_id.startswith('tt'):
+            return None
+        items = self._search_items(imdb_id)
+        if not items:
+            return None
+        sid = items[0].get('id')
+        return str(sid) if sid else None
+
+    @staticmethod
+    def _item_rank(it: dict) -> tuple:
+        """
+        给候选 item 打分用于排序（大者优先）。
+        排序键：(有评分 1/0, 票数, 评分)
+          1. 有评分的（rating>0）压在无评分占位前——避开"未上映/预告片"条目
+          2. 票数高的优先——同名片里票数最多的几乎一定是主版本
+          3. 票数都一样时按评分降序（极端兜底，正常不会发生）
+        """
+        rt = it.get('rating') or {}
+        try:
+            val = float(rt.get('value') or 0)
+        except (TypeError, ValueError):
+            val = 0.0
+        try:
+            cnt = int(rt.get('count') or 0)
+        except (TypeError, ValueError):
+            cnt = 0
+        return (1 if val > 0 else 0, cnt, val)
+
     def search_id(self, name: str, year: Optional[int] = None) -> Optional[str]:
         """
         按片名 + 可选年份在豆瓣搜索，返回最匹配的 subject_id。
 
-        豆瓣搜索结果页 HTML 里电影条目链接形如：
-            https://movie.douban.com/subject/30176393/?...
-        我们匹配第一条命中。年份用于消歧（同名片）。
+        title 里末尾形如 "失控玩家 Free Guy‎ (2021)"——年份藏在文本里，不在独立 year 字段。
+
+        策略：
+          1. 有 year → 先取 year 匹配子集（同年同名时不会跨年错配）
+          2. 子集（或全集，year 没传/没匹配时）按 (有评分, 票数, 评分) 降序排取最优
+             这样多个同年同名条目（原版/复刻版/短片/预告占位）也会稳定选到主条目，
+             不再像之前"取第一个 year 匹配"那样靠豆瓣返回顺序碰运气。
         """
         if not name:
             return None
-        query = f"{name} {year}" if year else name
-        html = self._get(SEARCH_URL, params={'cat': '1002', 'q': query})
-        if not html:
+        items = self._search_items(name)
+        if not items:
             return None
 
-        # subject 链接里 ID 是连续数字
-        # 正则比 BeautifulSoup 更鲁棒（豆瓣搜索结果页结构经常微调）
-        match = re.search(r'movie\.douban\.com/subject/(\d+)/?', html)
-        return match.group(1) if match else None
+        # year 消歧：title 末尾 "(2021)" 提年份；命中年份的进入候选子集
+        candidates = items
+        if year:
+            matched = []
+            for it in items:
+                title = it.get('title') or ''
+                ym = re.search(r'\((\d{4})\)\s*$', title)
+                if ym and int(ym.group(1)) == year:
+                    matched.append(it)
+            if matched:
+                candidates = matched
+            # 没匹配项 → 退化到全集（年份偏差 ±1 时不至于完全没结果）
+
+        # 排序选最优
+        candidates_with_id = [it for it in candidates if it.get('id')]
+        if not candidates_with_id:
+            return None
+        best = max(candidates_with_id, key=self._item_rank)
+        sid = best.get('id')
+        return str(sid) if sid else None
 
     # ---------- 取评分 ----------
 
@@ -798,6 +882,35 @@ class DoubanClient:
         - (None, None) ：搜不到 ID
         """
         douban_id = self.search_id(name, year)
+        if not douban_id:
+            return None, None
+        rating = self.get_rating(douban_id)
+        return douban_id, rating
+
+    def fetch_by_ids(
+        self,
+        imdb_id: Optional[str] = None,
+        name: Optional[str] = None,
+        year: Optional[int] = None,
+        media_type: str = 'movie',
+    ) -> Tuple[Optional[str], Optional[DoubanRating]]:
+        """
+        IMDb 优先 + 片名退化 的统一查询：
+
+          1) 有 imdb_id 且 media_type='movie' → 用 imdb 串走 subject_search
+             （欧美电影通常一击即中，零消歧成本）
+          2) 失败 → 用 name + year 走 subject_search（中文片、剧集、imdb 缺失场景必走）
+          3) 都失败 → (None, None)
+
+        media_type='tv' 时跳过 imdb 搜（实测豆瓣对剧集 IMDb 字段未索引，省一次 HTTP）。
+        """
+        douban_id: Optional[str] = None
+        if imdb_id and media_type != 'tv':
+            douban_id = self.search_id_by_imdb(imdb_id)
+            if douban_id:
+                logger.debug(f"豆瓣 imdb 直命中 imdb={imdb_id} → {douban_id}")
+        if not douban_id and name:
+            douban_id = self.search_id(name, year)
         if not douban_id:
             return None, None
         rating = self.get_rating(douban_id)

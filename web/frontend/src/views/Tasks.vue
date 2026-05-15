@@ -213,7 +213,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh, Loading, Search } from '@element-plus/icons-vue'
 import { taskApi } from '@/api'
@@ -223,6 +223,7 @@ import {
   summaryChips, taskDuration, formatDuration,
 } from '@/utils/taskMeta'
 import { formatLocalTimeShort, localDayjs } from '@/utils/time'
+import { useTasksStream } from '@/composables/useTaskStream'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -234,15 +235,9 @@ const searchInput = ref('')  // 输入框双向绑定，按回车/点搜索时�
 const quickFilter = ref('')
 const pagination = ref({ page: 1, size: 20, total: 0 })
 
-const autoPolling = computed(() =>
-  tasks.value.some(t => t.status === 'running' || t.status === 'pending')
-)
-
 const hasActiveFilter = computed(() =>
   filter.value.type || filter.value.status || filter.value.search || quickFilter.value
 )
-
-let pollTimer = null
 
 /**
  * 加载任务列表。
@@ -356,28 +351,20 @@ const rowDescription = (row) => {
   return row?.result?.initial_message || row?.message || '—'
 }
 
-// 列表轮询：有 running / pending 任务时每 5s 静默刷新（silent 模式不闪蒙层、不重建 DOM）
-const startPolling = () => {
-  pollTimer = setInterval(() => {
-    if (autoPolling.value && !loading.value) {
-      loadTasks(true)
-    }
-  }, 5000)
-}
+// SSE 接管"任务变化时刷新列表"。
+// 闭包内引用 loadTasks 没问题（闭包延迟解析，setTimeout 触发时 loadTasks 已声明）。
+const { connected: streamConnected } = useTasksStream(() => loadTasks(true))
 
-const stopPolling = () => {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
+// "实时"badge 显示条件：SSE 连上 + 有运行中/等待中的任务
+const autoPolling = computed(() =>
+  streamConnected.value &&
+  tasks.value.some(t => t.status === 'running' || t.status === 'pending')
+)
 
+// onMounted 只负责首次加载基线数据，后续刷新由 SSE 触发
 onMounted(() => {
   loadTasks()
-  startPolling()
 })
-
-onUnmounted(() => stopPolling())
 </script>
 
 <style lang="scss" scoped>
