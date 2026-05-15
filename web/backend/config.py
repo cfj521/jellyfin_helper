@@ -137,6 +137,10 @@ class Settings(BaseSettings):
         '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     )
     # 豆瓣 detail 后台预取 worker（保守策略，避免触发反爬封禁）
+    # worker_delay: 后台 prefetch worker 的请求间隔（前台请求另走 request_delay）
+    # worker_max_failures / worker_cooldown_seconds: 全局熔断阈值
+    #   连续 N 次失败 → 进 cooldown，期间 **所有路径**（前台/后台/ratings/maintenance）
+    #   的豆瓣请求都直接返回 None，不发出 HTTP 请求
     douban_worker_delay: float = _yaml_config.get('douban', {}).get('worker_delay', 30.0)
     douban_worker_max_failures: int = _yaml_config.get('douban', {}).get('worker_max_failures', 5)
     douban_worker_cooldown_seconds: int = _yaml_config.get('douban', {}).get('worker_cooldown_seconds', 3600)

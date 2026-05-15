@@ -97,6 +97,20 @@ async def lifespan(app: FastAPI):
     # 启动时初始化数据库
     init_db()
 
+    # 配置 DoubanClient 全局熔断（进程内所有路径共享，见 common/douban_client.py）
+    try:
+        from common.douban_client import DoubanClient
+        DoubanClient.configure_global_breaker(
+            max_failures=settings.douban_worker_max_failures,
+            cooldown_seconds=settings.douban_worker_cooldown_seconds,
+        )
+        logger.info(
+            f"豆瓣全局熔断已配置: max_failures={settings.douban_worker_max_failures} "
+            f"cooldown={settings.douban_worker_cooldown_seconds}s"
+        )
+    except Exception as e:
+        logger.warning(f"配置豆瓣全局熔断失败（非致命）: {e}")
+
     # 处理上次未完成的孤儿任务（必须在 API 路由 import 完成、注册表填充后才调用）
     try:
         from web.backend.task_restart import restart_orphan_tasks
