@@ -135,10 +135,18 @@ class _OpenSubtitlesProvider(_Provider):
 
         file_info = files[0]
         file_id = file_info.get('file_id')
-        file_name = file_info.get('file_name', 'subtitle.srt')
 
         lang_code = self._map_lang_code(attrs.get('language', 'unknown'))
-        ext = Path(file_name).suffix or '.srt'
+        # 扩展名推断：
+        #   ① OpenSubtitles `attributes.format` / `subtitle_format` 才是真正的格式声明
+        #      （取值 'srt' / 'ass' / 'sub' 之类）。**不要**用 `files[0].file_name`
+        #      推 —— 那是上传者备注名，常见 "xxx.chs" / "xxx.eng" 这种把语言代码当后缀的
+        #      格式，会被 Path().suffix 误解成 .chs / .eng 之类的假扩展
+        #   ② 没声明就默认 .srt（OpenSubtitles 99% 是 SRT）
+        # 下载完后还会 sniff 实际内容做最终校正（见 download 之后）
+        _SUB_EXT_WHITELIST = {'.srt', '.ass', '.ssa', '.sub', '.vtt', '.sup', '.idx', '.smi'}
+        declared_fmt = (attrs.get('format') or attrs.get('subtitle_format') or '').lower().lstrip('.')
+        ext = f'.{declared_fmt}' if f'.{declared_fmt}' in _SUB_EXT_WHITELIST else '.srt'
         output_name = f"{video_path.stem}.{lang_code}{ext}"
         output_path = video_path.parent / output_name
 
@@ -157,9 +165,28 @@ class _OpenSubtitlesProvider(_Provider):
             logger.error(f"[opensubtitles] 下载失败 {video_path.name}: {e}")
             return {"status": "failed", "error": f"下载失败: {e}"}
 
-        if ok:
-            return {"status": "success", "subtitle": output_name, "language": lang_code, "source": self.name}
-        return {"status": "failed", "error": "下载请求未成功"}
+        if not ok:
+            return {"status": "failed", "error": "下载请求未成功"}
+
+        # 落盘后嗅探实际内容：API 声明的格式（或我们默认的 .srt）跟实际不符时改名
+        # 例如 OpenSubtitles 偶尔下来的是 ASS 但 attributes 没声明 format
+        try:
+            from tools.subtitle_downloader.assrt import _sniff_subtitle_ext
+            with open(output_path, 'rb') as f:
+                head = f.read(2048)
+            actual_ext = _sniff_subtitle_ext(head)
+            if actual_ext and actual_ext in _SUB_EXT_WHITELIST and actual_ext != ext:
+                new_name = f"{video_path.stem}.{lang_code}{actual_ext}"
+                new_path = video_path.parent / new_name
+                output_path.rename(new_path)
+                logger.info(
+                    f"[opensubtitles] 嗅探到实际格式 {actual_ext}（声明 {ext}）→ 改名 {new_name}"
+                )
+                output_name = new_name
+        except Exception as e:
+            logger.warning(f"[opensubtitles] 嗅探/改名失败 {output_path}: {e}（保留原名）")
+
+        return {"status": "success", "subtitle": output_name, "language": lang_code, "source": self.name}
 
 
 class _AssrtProvider(_Provider):
