@@ -131,23 +131,32 @@ dispatch:
   default_move_mode: copy
   # 各分类的目标库 + 路径模板（library_id 在前端选）
   # 转移模式由 default_move_mode 全局统一，rule 内不再单独配
+  # duplicate_policy 取值：
+  #   higher_quality_wins  - 新种子质量更高 → 旧入 trash 再覆盖；否则跳过（默认）
+  #   always_skip          - 永远保留旧的（番号场景默认）
+  #   always_replace       - 永远用新的（旧入 trash 兜底）
+  #   needs_review         - 标记待人工决策（在前端流水线页处理）
   rules:
     movie:
       library_id: ""
       location_template: "{library_root}/{title} ({year})"
       file_template: "{title} ({year})"
+      duplicate_policy: higher_quality_wins
     tv:
       library_id: ""
       location_template: "{library_root}/{series_name}/Season {season:02d}"
       file_template: "({series_name})S{season:02d}E{episode:02d}"
+      duplicate_policy: higher_quality_wins
     anime:
       library_id: ""
       location_template: "{library_root}/{anime_name}"
       file_template: "({anime_name}){episode:03d}"
+      duplicate_policy: higher_quality_wins
     adult:
       library_id: ""
       location_template: "{library_root}/{code}"
       file_template: "{code}({title})"
+      duplicate_policy: always_skip
 
 # LLM 兜底识别（实测 qwen-plus 30/30 准确率 100%，¥0.74/1000 调用）
 llm:

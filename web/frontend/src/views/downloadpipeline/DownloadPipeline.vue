@@ -396,6 +396,47 @@
       </template>
     </el-dialog>
 
+    <!-- copy-phase 冲突审核 modal：目标位置已被另一种子占用，用户决策 -->
+    <el-dialog
+      v-model="copyConflictVisible"
+      title="跨种子目标冲突：请决策"
+      width="640"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+    >
+      <div v-if="copyConflictInfo" class="review-modal">
+        <div class="review-section">
+          <div class="meta-line">
+            <span class="meta-label">本种子</span>
+            <span class="meta-name">{{ copyConflictInfo.my_release_name || copyConflictInfo.title || '-' }}</span>
+          </div>
+          <div class="meta-line">
+            <span class="meta-label">冲突目标</span>
+            <span class="path-text">{{ copyConflictInfo.dst }}</span>
+          </div>
+          <div class="meta-line">
+            <span class="meta-label">已被</span>
+            <span class="meta-name">{{ copyConflictInfo.existing_release_name }}</span>
+            <span class="muted"> · hash {{ (copyConflictInfo.existing_hash || '').slice(0, 16) }}.. · phase {{ copyConflictInfo.existing_phase }}</span>
+          </div>
+          <div class="meta-line" v-if="copyConflictInfo.reason">
+            <span class="meta-label">原因</span>
+            <span class="muted">{{ copyConflictInfo.reason }}</span>
+          </div>
+        </div>
+        <div class="footer-hint muted">
+          覆盖：旧文件入 trash 后用新种子重写；跳过：保留旧版本，本种子结束
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="copyConflictVisible = false">取消</el-button>
+          <el-button :loading="copyConflictBusy" @click="resolveCopyConflict('skip')">跳过（保留旧）</el-button>
+          <el-button type="primary" :loading="copyConflictBusy" @click="resolveCopyConflict('replace')">覆盖（用新的）</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <!-- RSS tab -->
     <div v-show="activeTab === 'rss'">
       <el-card shadow="never" class="rss-card">
@@ -1164,15 +1205,58 @@ const reviewForm = reactive({
   series_name: '',
 })
 
-// 打开 modal：把行的 dispatch 数据填到表单
-const openReview = (row) => {
-  reviewTarget.value = row
+// copy-phase 冲突弹窗状态（跟 reviewVisible 互斥；同样从"人工审核"按钮触发）
+const copyConflictVisible = ref(false)
+const copyConflictInfo = ref(null)   // 由 /copy-conflict/{hash} 拉来的上下文
+const copyConflictHash = ref('')
+const copyConflictBusy = ref(false)
+
+// 打开 modal：按 phase 路由到 analyzing-审核 / copying-冲突 两套弹窗
+const openReview = async (row) => {
   const d = row.dispatch || {}
+  // copy-phase needs_review = 跨种子目标冲突 → 拉冲突上下文 + 弹专用 dialog
+  if (d.phase === 'copying' && d.phase_status === 'needs_review') {
+    copyConflictHash.value = row.hash
+    copyConflictBusy.value = true
+    try {
+      const r = await dispatchApi.getCopyConflict(row.hash)
+      copyConflictInfo.value = { ...(r.data?.conflict || {}), title: r.data?.title }
+      copyConflictVisible.value = true
+    } catch (e) {
+      ElMessage.error('加载冲突上下文失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      copyConflictBusy.value = false
+    }
+    return
+  }
+  // 默认走 analyzing 低置信审核
+  reviewTarget.value = row
   reviewForm.media_type = (d.media_type && d.media_type !== 'unknown') ? d.media_type : 'movie'
   reviewForm.title = d.title || ''
   reviewForm.year = d.year || null
   reviewForm.series_name = d.series_name || ''
   reviewVisible.value = true
+}
+
+// copy-phase 冲突决策：'replace'（覆盖）/ 'skip'（跳过）
+const resolveCopyConflict = async (action) => {
+  if (!copyConflictHash.value) return
+  copyConflictBusy.value = true
+  try {
+    if (action === 'replace') {
+      await dispatchApi.copyConflictReplace(copyConflictHash.value)
+      ElMessage.success('已决策"覆盖"：旧文件入 trash，新种子重新复制')
+    } else {
+      await dispatchApi.copyConflictSkip(copyConflictHash.value)
+      ElMessage.success('已决策"跳过"：保留旧版本')
+    }
+    copyConflictVisible.value = false
+    load(true)
+  } catch (e) {
+    ElMessage.error('决策失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    copyConflictBusy.value = false
+  }
 }
 
 // 主表数据更新后调一次：手动添加的种子若分析后落到 needs_review，自动弹审核 modal

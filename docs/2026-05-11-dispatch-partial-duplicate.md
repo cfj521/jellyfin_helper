@@ -1,6 +1,7 @@
-# 下载流水线部分重复处理 报告
+# 下载流水线部分重复处理 — 报告与落地
 
-**日期**：2026-05-11
+**最初记录**：2026-05-11
+**最近更新**：2026-05-16（C 方案完整实施）
 **问题域**：当多个种子在不同程度上"重复"（同一部影片不同版本、季 pack 与单集混搭、补档/Repack）时，流水线的现有行为是否合理。
 
 ---
@@ -20,7 +21,7 @@
 
 ---
 
-## 2. 当前流水线的处理行为
+## 2. 当前流水线的处理行为（截至 2026-05-16）
 
 ### 2.1 完全相同种子（D1）— ✅ 已处理
 
@@ -31,163 +32,133 @@
 
 ### 2.2 文件级 resume（部分覆盖单文件）— ✅ 已处理
 
-`tools/dispatch/copier.py:46-70` 处理目标文件已存在的三种情况：
+[copier.py](../tools/dispatch/copier.py) 处理目标文件已存在的几种情况：
 
 ```python
-if dst_size == total: 跳过整个复制    # 完全一致
-elif 0 < dst_size < total: 续传       # 部分写入，append
-else: 删除重写                        # 异常（更大 / mtime 异常）
+if dst_size == total:            跳过整个复制            # 完全一致
+elif 0 < dst_size < total:
+    if mtime_age > 1h:           raise CrossTorrentCollision  # ★ fail-safe 防 append 损坏
+    else:                        续传 append
+elif dst_size > total / 异常:    on_displace 钩子 → trash    # ★ 不再硬删
 ```
 
-这是**文件级**的重复保护，对"同一个种子之前复制到一半被中断"是必要的。但它**只看大小**，不看内容 hash —— 如果两个不同 release 的同名文件碰巧大小一致，会被误判为已完成而跳过。**这种情况在实际项目里极少**（不同 release 大小总有几 MB 差异），暂可接受。
+**当前文件级 resume 同时具备两层保护**：mtime guard（防 D7 把不同源的尾巴 append 到旧文件上）+ on_displace 钩子（替换旧文件先入 trash，永远不 hard delete）。
 
-### 2.3 跨种子目标路径冲突（D3 / D4 / D7）— 🔴 **未处理**
+只看大小、不看 hash 的精确度问题仍在 —— 但实际 release 大小总有 MB 级差异，配合 mtime guard 几乎不可能误判。
 
-`organizer.py:_compose_movie_path` 用 `file_template` 渲染目标路径：
+### 2.3 跨种子目标路径冲突（D3 / D4 / D7）— ✅ 已处理（main-path + fail-safe 双防线）
 
-```
-movie:  '{title} ({year})'           → /library/Movie ({year}).mkv
-tv:     '({series_name})S{season:02d}E{episode:02d}'
-adult:  '{code}({title})'
-```
+`organizer.py:_compose_movie_path` / `_compose_episode_path` 用 `file_template` 渲染目标路径。所有同 TMDB ID 的种子（D3/D4/D7）会渲染出**完全一样的 dst**。
 
-所有同 TMDB ID 的种子（D3/D4/D7）会渲染出**完全一样的 dst 路径**。然后进 `copy_file_with_progress`：
+新方案：渲染 dst 后**立即查 `dispatch_map`**（[duplicate.py](../tools/dispatch/duplicate.py)），通过 JSONB `@> [dst]` 反向查找占用方，按 `DispatchRule.duplicate_policy` 决策：
 
-- 如果新种子的视频文件**比原来大**（D4 的 4K Remux > 1080p）→ 走 "异常分支" → **删除原文件再写新的**
-- 如果新种子的视频文件**比原来小**（D7 的 Proper 比原 Release 小一点）→ 走 "续传分支" → **目标文件被破坏**（在原文件尾部 append 新种子的剩余内容）
-- 如果大小完全一致（罕见）→ 跳过
+| policy | 行为 |
+|---|---|
+| `higher_quality_wins`（默认） | [quality.py](../tools/dispatch/quality.py) 比较 release tier；新胜 → 旧入 trash 后覆盖；旧胜 → 跳过；持平 → needs_review |
+| `always_skip` | 任何冲突都跳过 |
+| `always_replace` | 任何冲突都覆盖（旧入 trash） |
+| `needs_review` | 任何冲突都标 `phase=copying/needs_review`，前端弹决策 modal |
 
-**这是一个严重的隐患**：D7 Proper/Repack 场景下目标文件可能被损坏。D4 升级质量时虽然能成功覆盖，但没有保留旧文件备份的机会。
+**默认值**：movie/tv/anime 用 `higher_quality_wins`；adult 用 `always_skip`（番号同 code 不轻易覆盖）。
 
-### 2.4 季 pack 与单集混合（D5 / D6）— 🟠 部分未处理
+### 2.4 季 pack 与单集混合（D5 / D6）— ✅ 同 §2.3 覆盖
 
-剧集场景 `organizer.py:165-186` 用 `_extract_episode(name)` 从文件名提 SxxExx，渲染到 `(<series>)S01E01.mkv` 这样的目标。
+剧集场景 `organizer.organize` 在 `videos > 1 且 tv/anime` 时按 SxxExx 拆出每集 dst，每个 dst 单独走 duplicate_resolver。也就是：
 
-当已有 `S01E01.mkv`（来自前一个单集种子），新种子是季 pack 时：
-- 季 pack 内的 `S01E01.mkv` 会**覆盖**已有文件（按 D3/D4 同样的"异常分支"逻辑）
-- 如果两个文件元数据不同（不同 release group），实际视频内容被替换
+- 已有 `S01E01.mkv`（单集种子），新来季 pack 内的 `S01E01.mkv` → 按 policy 决策（默认按质量胜出）
+- 季 pack 内 `S01E13.mkv` 在库里没有 → 正常落地
+- 单种子整包都被跳过（files_count == 0）→ pipeline_worker 在 `_step_copy` 末尾把 phase 标 `succeeded(skipped)` 且不通知 Jellyfin
 
-更糟的是：**两个种子都在做种**。覆盖了之后，原种子仍在 `dispatch_map` 表里 phase=all_jobs_done，但它的 `dispatched_files[i]` 指向的内容已经不是它的源文件了。配额清理时如果以这个文件做归属判断，会出乱。
+### 2.5 数据库层反查
 
-### 2.5 重复目标在数据库层无校验
-
-进入 `copying` phase 之前没有任何"check 这个 target_path 已经被另一行 dispatched_files 占用过没有"。`dispatched_files` 是 JSONB 数组，技术上可以反查（PG 支持 `dispatched_files @> '["/path/to/file.mkv"]'`），但代码里**没有这步预检**。
+dispatched_files 用 JSONB 存路径数组（[database.py:346](../web/backend/database.py)）。`duplicate._find_existing_owner` 用 `dispatched_files @> [dst]` + `torrent_hash != current` + `phase NOT IN ('cleaned','dismissed')` 反查占用方。代码在 [duplicate.py](../tools/dispatch/duplicate.py)。
 
 ---
 
-## 3. 推荐的修复方向
+## 3. 关键改动文件
 
-### 3.1 P0：copier 增加"目标已被其他种子占用"探测
-
-最小改动：进 `copy_file_with_progress` 之前在 `organizer.organize` 里查 dispatch_map：
-
-```python
-# 在 _compose_movie_path / _compose_episode_path 渲染出 dst 后
-existing = db.query(DownloadDispatchMap).filter(
-    DownloadDispatchMap.dispatched_files.contains([str(dst)]),
-    DownloadDispatchMap.torrent_hash != current_hash,
-    DownloadDispatchMap.phase != 'cleaned',
-).first()
-
-if existing:
-    # 决策点：用户偏好是覆盖、跳过、还是改名共存？
-    return _handle_duplicate(existing, current_hash, dst)
-```
-
-### 3.2 P0：暴露"重复处理策略"为 DispatchRule 配置项
-
-在 `DispatchRule` 增加字段（每 media_type 各自配置）：
-
-```yaml
-duplicate_policy:
-  movie:
-    same_or_lower_quality: skip       # 已有同等或更高质量 → 跳过新种子
-    higher_quality:        replace    # 新种子质量更高 → 替换（备份旧文件到 trash）
-    repack_proper:         replace    # 文件名含 PROPER/REPACK → 替换
-  tv:
-    season_pack_vs_singles: prefer_singles   # 已有单集 → 跳过 pack
-    singles_vs_season_pack: replace_with_pack # 已有 pack → 用 pack 替换（罕见）
-  adult: replace  # 番号去重，质量优先
-```
-
-UI 在 dispatch 规则编辑窗口暴露三个简单选项：
-- **永远跳过新的**（保守）
-- **质量更高的胜出**（默认推荐）
-- **总是替换**（粗暴）
-
-### 3.3 P1：质量比较函数
-
-要做"质量更高胜出"，需要从文件名/路径提取分辨率和编码档位。已有现成思路：
-
-```python
-QUALITY_TIERS = {
-    '2160p': 4, '4K': 4, 'UHD': 4,
-    '1080p': 3, 'FHD': 3,
-    '720p': 2, 'HD': 2,
-    '480p': 1, 'SD': 1,
-}
-def extract_quality(filename: str) -> int:
-    s = filename.upper()
-    for tag, tier in QUALITY_TIERS.items():
-        if tag.upper() in s:
-            return tier
-    return 0  # 未知
-```
-
-更精细需要看 codec/bitrate（Remux > BluRay > WEB-DL > HDTV），但起步够用。
-
-### 3.4 P1：被替换文件转 trash 而不是 unlink
-
-`copier._handle_duplicate` 当决定 replace 时，原文件先 move 到 `trash_dir`（已有这个机制，复用），保留 N 天后再清。**永远不要 hard delete，给用户留反悔机会**。
-
-### 3.5 P2：UI 提示 dispatch 阶段冲突
-
-目前 organizer 阶段失败只在 `phase_status=failed` + `error_log`。
-建议加 `phase_status=needs_review` + 弹出"质量比较 + 用户选择"的交互（前端流水线页加一栏冲突列表）。
+| 文件 | 角色 |
+|---|---|
+| [config_models.py](../web/backend/config_models.py) | `DispatchRule.duplicate_policy` 字段 + 各 media_type 默认值 |
+| [config.yaml.example](../config.yaml.example) | 4 个 media_type 各自的 duplicate_policy 默认值 |
+| [Settings.vue](../web/frontend/src/views/Settings.vue) | UI 暴露策略下拉 |
+| [tools/dispatch/quality.py](../tools/dispatch/quality.py) | tier 提取 + Repack/Proper 识别 + compare() |
+| [tools/dispatch/duplicate.py](../tools/dispatch/duplicate.py) | resolve() 主入口 + `DuplicateConflictError` + 旧文件入 trash |
+| [tools/dispatch/copier.py](../tools/dispatch/copier.py) | `on_displace` 钩子（不再 hard delete）+ 原有 `CrossTorrentCollisionError` |
+| [tools/dispatch/organizer.py](../tools/dispatch/organizer.py) | `organize()` 增加 `duplicate_resolver` 参数 + `skipped_files` 返回值 + `_displace_to_trash` 钩子 |
+| [tools/dispatch/pipeline_worker.py](../tools/dispatch/pipeline_worker.py) | 注入 resolver；捕 `DuplicateConflictError` 落 needs_review；整包 skipped 时 phase=succeeded |
+| [web/backend/api/dispatch.py](../web/backend/api/dispatch.py) | `/copy-conflict/{hash}` GET + `/replace` + `/skip` |
+| [DownloadPipeline.vue](../web/frontend/src/views/downloadpipeline/DownloadPipeline.vue) | `openReview` 按 phase 路由；新增 copy-conflict 决策 dialog |
+| [tests/test_dispatch_duplicates.py](../tests/test_dispatch_duplicates.py) | quality + duplicate.resolve + copier on_displace 共 19 用例 |
 
 ---
 
-## 4. 短期 vs 长期
+## 4. 决策矩阵：用户在前端能做什么
 
-### 短期（1-2 天）
+任何 copy-phase 冲突（`phase=copying, phase_status=needs_review`），主表"人工审核"按钮会打开 **CopyConflictReviewDialog**，展示：
 
-最少要做两件事，避免现有 D7 数据损坏隐患：
+```
+本种子     : Movie.2024.2160p.UHD.Remux.HDR.mkv
+冲突目标   : /library/Movies/Movie (2024)/Movie (2024).mkv
+已被       : Movie.2024.1080p.BluRay.x264.mkv
+             hash 7f3a... · phase all_jobs_done
+原因       : policy=needs_review  /  quality_tie  /  其他
+```
 
-1. **`copier.py` 续传逻辑加严**：`0 < dst_size < total` 分支前，加 mtime 检查。如果 dst.mtime 比当前 src.mtime 早**且**两者文件名/路径完全一致来自不同 torrent_hash，**视为冲突，refuse 而不是 append**。这至少让 D7 不再损坏文件。
+两个按钮：
 
-2. **UI 文档说明**：到-do.txt / README 里写一句"目前流水线对同名不同源种子的去重不完善，建议同 movie 不重复添加"。
+- **覆盖（用新的）** → POST `/copy-conflict/{hash}/replace`
+  - 把对家行的 `dispatched_files` 数组里移除这条路径（仅元数据 cleanup，对家本身保留以便 quota 清 NVMe）
+  - 旧物理文件移到 `<trash_dir>/_replaced/<YYYYMMDD-HHMMSS>_<old_hash[:8]>/`
+  - 本行 phase 重置为 `copying/running`，pipeline_worker 下一轮重跑
+- **跳过（保留旧）** → POST `/copy-conflict/{hash}/skip`
+  - 本行 `phase_status=skipped, dispatched_files=[]`
+  - 不动 qB（用户仍可手动从 qB 移除种子）
 
-### 长期（1-2 周）
-
-实现 §3.1-3.5 的完整方案。
-
----
-
-## 5. 测试用例
-
-应该补充 `tests/test_dispatch_*.py`：
-
-| 用例 | 场景 | 期望 |
-|---|---|---|
-| test_duplicate_same_size_skipped | 相同大小目标存在 → 跳过 | 不重复传输 |
-| test_duplicate_higher_quality_replaces | 1080p 已存在，4K 来 → trash 旧 + 写新 | 旧文件在 trash，新文件落地 |
-| test_duplicate_lower_quality_skipped | 4K 已存在，1080p 来 | 跳过新种子，dispatch_map 标 skipped |
-| test_repack_replaces | 同质量 PROPER → 替换 + trash | 旧→trash |
-| test_season_pack_skipped_when_singles_exist | S01E01-12 单集已在，pack 来 | pack 跳过 |
-| test_partial_resume_unaffected | 单种子续传场景仍工作 | 续传成功 |
+**"改名重试"暂未实现**：需要给 dispatch_map 加 `target_path_override` 列才能稳妥支持，留作 P2。当前可让用户改完 file_template 后从"重试"菜单触发。
 
 ---
 
-## 6. 总结
+## 5. 测试覆盖（[tests/test_dispatch_duplicates.py](../tests/test_dispatch_duplicates.py)）
+
+| 用例 | 验证 |
+|---|---|
+| `test_quality_extract_tier_baseline` × 5 | 各分辨率/源组合的 tier 基线 |
+| `test_quality_higher_resolution_beats_lower` | 2160p > 1080p Remux |
+| `test_quality_repack_detection` | PROPER/REPACK/RERIP 识别 |
+| `test_quality_compare_*` × 4 | 4K 升级 / 降级 / repack tie 处理 / 普通 tie |
+| `test_resolve_no_conflict_proceeds` | 无占用直接 proceed |
+| `test_resolve_higher_quality_wins` | D4 升级：旧入 trash |
+| `test_resolve_lower_quality_skipped` | 反向降级：跳过新种子 |
+| `test_resolve_always_skip` | adult 默认策略 |
+| `test_resolve_always_replace_moves_to_trash` | 强制覆盖也走 trash |
+| `test_resolve_needs_review_raises` | needs_review policy 抛 DuplicateConflictError + JSON 上下文 |
+| `test_resolve_tie_raises_needs_review` | 质量持平也走人工 |
+| `test_copier_on_displace_called_on_oversized_dst` | copier 异常分支调钩子而非 unlink |
+
+测试不依赖 PostgreSQL（用 `MagicMock` 模拟 SQLAlchemy query 链）。
+
+---
+
+## 6. 风险总结（更新表）
 
 | 类型 | 现状 | 风险等级 |
 |---|---|---|
-| D1/D2（完全相同种子） | ✅ 完善 | 低 |
-| 单种子续传 | ✅ 完善 | 低 |
-| D3（同片同质量） | 🟠 静默覆盖，无审计 | 中 |
-| **D4（升级质量）** | 🟠 自动覆盖，无备份 | **中** |
-| **D7（Repack/Proper）** | 🔴 **可能损坏文件** | **高** |
-| D5（pack vs singles） | 🟠 静默覆盖 | 中 |
-| D8（不同剪辑版） | ❌ 无支持，二者必有一损 | 中 |
+| D1/D2（完全相同种子） | ✅ DB UNIQUE + adopt 复活 | 低 |
+| 单种子续传 | ✅ size + mtime guard | 低 |
+| D3（同片同质量） | ✅ tie → needs_review | 低 |
+| **D4（升级质量）** | ✅ 默认自动覆盖 + 旧入 trash | **低** |
+| **D7（Repack/Proper）** | ✅ PROPER/REPACK 识别 + tie 时新胜出 | **低** |
+| D5（pack vs singles） | ✅ 按集逐个 dst 决策 | 低 |
+| D8（不同剪辑版） | 🟠 文件名通常含 "Director.Cut" / "Theatrical" 字样，但 tier 提取不识别 → 大概率 tie → needs_review 兜底 | 中 |
 
-**首要修复目标**：D7 文件损坏隐患（短期 mtime 检查），D4 备份缺失（长期 quality_policy）。
+D8 留作潜在改进：在 quality.compare 里加 `cut_marker` 探测，但优先级不高（同片不同剪辑通常用户会主动选择落地哪个版本）。
+
+---
+
+## 7. 后续可能的增强（P2）
+
+1. **改名重试**：dispatch_map 加 `target_path_override` 列，前端冲突 modal 加输入框
+2. **冲突列表概览页**：所有 `phase=copying/needs_review` 行在 "待处理" 面板集中展示
+3. **质量比较升级**：从 mediainfo 读真实 codec/bitrate（需要先复制小 header 块）
+4. **D8 cut_marker**：识别 "Director's Cut" / "Theatrical" / "Extended" 并作为独立维度

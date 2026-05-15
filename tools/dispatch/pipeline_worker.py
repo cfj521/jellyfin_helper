@@ -365,6 +365,24 @@ class DispatchPipeline:
             if media_type in settings.dispatch.rules:
                 # 走 organizer：精细整理（去 junk + 按模板命名 + SxxExx 拆 Season）
                 organizer = TorrentOrganizer(trash_dir=trash_dir)
+
+                # duplicate_policy 决策器：每次渲染 dst 后查 dispatch_map 反向占用
+                # （别的种子的 dispatched_files 里是否含同路径）。每次开短事务避免长锁
+                policy = rule.get('duplicate_policy') or 'higher_quality_wins'
+                from tools.dispatch.duplicate import resolve as duplicate_resolve
+
+                def _resolver(src_file, dst_file):
+                    with SessionLocal() as resolver_db:
+                        return duplicate_resolve(
+                            db=resolver_db,
+                            current_hash=h,
+                            current_release_name=src_path.name,
+                            src=src_file,
+                            dst=dst_file,
+                            policy=policy,
+                            trash_dir=trash_dir,
+                        )
+
                 org_result = organizer.organize(
                     src_root=src_path,
                     target_dir=Path(target),
@@ -372,10 +390,12 @@ class DispatchPipeline:
                     metadata=metadata,
                     rule=rule,
                     progress_cb=cb,
+                    duplicate_resolver=_resolver,
                 )
                 dispatched_files = org_result['dispatched_files']
                 bytes_copied = org_result['bytes_copied']
                 files_count = len(dispatched_files)
+                skipped_files = org_result.get('skipped_files') or []
             else:
                 # 兜底：简单递归复制
                 copy_result = copy_tree_with_progress(
@@ -384,15 +404,30 @@ class DispatchPipeline:
                 dispatched_files = [str(p) for p in copy_result['dst_files']]
                 bytes_copied = copy_result['bytes_copied']
                 files_count = copy_result['files_copied']
+                skipped_files = []
         except Exception as e:
             logger.exception(f"copy/organize 失败 {h[:16]}..")
-            # 跨种子文件冲突（D7 PROPER/REPACK）单独标 needs_review，提示用户手动决策
+            import json as _json
             from tools.dispatch.copier import CrossTorrentCollisionError
-            if isinstance(e, CrossTorrentCollisionError):
+            from tools.dispatch.duplicate import DuplicateConflictError
+
+            # 跨种子文件冲突：两种来源，都标 needs_review 等用户决策
+            #  ① DuplicateConflictError：organizer 反查 dispatch_map 命中（main-path 防线）
+            #  ② CrossTorrentCollisionError：copier 字节级检测命中（fail-safe 防线）
+            if isinstance(e, DuplicateConflictError):
                 _set_phase(
                     h, PHASE_COPYING, 'needs_review',
-                    message='目标位置已存在另一种子的旧文件 — 请决策是否覆盖（参见 error_log）',
-                    error=str(e),
+                    message='目标位置已被另一种子占用 — 请在前端决策（覆盖/跳过/改名）',
+                    error=_json.dumps(e.to_dict(), ensure_ascii=False),
+                )
+            elif isinstance(e, CrossTorrentCollisionError):
+                _set_phase(
+                    h, PHASE_COPYING, 'needs_review',
+                    message='目标位置已存在另一种子的旧文件 — 请决策是否覆盖',
+                    error=_json.dumps({
+                        'kind': 'cross_torrent_collision',
+                        'detail': str(e),
+                    }, ensure_ascii=False),
                 )
             else:
                 _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=str(e))
@@ -400,10 +435,29 @@ class DispatchPipeline:
 
         elapsed = time.time() - t0
         speed_mb = (bytes_copied / 1e6 / elapsed) if elapsed > 0 else 0
+        skip_n = len(skipped_files)
         logger.info(
-            f"copy 完成 {h[:16]}.. files={files_count} "
+            f"copy 完成 {h[:16]}.. files={files_count} skipped={skip_n} "
             f"bytes={bytes_copied/1e9:.2f}GB elapsed={elapsed:.1f}s speed={speed_mb:.1f}MB/s"
         )
+        # 整包都被 duplicate_policy 跳过 → 流水线提前 succeed/skipped，不通知 Jellyfin
+        # 旧的同片副本仍在库，配额清理会按正常 ratio/days 兜底 NVMe 副本
+        if files_count == 0 and skip_n > 0:
+            import json as _json
+            _set_phase(
+                h, PHASE_COPYING, STATUS_SKIPPED,
+                message=f'已跳过 {skip_n} 个文件（duplicate_policy）— 旧版本仍在库',
+                extra={
+                    'dispatched_files': [],
+                    'skipped_files': [s[1] for s in skipped_files],
+                },
+                error=_json.dumps({
+                    'kind': 'duplicate_skipped_all',
+                    'skipped': [{'src': s[0], 'dst': s[1], 'reason': s[2]} for s in skipped_files],
+                }, ensure_ascii=False),
+            )
+            _record_phase_timing(h, PHASE_COPYING, elapsed)
+            return True
         _record_phase_timing(h, PHASE_COPYING, elapsed)
         _set_phase(
             h, PHASE_COPYING, STATUS_SUCCEEDED,
