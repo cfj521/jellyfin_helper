@@ -122,46 +122,16 @@
         </div>
       </el-card>
 
-      <!-- 失败原因：仅 task 整体失败，或部分子项失败/未找到时显示。
-           按 sub_key（视频番号 / 文件名）合并同源警告，避免一行视频刷出 N 条同类信息 -->
-      <el-card v-if="showFailureReasons" shadow="never" class="failure-card">
-        <template #header>
-          <div class="content-header">
-            <span>失败原因</span>
-            <span class="muted">{{ failureSummary }}</span>
-          </div>
-        </template>
-        <el-alert
-          v-if="task.result?.error"
-          type="error"
-          :closable="false"
-          show-icon
-          :title="task.result.error"
-          style="margin-bottom: 12px"
-        />
-        <div v-if="groupedWarnings.length" class="warning-groups">
-          <div v-for="g in groupedWarnings" :key="g.key" class="warning-group">
-            <div class="group-head">
-              <span class="group-key">{{ g.label }}</span>
-              <el-tag
-                v-if="g.count > 1"
-                size="small"
-                type="info"
-                effect="plain"
-              >×{{ g.count }}</el-tag>
-            </div>
-            <div
-              v-for="(w, idx) in g.entries"
-              :key="idx"
-              class="warning-line"
-              :class="{ 'is-error': w.level === 'ERROR' || w.level === 'CRITICAL' }"
-            >
-              <span class="w-source">{{ shortLogger(w.logger) }}</span>
-              <span class="w-msg" :title="w.msg">{{ w.msg }}</span>
-            </div>
-          </div>
-        </div>
-      </el-card>
+      <!-- task 整体失败时单独 alert 提示（不再用通用 failure-card 收集子项警告，
+           子项失败/未找到信息全部在下方 task-type 专用 view 里展示）-->
+      <el-alert
+        v-if="task.status === 'failed' && task.result?.error"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="task.result.error"
+        style="margin-bottom: 16px"
+      />
 
       <!-- 详情区 -->
       <el-card shadow="never">
@@ -179,13 +149,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Refresh, Loading, Search } from '@element-plus/icons-vue'
 import { formatLocalTime } from '@/utils/time'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api'
 import { typeMeta, statusMeta, taskDuration, formatDuration } from '@/utils/taskMeta'
+import { useTaskStream } from '@/composables/useTaskStream'
 
 // 各 task_type 对应的详情子组件（懒加载）
 import GenericJsonView      from '@/components/task-detail/GenericJsonView.vue'
@@ -206,15 +177,20 @@ import AdultRepairCoversView  from '@/components/task-detail/AdultRepairCoversVi
 const route = useRoute()
 const router = useRouter()
 
-const task = ref(null)
-const loading = ref(false)
-let pollTimer = null
+// SSE 替代轮询：useTaskStream 内部用 EventSource 订阅 /api/tasks/{id}/stream，
+// 后端每次 update_task_progress / complete_task 都会推一份 snapshot 过来。
+// route.params.id 变化时 composable 自动重连。
+const { task, connected: streamConnected } = useTaskStream(() => Number(route.params.id))
+
+// loading：仅在首次连上、还没收到任何 snapshot 之前为 true（用于初始骨架屏）
+const loading = computed(() => task.value === null)
 
 const meta = computed(() => task.value ? typeMeta(task.value.task_type) : { label: '', color: '#94a3b8', icon: 'Box' })
 const statusInfo = computed(() => task.value ? statusMeta(task.value.status) : { label: '', tagType: 'info' })
 
+// "实时连接"指示：任务还在 running/pending 且 SSE 连接打开
 const autoPolling = computed(() =>
-  task.value && (task.value.status === 'running' || task.value.status === 'pending')
+  task.value && streamConnected.value && (task.value.status === 'running' || task.value.status === 'pending')
 )
 
 /**
@@ -239,81 +215,6 @@ const currentProgressMsg = computed(() => {
   const initial = task.value.result?.initial_message
   if (initial && task.value.message === initial) return ''
   return task.value.message || ''
-})
-
-// "tools.adult_manager.scrapers.base" → "scrapers.base"
-const shortLogger = (name) => {
-  if (!name) return ''
-  const parts = name.split('.')
-  return parts.length > 2 ? parts.slice(-2).join('.') : name
-}
-
-/**
- * 失败原因区是否显示：
- *   - task 整体失败（status === 'failed'），或
- *   - task 已完成但 result 里有 not_found / failed > 0（部分失败）
- *   - 任务运行中且已经累积了 warnings：也显示（让用户实时知道有问题）
- * 完全成功的任务（completed + 0 失败 + 无 warnings）不显示这个区域。
- */
-// 这些 task type 自己有更细粒度的 per-row 失败信息，不再额外显示通用"失败原因"区
-const _SUPPRESS_FAILURE_PANEL = new Set([
-  'adult_scrape_batch',
-  'adult_scrape',
-  'adult_repair_covers',
-])
-
-const showFailureReasons = computed(() => {
-  if (!task.value) return false
-  if (_SUPPRESS_FAILURE_PANEL.has(task.value.task_type)) return false
-  if (task.value.status === 'failed') return true
-  const r = task.value.result || {}
-  if ((r.failed || 0) > 0) return true
-  if ((r.not_found || 0) > 0) return true
-  // 运行中或完成态有 warnings 也展示
-  if ((r.warnings || []).length > 0) return true
-  return false
-})
-
-const failureSummary = computed(() => {
-  const r = task.value?.result || {}
-  const parts = []
-  if (r.failed) parts.push(`${r.failed} 失败`)
-  if (r.not_found) parts.push(`${r.not_found} 未找到`)
-  if (task.value?.status === 'failed') parts.push('任务整体失败')
-  return parts.join(' / ')
-})
-
-/**
- * 把 result.warnings 按 sub_key（视频番号 / 文件名）合并：
- *   - 同一 sub_key 下的多条警告合并到一组，header 显示 ×N 计数
- *   - 没有 sub_key 的合并到 "通用"组（如 task 启动 / 收尾阶段产生的）
- *   - 同组内按"logger + msg 的前 100 字符"再去重一次（同源同消息只保留一条）
- */
-const groupedWarnings = computed(() => {
-  const all = task.value?.result?.warnings || []
-  if (!all.length) return []
-
-  const groups = new Map()
-  for (const w of all) {
-    const key = w.sub_key || '__general__'
-    if (!groups.has(key)) {
-      groups.set(key, { key, label: w.sub_key || '通用', entries: [], _seen: new Set() })
-    }
-    const g = groups.get(key)
-    // 去重：同 logger + 同 msg 前 100 字符 视为重复
-    const dedup = `${w.logger}|${(w.msg || '').slice(0, 100)}`
-    if (!g._seen.has(dedup)) {
-      g._seen.add(dedup)
-      g.entries.push(w)
-    }
-  }
-
-  return Array.from(groups.values()).map(g => ({
-    key: g.key,
-    label: g.label,
-    count: g.entries.length,
-    entries: g.entries,
-  }))
 })
 
 // task_type → 子组件映射；未注册的回退到 GenericJsonView
@@ -346,20 +247,6 @@ const contentComponent = computed(() => {
   const t = task.value.task_type
   return CONTENT_MAP[t] || GenericJsonView
 })
-
-const loadTask = async () => {
-  const id = Number(route.params.id)
-  if (!id) return
-  loading.value = true
-  try {
-    const res = await taskApi.get(id)
-    task.value = res.data
-  } catch (e) {
-    console.error('加载任务失败', e)
-  } finally {
-    loading.value = false
-  }
-}
 
 const goBack = () => router.push({ path: '/tasks' })
 
@@ -405,7 +292,7 @@ const cancelTask = async () => {
   try {
     await taskApi.cancel(task.value.id)
     ElMessage.success('任务已取消')
-    loadTask()
+    // 后端 cancel 后会主动 publish 一份终态 snapshot，SSE 会自动推过来，无需手动 reload
   } catch (e) { /* 拦截器已提示 */ }
 }
 
@@ -422,32 +309,8 @@ const deleteTask = async () => {
 
 const formatTime = (t) => formatLocalTime(t)
 
-// 轮询：运行中/等待中每 1s 拉一次
-const startPolling = () => {
-  pollTimer = setInterval(() => {
-    if (autoPolling.value && !loading.value) {
-      loadTask()
-    }
-  }, 1000)
-}
-const stopPolling = () => {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-// route id 变化时重新加载
-watch(() => route.params.id, (id) => {
-  if (id) loadTask()
-})
-
-onMounted(() => {
-  loadTask()
-  startPolling()
-})
-
-onUnmounted(() => stopPolling())
+// 路由 id 切换由 useTaskStream 内部 watch 处理，无需在这里再 reload
+// 组件 mount/unmount 由 EventSource 自动管理（composable 在 onUnmounted 里 disconnect）
 </script>
 
 <style lang="scss" scoped>
@@ -545,59 +408,6 @@ onUnmounted(() => stopPolling())
   gap: 10px;
 
   .muted { color: #94a3b8; font-size: 12px; }
-}
-
-// 失败原因卡（仅未正常完成 / 有失败的项时显示，按 sub_key 合并）
-.failure-card {
-  margin-bottom: 16px;
-
-  .warning-groups {
-    max-height: 480px;
-    overflow-y: auto;
-  }
-  .warning-group {
-    padding: 8px 0;
-    border-bottom: 1px solid #f1f5f9;
-
-    &:last-child { border-bottom: none; }
-  }
-  .group-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-
-    .group-key {
-      color: #6366f1;
-      font-weight: 600;
-      font-family: monospace;
-    }
-  }
-  .warning-line {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 2px 0 2px 12px;
-    font-size: 12px;
-    line-height: 1.6;
-
-    &.is-error .w-msg { color: #b91c1c; }
-
-    .w-source {
-      color: #94a3b8;
-      flex-shrink: 0;
-      min-width: 90px;
-      max-width: 160px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .w-msg {
-      color: #475569;
-      flex: 1;
-      word-break: break-all;
-    }
-  }
 }
 
 // 当前进度（运行中实时变化的 message 文本）

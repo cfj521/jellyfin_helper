@@ -102,10 +102,14 @@ const cards = computed(() => [
 
 const activeTab = ref(downloadDetails.value.length ? 'download' : 'rename')
 
+// 后端 status 取值（来自 tools/subtitle_downloader/main.py）：
+//   success / exists / skipped / not_found / failed / archive_unhandled
+// 不同语义用不同颜色，避免把"已存在/搜不到"这种业务结果误染成 danger 红
 const statusTagType = (s) => {
   if (s === 'success' || s === 'downloaded') return 'success'
-  if (s === 'skipped') return 'info'
-  return 'danger'
+  if (s === 'exists' || s === 'skipped') return 'info'      // 已有字幕跳过下载，正常业务流
+  if (s === 'not_found') return 'warning'                    // 搜不到，有缺憾但不算错
+  return 'danger'                                            // failed / archive_unhandled / 未预期
 }
 </script>
 

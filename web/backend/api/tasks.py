@@ -1,17 +1,29 @@
 """
 任务管理 API
 后台任务状态查询和管理
-"""
-import logging
-from typing import List, Optional
-from datetime import datetime
-import json
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+实时更新模型：
+  - 写入侧：update_task_progress / complete_task / cancel_task / create_task 在 DB commit
+    之后调用 _publish_task_update，向 task pubsub 推一份 snapshot。
+  - 读取侧：两个 SSE endpoint:
+      GET /api/tasks/{id}/stream   订阅 task:{id} 通道（详情页用）
+      GET /api/tasks/stream        订阅 tasks:any  通道（列表页用）
+    前端 EventSource 收到推送即刷新 UI，无需轮询。
+"""
+import asyncio
+import json
+import logging
+from datetime import datetime
+from queue import Empty, Queue
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from web.backend.database import get_db, Task
+from web.backend.services.task_pubsub import TERMINAL_SENTINEL, get_pubsub
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -57,6 +69,34 @@ def task_to_response(task: Task) -> TaskResponse:
         started_at=task.started_at,
         completed_at=task.completed_at
     )
+
+
+# ---- SSE 推送辅助：commit 之前构建 snapshot，避免 SQLAlchemy expire 触发再次 SELECT ----
+
+def _build_task_snapshot(task: Task) -> Dict[str, Any]:
+    """把内存中的 task 模型序列化成纯 dict（datetime 转 ISO 字符串）。
+    必须在 db.commit() 之前调用——commit 会让 task 对象进入 expired 状态，
+    再访问属性会触发新的 SELECT（不仅多一次 IO，且大 result JSON 序列化代价不小）。
+    """
+    return task_to_response(task).model_dump(mode='json')
+
+
+def _publish_task_update(snapshot: Dict[str, Any], terminal: bool = False) -> None:
+    """commit 后调用：推一份 snapshot 给 task:{id} 通道，再推一个轻量 ping 给 tasks:any。
+    terminal=True 时额外推 None 哨兵，通知 SSE 关流。"""
+    pubsub = get_pubsub()
+    task_id = snapshot.get('id')
+    if task_id is None:
+        return
+    pubsub.publish(f'task:{task_id}', snapshot)
+    pubsub.publish('tasks:any', {
+        'id': task_id,
+        'status': snapshot.get('status'),
+        'progress': snapshot.get('progress'),
+        'task_type': snapshot.get('task_type'),
+    })
+    if terminal:
+        pubsub.publish(f'task:{task_id}', TERMINAL_SENTINEL)
 
 
 # 用 sync `def`：FastAPI 自动扔 threadpool，避免阻塞 event loop。
@@ -116,6 +156,109 @@ def list_tasks(
     )
 
 
+# ---- SSE：必须注册在 /{task_id} 路由之前，否则 "stream" 会被当成 task_id 走 int 校验 ----
+
+_SSE_HEADERS = {
+    'Cache-Control': 'no-cache, no-transform',
+    'X-Accel-Buffering': 'no',  # 关闭 nginx 缓冲，让 chunk 即时推到浏览器
+    'Connection': 'keep-alive',
+}
+_KEEPALIVE_INTERVAL_SEC = 25  # 客户端 / 反向代理通常 30-60s 超时，25s 心跳留余量
+
+
+async def _async_queue_get(q: Queue, timeout: float):
+    """把同步阻塞的 queue.get(timeout=...) 包成 async；超时不抛异常，返回 _SENTINEL_TIMEOUT。"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _queue_get_or_timeout, q, timeout)
+
+
+_SENTINEL_TIMEOUT = object()
+
+
+def _queue_get_or_timeout(q: Queue, timeout: float):
+    try:
+        return q.get(timeout=timeout)
+    except Empty:
+        return _SENTINEL_TIMEOUT
+
+
+@router.get("/stream")
+async def tasks_stream(request: Request):
+    """SSE 列表页通道：任意 task 状态变化时推一个轻量 ping，前端收到后自行 re-fetch /api/tasks。
+
+    选择"ping + re-fetch"而非"全量列表推送"：列表受分页 / 过滤参数影响，
+    服务端不知道客户端当前的查询条件；推 ping 让客户端用自己的参数拉就行。
+    """
+    pubsub = get_pubsub()
+    queue = pubsub.subscribe('tasks:any')
+
+    async def gen():
+        try:
+            # 连上就发一个 ping，让前端立即做一次基线刷新
+            yield 'event: ping\ndata: {}\n\n'
+            while True:
+                if await request.is_disconnected():
+                    break
+                item = await _async_queue_get(queue, _KEEPALIVE_INTERVAL_SEC)
+                if item is _SENTINEL_TIMEOUT:
+                    yield ': keepalive\n\n'  # SSE 注释行，浏览器忽略
+                    continue
+                yield f'event: ping\ndata: {json.dumps(item, default=str)}\n\n'
+        finally:
+            pubsub.unsubscribe('tasks:any', queue)
+
+    return StreamingResponse(gen(), media_type='text/event-stream', headers=_SSE_HEADERS)
+
+
+@router.get("/{task_id}/stream")
+async def task_stream(task_id: int, request: Request):
+    """SSE 详情页通道：先发一份初始 snapshot（来自 DB），之后由 pubsub 推增量。
+
+    终态（completed / failed / cancelled）发送后跟一个 'done' event，前端可关闭
+    连接避免无谓重连。
+    """
+    pubsub = get_pubsub()
+    channel = f'task:{task_id}'
+    # 关键顺序：先订阅，再读 DB。
+    # 反过来的话，"DB 读取" → "订阅" 之间的窗口里如果发生了更新，订阅前的事件会丢。
+    queue = pubsub.subscribe(channel)
+
+    async def gen():
+        try:
+            # 1. 初始 snapshot（从 DB 一次性读出）
+            from web.backend.database import SessionLocal
+            already_terminal = False
+            with SessionLocal() as db:
+                task = db.query(Task).filter(Task.id == task_id).first()
+                if not task:
+                    yield f'event: error\ndata: {json.dumps({"error": "task not found"})}\n\n'
+                    return
+                snapshot = _build_task_snapshot(task)
+                already_terminal = task.status in ('completed', 'failed', 'cancelled')
+            yield f'data: {json.dumps(snapshot, default=str)}\n\n'
+
+            if already_terminal:
+                yield 'event: done\ndata: {}\n\n'
+                return
+
+            # 2. 流式推送后续更新
+            while True:
+                if await request.is_disconnected():
+                    break
+                item = await _async_queue_get(queue, _KEEPALIVE_INTERVAL_SEC)
+                if item is _SENTINEL_TIMEOUT:
+                    yield ': keepalive\n\n'
+                    continue
+                if item is TERMINAL_SENTINEL:
+                    yield 'event: done\ndata: {}\n\n'
+                    break
+                yield f'data: {json.dumps(item, default=str)}\n\n'
+        finally:
+            pubsub.unsubscribe(channel, queue)
+
+    return StreamingResponse(gen(), media_type='text/event-stream', headers=_SSE_HEADERS)
+
+
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(task_id: int, db: Session = Depends(get_db)):
     """获取任务详情"""
@@ -162,7 +305,10 @@ def cancel_task(task_id: int, db: Session = Depends(get_db)):
     task.status = "cancelled"
     task.completed_at = datetime.utcnow()
     task.message = "用户取消"
+    # commit 前抓 snapshot，避免 expire 后再 SELECT
+    snapshot = _build_task_snapshot(task)
     db.commit()
+    _publish_task_update(snapshot, terminal=True)
 
     return {"message": "任务已取消"}
 
@@ -195,6 +341,8 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    # 通知列表页有新任务（详情通道暂无订阅者，发了也无害）
+    _publish_task_update(_build_task_snapshot(task), terminal=False)
     return task
 
 
@@ -245,7 +393,10 @@ def update_task_progress(
             if captured:
                 merged['warnings'] = captured
             task.result = json.dumps(merged, ensure_ascii=False)
+        # commit 前抓 snapshot——commit 后 task 会进入 expired，再访问属性会触发新 SELECT
+        snapshot = _build_task_snapshot(task)
         db.commit()
+        _publish_task_update(snapshot, terminal=False)
 
 
 def complete_task(
@@ -323,5 +474,8 @@ def complete_task(
         elif not success and result and isinstance(result, dict) and result.get('error'):
             task.message = f"失败: {result['error']}"
 
+        # commit 前抓 snapshot，commit 后推 + 关 SSE 流
+        snapshot = _build_task_snapshot(task)
         db.commit()
+        _publish_task_update(snapshot, terminal=True)
     _log_detach()

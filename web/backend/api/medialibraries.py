@@ -25,15 +25,12 @@ sys.path.insert(0, str(ROOT_DIR))
 from common.jellyfin_client import JellyfinClient
 from web.backend.database import get_db, MediaItem, Task
 from web.backend.config import settings
+from web.backend.api._media_exts import (
+    VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS, SUBTITLE_EXTS,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '.ts', '.rmvb'}
-SUBTITLE_EXTS = {'.srt', '.ass', '.ssa', '.sub', '.idx', '.vtt', '.sup'}
-AUDIO_EXTS = {'.mp3', '.flac', '.wav', '.aac', '.m4a', '.ogg', '.wma', '.opus', '.ape', '.dsf'}
-IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.heic'}
 
 
 # ---- 媒体库统计 in-memory 缓存（2 小时 TTL）----
@@ -1015,8 +1012,8 @@ _DIRECTORY_DELETE_BLACKLIST = (
     '待整理', '未整理', '暂存', '混合',
 )
 
-# 视频扩展名（同 _build_path_index 里 Jellyfin 关心的）
-_VIDEO_EXTS_FOR_DELETE = {'.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m4v', '.ts', '.rmvb'}
+# 删除流程允许跟主文件一起删的视频扩展名（直接用全局 VIDEO_EXTS）
+_VIDEO_EXTS_FOR_DELETE = VIDEO_EXTS
 # 常见作品附件扩展（允许跟主文件一起被 rmtree）
 _ATTACHMENT_EXTS = {
     '.nfo', '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif',

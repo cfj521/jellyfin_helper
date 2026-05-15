@@ -20,7 +20,7 @@
     <el-card shadow="never" class="form-card">
       <el-form inline @submit.prevent="search">
         <el-form-item label="关键词">
-          <el-input v-model="form.query" placeholder="电影/剧集名称" clearable style="width: 300px" @keyup.enter="search" />
+          <el-input v-model="form.query" placeholder="电影/剧集名称" clearable style="width: 560px" @keyup.enter="search" />
         </el-form-item>
         <el-form-item label="分类">
           <el-select v-model="form.category" style="width: 130px">

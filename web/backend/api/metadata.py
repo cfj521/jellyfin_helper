@@ -492,7 +492,8 @@ def run_actor_fix(
         _progress(10, f"共 {total} 个演员需要处理")
 
         success_count = 0
-        failed_count = 0
+        failed_count = 0           # Jellyfin 上传失败（真正的"出错"）
+        no_image_count = 0         # TMDB + Wikidata 都没有该演员的图（不算 error，独立统计）
         skipped_count = 0
         details: List[dict] = []  # 记录每个演员的处理结果（成功/失败/原因）
         EMIT_EVERY = 5  # 每 5 个演员 emit partial result
@@ -503,7 +504,8 @@ def run_actor_fix(
                 'name': actor_info['name'],
                 'jellyfin_id': actor_info['jellyfin_id'],
                 'tmdb_id': actor_info['tmdb_id'],
-                'status': None,           # success / not_found / no_image / failed
+                'status': None,           # success / no_image / failed
+                'source': None,           # 命中后填 'tmdb' / 'wikidata'，前端能区分图片来源
                 'error': None,
                 'image_url': None,
             }
@@ -516,6 +518,7 @@ def run_actor_fix(
                         "total": total,
                         "success": success_count,
                         "failed": failed_count,
+                        "no_image": no_image_count,
                         "skipped": skipped_count,
                         "scan_only": scan_only,
                         "details": details[:500],
@@ -556,8 +559,10 @@ def run_actor_fix(
 
                 # ---- Step 3: 入库 + 上传 Jellyfin ----
                 if source is None:
-                    failed_count += 1
-                    entry['status'] = 'no_image_anywhere'
+                    # 「无图」≠「失败」：TMDB 和 Wikidata 都没有该演员的照片，是数据源限制不是出错。
+                    # 单列 no_image_count 统计，前端用独立"无图"卡片展示，避免污染"失败"数。
+                    no_image_count += 1
+                    entry['status'] = 'no_image'
                     entry['error'] = 'TMDB 与 Wikidata 都没找到图片'
                     with SessionLocal() as db:
                         a = db.query(ActorInfo).filter(ActorInfo.id == actor_info['id']).first()
@@ -628,6 +633,7 @@ def run_actor_fix(
                 "total": total,
                 "success": success_count,
                 "failed": failed_count,
+                "no_image": no_image_count,
                 "skipped": skipped_count,
                 "scan_only": scan_only,
                 "jellyfin_refreshed": refreshed,

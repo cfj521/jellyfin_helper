@@ -143,6 +143,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception(f"启动 dispatch 流水线失败: {e}")
 
+    # 启动 media_metadata 维护循环（每日 LRU 清理）
+    # 跟 dispatch 共用 stop_event，关服时一起退
+    try:
+        import threading
+        from web.backend.services.metadata_maintenance import daily_loop as _meta_daily_loop
+        meta_stop = app.state.dispatch_stop_event or threading.Event()
+        if app.state.dispatch_stop_event is None:
+            app.state.dispatch_stop_event = meta_stop
+        t_meta = threading.Thread(
+            target=_meta_daily_loop, args=(meta_stop,),
+            name='metadata-maintenance', daemon=True,
+        )
+        t_meta.start()
+        app.state.dispatch_threads.append(t_meta)
+    except Exception as e:
+        logger.exception(f"启动 metadata 维护循环失败: {e}")
+
     yield
 
     # ---- 关闭 ----

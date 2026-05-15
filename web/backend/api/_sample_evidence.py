@@ -13,11 +13,11 @@ Sample 证据收集器
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# 视频扩展名（同 audio_manager 里的列表，避免循环依赖单独定义）
-_VIDEO_EXTS = {'.mkv', '.mp4', '.m4v', '.mov', '.avi', '.wmv', '.flv', '.ts', '.rmvb'}
-# 图片扩展名 —— Jellyfin 误识别的 cover/poster/screenshots 子目录里全是这种
-_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.svg'}
-# 元数据/字幕等小文件
+from web.backend.api._media_exts import (
+    VIDEO_EXTS as _VIDEO_EXTS,
+    IMAGE_EXTS as _IMAGE_EXTS,
+)
+# 元数据/字幕等小文件（本地特化集合：sample 识别专用，含 .nfo/.txt）
 _META_EXTS = {'.nfo', '.txt', '.srt', '.ass', '.ssa', '.sub', '.vtt', '.idx'}
 
 # 路径关键字 —— 含这些子串视为 sample 强信号

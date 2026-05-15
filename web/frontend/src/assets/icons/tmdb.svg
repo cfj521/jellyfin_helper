@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 32" preserveAspectRatio="xMidYMid meet" aria-label="TMDB">
+  <defs>
+    <linearGradient id="tmdbGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#90CEA1"/>
+      <stop offset="56%" stop-color="#3CBEC9"/>
+      <stop offset="100%" stop-color="#01B4E4"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="32" rx="6" ry="6" fill="#0D253F"/>
+  <g fill="url(#tmdbGrad)" font-family="Helvetica, Arial, sans-serif" font-weight="900" font-size="20" text-anchor="middle">
+    <text x="32" y="23">TMDB</text>
+  </g>
+</svg>

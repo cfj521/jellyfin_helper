@@ -20,9 +20,41 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.database import get_db
 from web.backend.config import settings
+from web.backend.services import metadata_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _tmdb_scrape_lang() -> str:
+    """
+    TMDB 上游请求用的语言标签（'en-US' / 'zh-CN' 等）。
+    优先 metadata.scrape_language（新配置）；老 tmdb.language 仍生效作为兜底。
+      'en' → 'en-US'
+      'zh' → 'zh-CN'
+      其它 → 直接透传（用户可写完整 BCP47 如 'ja-JP'）
+    """
+    # 兜底兼容老 config：直接读 settings.tmdb_language（绕开 sed 替换，避免自递归）
+    raw = settings.metadata_scrape_language or getattr(settings, 'tmdb_language', None) or 'en'
+    raw = raw.strip()
+    short_map = {'en': 'en-US', 'zh': 'zh-CN', 'ja': 'ja-JP', 'ko': 'ko-KR'}
+    return short_map.get(raw.lower(), raw)
+
+
+def _display_title_for(row) -> Optional[str]:
+    """
+    按 metadata_display_language 挑展示 title。
+    缺对应语言字段时 fallback 到另一个，再缺则 None。
+
+    豆瓣源无独立配置：display_language='en' 时优先 title（英文部分），
+    但豆瓣条目 title 经常没有英文 → fallback 到 title_zh 自然展示中文。
+    """
+    if row is None:
+        return None
+    lang = (settings.metadata_display_language or 'en').lower()
+    if lang.startswith('zh'):
+        return row.title_zh or row.title
+    return row.title or row.title_zh
 
 
 # ---------- TMDB 热门：DB 持久化缓存（之前是 in-memory，重启就丢） ----------
@@ -66,6 +98,20 @@ def _cache_clear():
     _kv_invalidate(_DOUBAN_SCOPE)
 
 
+def _stale_fallback(scope: str, cache_key: str, ttl_seconds: int) -> Optional[Dict]:
+    """
+    Stale-while-revalidate 统一兜底：上游拉空/异常时调一下，有过期缓存就返回。
+    返回剥过元字段的 dict + cached=True；没有则 None。
+    """
+    stale = _kv_get(scope, cache_key, ttl_seconds=ttl_seconds, allow_stale=True)
+    if stale is None:
+        return None
+    logger.info(
+        f"stale 兜底 {scope}/{cache_key}（{stale.get('_cache_age_seconds')}s 前）"
+    )
+    return {**_strip_cache_meta(stale), "cached": True}
+
+
 
 
 @router.get("/trending")
@@ -91,18 +137,26 @@ def get_trending(
             return {**cached, "cached": True}
 
     from common.tmdb_client import TMDBClient
-    # 推荐/流行列表不受 tmdb_request_delay 约束（30s 延迟仅用于演员图/海报批量修复）
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=settings.tmdb_language)
-
-    items = client.trending(media_type=media_type, time_window=time_window, page=page)
-    result = {
-        "count": len(items),
-        "items": _normalize_tmdb(items),
-        "page": page,
-        "has_more": len(items) >= 20,   # TMDB 一页 20 条
-    }
-    _cache_set(cache_key, result)
-    return {**result, "cached": False}
+    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=_tmdb_scrape_lang())
+    try:
+        items = client.trending(media_type=media_type, time_window=time_window, page=page)
+    except Exception as e:
+        logger.warning(f"TMDB trending 上游异常: {e}")
+        items = []
+    if items:
+        result = {
+            "count": len(items),
+            "items": _normalize_tmdb(items),
+            "page": page,
+            "has_more": len(items) >= 20,
+        }
+        _cache_set(cache_key, result)
+        return {**result, "cached": False}
+    # 上游空/异常 → stale 兜底
+    fallback = _stale_fallback(_TMDB_SCOPE, cache_key, _tmdb_ttl_secs())
+    if fallback is not None:
+        return fallback
+    return {"count": 0, "items": [], "page": page, "has_more": False, "cached": False}
 
 
 @router.get("/popular")
@@ -118,23 +172,30 @@ def get_popular(media_type: str = "movie", page: int = 1, refresh: bool = False)
             return {**cached, "cached": True}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=settings.tmdb_language)
+    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=_tmdb_scrape_lang())
 
-    if media_type == 'movie':
-        items = client.popular_movies(page=page)
-    elif media_type == 'tv':
-        items = client.popular_tv(page=page)
-    else:
+    if media_type not in ('movie', 'tv'):
         raise HTTPException(status_code=400, detail="media_type 必须是 movie / tv")
-
-    result = {
-        "count": len(items),
-        "items": _normalize_tmdb(items, default_type=media_type),
-        "page": page,
-        "has_more": len(items) >= 20,
-    }
-    _cache_set(cache_key, result)
-    return {**result, "cached": False}
+    try:
+        items = (client.popular_movies(page=page)
+                 if media_type == 'movie'
+                 else client.popular_tv(page=page))
+    except Exception as e:
+        logger.warning(f"TMDB popular 上游异常: {e}")
+        items = []
+    if items:
+        result = {
+            "count": len(items),
+            "items": _normalize_tmdb(items, default_type=media_type),
+            "page": page,
+            "has_more": len(items) >= 20,
+        }
+        _cache_set(cache_key, result)
+        return {**result, "cached": False}
+    fallback = _stale_fallback(_TMDB_SCOPE, cache_key, _tmdb_ttl_secs())
+    if fallback is not None:
+        return fallback
+    return {"count": 0, "items": [], "page": page, "has_more": False, "cached": False}
 
 
 @router.get("/list")
@@ -174,19 +235,30 @@ def get_category_list(
             return {**cached, "cached": True}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=settings.tmdb_language)
-
-    items = client.list_items(media_type, category, page=page)
-    result = {
-        "count": len(items),
-        "items": _normalize_tmdb(items, default_type=media_type),
-        "media_type": media_type,
-        "category": category,
-        "page": page,
-        "has_more": len(items) >= 20,
+    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=_tmdb_scrape_lang())
+    try:
+        items = client.list_items(media_type, category, page=page)
+    except Exception as e:
+        logger.warning(f"TMDB list {media_type}/{category} 上游异常: {e}")
+        items = []
+    if items:
+        result = {
+            "count": len(items),
+            "items": _normalize_tmdb(items, default_type=media_type),
+            "media_type": media_type,
+            "category": category,
+            "page": page,
+            "has_more": len(items) >= 20,
+        }
+        _cache_set(cache_key, result)
+        return {**result, "cached": False}
+    fallback = _stale_fallback(_TMDB_SCOPE, cache_key, _tmdb_ttl_secs())
+    if fallback is not None:
+        return fallback
+    return {
+        "count": 0, "items": [], "media_type": media_type, "category": category,
+        "page": page, "has_more": False, "cached": False,
     }
-    _cache_set(cache_key, result)
-    return {**result, "cached": False}
 
 
 @router.get("/detail")
@@ -197,30 +269,115 @@ def get_detail(
 ):
     """
     电影 / 剧集详情，含演员、相似推荐、预告等关联数据。30 分钟缓存。
-    显示语言由 settings.tmdb_language 控制。
+    显示语言由 _tmdb_scrape_lang() 控制。
     """
     if not settings.tmdb_api_key:
         raise HTTPException(status_code=400, detail="未配置 TMDB API Key")
     if media_type not in ('movie', 'tv'):
         raise HTTPException(status_code=400, detail="media_type 必须是 movie / tv")
 
-    lang = settings.tmdb_language or 'zh-CN'
+    lang = _tmdb_scrape_lang() or 'zh-CN'
     cache_key = f"detail:{media_type}:{tmdb_id}:{lang}"
     if not refresh:
         cached = _cache_get(cache_key)
         if cached is not None:
             return {**cached, "cached": True}
+        # L3 命中 fresh 直接返回（KV miss 时才查，命中 KV 已经隐含 L3 写过）
+        l3_row = metadata_store.get_by_tmdb(int(tmdb_id), media_type)
+        if l3_row is not None:
+            if metadata_store.is_stale(l3_row):
+                # stale：仍返回旧数据 + 后台异步 refresh
+                try:
+                    from web.backend.services.metadata_maintenance import enqueue_refresh
+                    enqueue_refresh('tmdb', str(tmdb_id), hint={'media_type': media_type})
+                except Exception:
+                    pass
+            else:
+                # detail 响应里 similar/recommendations 是动态字段，L3 没存，命中后不带这两项
+                full = metadata_store.row_to_full_dict(l3_row)
+                return {**full, "cached": True, "_from_metadata": True}
 
     from common.tmdb_client import TMDBClient
     client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=lang)
+    try:
+        raw = client.get_detail(media_type, tmdb_id, language=lang)
+    except Exception as e:
+        logger.warning(f"TMDB detail {media_type}/{tmdb_id} 上游异常: {e}")
+        raw = None
+    if raw:
+        result = _normalize_detail(raw, media_type)
+        _cache_set(cache_key, result)
+        _upsert_tmdb_detail(result)
+        return {**result, "cached": False}
+    # 上游失败 → stale 兜底
+    fallback = _stale_fallback(_TMDB_SCOPE, cache_key, _tmdb_ttl_secs())
+    if fallback is not None:
+        return fallback
+    raise HTTPException(status_code=404, detail="TMDB 中未找到该条目")
 
-    raw = client.get_detail(media_type, tmdb_id, language=lang)
-    if not raw:
-        raise HTTPException(status_code=404, detail="TMDB 中未找到该条目")
 
-    result = _normalize_detail(raw, media_type)
-    _cache_set(cache_key, result)
-    return {**result, "cached": False}
+def _upsert_tmdb_detail(detail: dict) -> None:
+    """TMDB detail 完整字段落 L3。"""
+    tmdb_id = detail.get('tmdb_id')
+    if not tmdb_id:
+        return
+    try:
+        date = detail.get('release_date') or ''
+        year = int(date[:4]) if date and len(date) >= 4 and date[:4].isdigit() else None
+        # ext 字段：详情独有的（list 没有的）
+        ext = {
+            'overview': detail.get('overview'),
+            'tagline': detail.get('tagline'),
+            'original_language': detail.get('original_language'),
+            'english_title': detail.get('english_title'),
+            'runtime': detail.get('runtime'),
+            'episode_runtime': detail.get('episode_runtime'),
+            'status': detail.get('status'),
+            'backdrop_url': detail.get('backdrop_url'),
+            'homepage': detail.get('homepage'),
+            'countries': detail.get('countries') or [],
+            'spoken_languages': detail.get('spoken_languages') or [],
+            'studios': detail.get('studios') or [],
+            'genres': detail.get('genres') or [],
+            'directors': detail.get('directors') or [],
+            'writers': detail.get('writers') or [],
+            'cast': detail.get('cast') or [],
+            'videos': detail.get('videos') or [],
+            'number_of_seasons': detail.get('number_of_seasons'),
+            'number_of_episodes': detail.get('number_of_episodes'),
+            'seasons': detail.get('seasons') or [],
+            'popularity': detail.get('popularity'),
+            'vote_average': detail.get('vote_average'),
+            'vote_count': detail.get('vote_count'),
+        }
+        # 去掉 None 值，避免 ext 里全是 None 噪声
+        ext = {k: v for k, v in ext.items() if v is not None and v != []}
+        # title / title_zh 拆分（detail 阶段中英两个都能从 translations 抽到）
+        # _normalize_detail 已分别填 english_title 和 chinese_title（互不依赖 scrape_language）
+        title_en = detail.get('english_title')
+        title_zh = detail.get('chinese_title')
+        # 兜底：english 抽不出来时用 original_title (原片为英语片时)
+        if not title_en and detail.get('original_language') == 'en':
+            title_en = detail.get('original_title')
+        metadata_store.upsert(
+            source='tmdb', source_id=str(tmdb_id),
+            public={
+                'media_type': detail.get('media_type'),
+                'title': title_en,                # 英文（种子搜索锚点）
+                'title_zh': title_zh,             # 中文（展示用）
+                'original_title': detail.get('original_title'),
+                'year': year,
+                'release_date': date or None,
+                'poster_url': detail.get('poster_url'),
+            },
+            ext=ext,
+            bridge_ids={
+                'tmdb_id': int(tmdb_id),
+                'imdb_id': detail.get('imdb_id'),
+            },
+        )
+    except Exception:
+        logger.exception(f"L3 upsert tmdb detail 失败 tmdb_id={tmdb_id}")
 
 
 def _normalize_detail(raw: dict, media_type: str) -> dict:
@@ -300,27 +457,46 @@ def _normalize_detail(raw: dict, media_type: str) -> dict:
     ext = raw.get('external_ids') or {}
     imdb_id = ext.get('imdb_id') or raw.get('imdb_id')
 
-    # 从 translations 里抽英文标题（用于种子搜索 query）
+    # 从 translations 里抽英文 + 中文标题（不论 scrape_language 当前是什么，
+    # 两个标题都尽量拿到，方便实体表两列都填）
     english_title = None
+    chinese_title = None
     translations = (raw.get('translations') or {}).get('translations') or []
     for t in translations:
-        if t.get('iso_639_1') == 'en':
-            td = t.get('data') or {}
-            english_title = td.get('title') or td.get('name')
-            if english_title:
-                break
-
+        iso = t.get('iso_639_1')
+        td = t.get('data') or {}
+        cand = td.get('title') or td.get('name')
+        if not cand:
+            continue
+        if iso == 'en' and english_title is None:
+            english_title = cand
+        elif iso == 'zh' and chinese_title is None:
+            # 中文可能含 zh-CN / zh-TW / zh-HK；按 region 优先 CN
+            if t.get('iso_3166_1') == 'CN':
+                chinese_title = cand
+            elif chinese_title is None:
+                chinese_title = cand
     # 兜底：原始语言就是英文 → original_title 即英文
     if not english_title and raw.get('original_language') == 'en':
         english_title = raw.get('original_title') or raw.get('original_name')
 
+    # 上游响应 title 本身按当前请求 language=参数 给的——它要么是英文要么是中文（看 scrape_language）
+    upstream_title = raw.get('title') or raw.get('name')
+    upstream_lang_is_zh = (_tmdb_scrape_lang() or 'en').lower().startswith('zh')
+    # 把"中英两个版本"都尽量填齐：上游响应 + translations 互补
+    if upstream_lang_is_zh:
+        chinese_title = upstream_title or chinese_title
+    else:
+        english_title = english_title or upstream_title
+
     return {
         "tmdb_id": raw.get('id'),
         "media_type": media_type,
-        "title": raw.get('title') or raw.get('name'),
+        "title": upstream_title,
         "original_title": raw.get('original_title') or raw.get('original_name'),
         "original_language": raw.get('original_language'),
         "english_title": english_title,
+        "chinese_title": chinese_title,
         "tagline": raw.get('tagline'),
         "overview": raw.get('overview'),
         "release_date": raw.get('release_date') or raw.get('first_air_date'),
@@ -537,34 +713,140 @@ def _get_tmdb_genre_map(media_type: str, lang: str) -> Dict[int, str]:
 
 
 def _normalize_tmdb(items: List[dict], default_type: Optional[str] = None) -> List[dict]:
-    """把 TMDB 多种返回结构统一成一个简化格式给前端用。"""
-    lang = settings.tmdb_language or 'zh-CN'
+    """把 TMDB 多种返回结构统一成一个简化格式给前端用。
+
+    L3 读 + 写：先 batch 查实体表
+      - fresh 命中 → 用 L3 字段覆盖（detail 写过的字段更全），不再 upsert
+      - stale/miss → 走 normalize 上游字段 + upsert L3
+    """
+    lang = _tmdb_scrape_lang() or 'zh-CN'
     movie_gmap = _get_tmdb_genre_map('movie', lang)
     tv_gmap = _get_tmdb_genre_map('tv', lang)
 
+    # 批量查 L3
+    tmdb_ids = [it.get('id') for it in items if it.get('id')]
+    l3_keys = [('tmdb', str(tid)) for tid in tmdb_ids]
+    l3_rows = metadata_store.get_batch(l3_keys) if l3_keys else {}
+
+    # stale 行批量入队 refresh（不阻塞 list 响应）
+    try:
+        from web.backend.services.metadata_maintenance import enqueue_refresh as _enq_refresh
+        for (src, sid), row in l3_rows.items():
+            if metadata_store.is_stale(row):
+                _enq_refresh(src, sid, hint={'media_type': row.media_type or 'movie'})
+    except Exception:
+        pass
+
     out = []
     for it in items:
-        mt = it.get('media_type') or default_type or 'movie'
-        title = it.get('title') or it.get('name')
-        date = it.get('release_date') or it.get('first_air_date')
-        poster = it.get('poster_path')
-        # genre_ids 是 TMDB 列表响应里的 id 数组；按 media_type 选对应映射
-        gmap = tv_gmap if mt == 'tv' else movie_gmap
-        genre_names = [gmap[g] for g in (it.get('genre_ids') or []) if g in gmap]
-        out.append({
-            "tmdb_id": it.get('id'),
-            "media_type": mt,
-            "title": title,
-            "original_title": it.get('original_title') or it.get('original_name'),
-            "original_language": it.get('original_language'),  # 'en' / 'ja' / 'zh' 等
-            "overview": it.get('overview'),
-            "release_date": date,
-            "vote_average": it.get('vote_average'),
-            "popularity": it.get('popularity'),
-            "poster_url": f"https://image.tmdb.org/t/p/w342{poster}" if poster else None,
-            "genres": genre_names,
-        })
+        tid = it.get('id')
+        l3_row = l3_rows.get(('tmdb', str(tid))) if tid else None
+        l3_fresh = l3_row is not None and not metadata_store.is_stale(l3_row)
+
+        if l3_fresh:
+            # L3 fresh 命中：用 L3 字段（更稳定的翻译 + 详情写过的更全字段）
+            # 前端展示标题：按显示语言配置挑（非豆瓣 → display_language 默认 'en'）
+            ext = l3_row.ext or {}
+            display_title = _display_title_for(l3_row) or it.get('title') or it.get('name')
+            norm = {
+                "tmdb_id": tid,
+                "media_type": l3_row.media_type or (it.get('media_type') or default_type or 'movie'),
+                "title": display_title,                    # 给前端的展示标题（按 display_language）
+                "title_en": l3_row.title,                  # 英文 title（种子搜索用，永远英文）
+                "original_title": l3_row.original_title or it.get('original_title') or it.get('original_name'),
+                "original_language": ext.get('original_language') or it.get('original_language'),
+                "overview": ext.get('overview') or it.get('overview'),
+                "release_date": l3_row.release_date or it.get('release_date') or it.get('first_air_date'),
+                "vote_average": ext.get('vote_average') if ext.get('vote_average') is not None else it.get('vote_average'),
+                "popularity": ext.get('popularity') if ext.get('popularity') is not None else it.get('popularity'),
+                "poster_url": l3_row.poster_url or (
+                    f"https://image.tmdb.org/t/p/w342{it.get('poster_path')}" if it.get('poster_path') else None
+                ),
+                "genres": ext.get('genres') or [],
+            }
+        else:
+            # L3 miss / stale：走原 normalize + upsert
+            mt = it.get('media_type') or default_type or 'movie'
+            upstream_title = it.get('title') or it.get('name')
+            original_title = it.get('original_title') or it.get('original_name')
+            orig_lang = it.get('original_language')
+            date = it.get('release_date') or it.get('first_air_date')
+            poster = it.get('poster_path')
+            gmap = tv_gmap if mt == 'tv' else movie_gmap
+            genre_names = [gmap[g] for g in (it.get('genre_ids') or []) if g in gmap]
+
+            # list 阶段只有一种语言（上游响应按 scrape_language）；另一语言留待 detail 补
+            scrape_is_zh = (_tmdb_scrape_lang() or 'en').lower().startswith('zh')
+            if scrape_is_zh:
+                title_zh = upstream_title
+                title_en = original_title if orig_lang == 'en' else None
+            else:
+                title_en = upstream_title
+                title_zh = None    # 等 detail 用 translations 补
+            # 前端展示标题：按显示语言优先
+            disp_is_zh = (settings.metadata_display_language or 'en').lower().startswith('zh')
+            display = (title_zh or title_en) if disp_is_zh else (title_en or title_zh)
+
+            norm = {
+                "tmdb_id": tid,
+                "media_type": mt,
+                "title": display or upstream_title,  # 前端展示用
+                "title_en": title_en,                # 种子搜索锚点
+                "original_title": original_title,
+                "original_language": orig_lang,
+                "overview": it.get('overview'),
+                "release_date": date,
+                "vote_average": it.get('vote_average'),
+                "popularity": it.get('popularity'),
+                "poster_url": f"https://image.tmdb.org/t/p/w342{poster}" if poster else None,
+                "genres": genre_names,
+            }
+            # 把要写 L3 的"raw 两种语言版本"塞进去给 _upsert_tmdb_list_item 用
+            norm["_title_en_for_l3"] = title_en
+            norm["_title_zh_for_l3"] = title_zh
+            _upsert_tmdb_list_item(norm)
+        out.append(norm)
     return out
+
+
+def _upsert_tmdb_list_item(norm: dict) -> None:
+    """TMDB list item 落 L3 实体表。失败不影响主流程。
+
+    norm 里 _title_en_for_l3 / _title_zh_for_l3 是 list 阶段能拿到的两种语言。
+    detail 走 _upsert_tmdb_detail 时会补全另一种语言。
+    """
+    tmdb_id = norm.get('tmdb_id')
+    if not tmdb_id:
+        return
+    try:
+        date = norm.get('release_date') or ''
+        year = None
+        if date and len(date) >= 4 and date[:4].isdigit():
+            year = int(date[:4])
+        ext = {
+            'overview': norm.get('overview'),
+            'original_language': norm.get('original_language'),
+            'genres': norm.get('genres') or [],
+            'popularity': norm.get('popularity'),
+            'vote_average': norm.get('vote_average'),
+        }
+        public = {
+            'media_type': norm.get('media_type'),
+            'title': norm.get('_title_en_for_l3'),      # 英文 title（可能 None）
+            'title_zh': norm.get('_title_zh_for_l3'),   # 中文 title（可能 None）
+            'original_title': norm.get('original_title'),
+            'year': year,
+            'release_date': date or None,
+            'poster_url': norm.get('poster_url'),
+        }
+        metadata_store.upsert(
+            source='tmdb', source_id=str(tmdb_id),
+            public=public,
+            ext=ext,
+            bridge_ids={'tmdb_id': int(tmdb_id)},
+        )
+    except Exception:
+        logger.exception(f"L3 upsert tmdb list 失败 tmdb_id={tmdb_id}")
 
 
 # ============================================================================
@@ -640,14 +922,22 @@ def get_trakt(
         timeout=cfg.timeout_seconds,
     )
 
-    if category == 'trending':
-        items = client.trending(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
-    elif category == 'anticipated':
-        items = client.anticipated(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
-    elif category == 'popular':
-        items = client.popular(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
-    else:  # watched_weekly
-        items = client.watched(media_type, period='weekly', page=page, limit=_TRAKT_PAGE_SIZE)
+    try:
+        if category == 'trending':
+            items = client.trending(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
+        elif category == 'anticipated':
+            items = client.anticipated(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
+        elif category == 'popular':
+            items = client.popular(media_type, page=page, limit=_TRAKT_PAGE_SIZE)
+        else:  # watched_weekly
+            items = client.watched(media_type, period='weekly', page=page, limit=_TRAKT_PAGE_SIZE)
+    except Exception as e:
+        logger.warning(f"Trakt {media_type}/{category} 上游异常: {e}")
+        items = []
+    if not items:
+        fallback = _stale_fallback(_TRAKT_SCOPE, cache_key, max(1, cfg.cache_minutes) * 60)
+        if fallback is not None:
+            return fallback
 
     # 给有 tmdb_id 的项补 TMDB 海报：5 路并发 + 每张 tmdb_id 单独 7 天缓存
     out = [it.to_dict() for it in items]
@@ -655,7 +945,7 @@ def get_trakt(
         try:
             from common.tmdb_client import TMDBClient
             from concurrent.futures import ThreadPoolExecutor
-            tmdb = TMDBClient(settings.tmdb_api_key, delay=0.0, language=settings.tmdb_language)
+            tmdb = TMDBClient(settings.tmdb_api_key, delay=0.0, language=_tmdb_scrape_lang())
             poster_targets = [(d, d.get('tmdb_id'), d.get('media_type') or media_type)
                               for d in out if d.get('tmdb_id')]
             if poster_targets:
@@ -680,7 +970,8 @@ def get_trakt(
         "page": page, "limit": _TRAKT_PAGE_SIZE,
         "has_more": len(out) >= _TRAKT_PAGE_SIZE,
     }
-    _kv_set(_TRAKT_SCOPE, cache_key, result)
+    if out:
+        _kv_set(_TRAKT_SCOPE, cache_key, result)
     return {**result, "cached": False}
 
 
@@ -719,29 +1010,128 @@ def get_anilist(
         timeout=cfg.timeout_seconds,
     )
 
-    if category == 'trending':
-        items = client.trending(page=page, limit=_ANILIST_PAGE_SIZE)
-    elif category == 'popular':
-        items = client.popular(page=page, limit=_ANILIST_PAGE_SIZE)
-    elif category == 'top_rated':
-        items = client.top_rated(page=page, limit=_ANILIST_PAGE_SIZE)
-    else:  # current_season
-        from datetime import datetime as _dt
-        now = _dt.utcnow()
-        # 季：Q1 WINTER, Q2 SPRING, Q3 SUMMER, Q4 FALL
-        season_map = {1: 'WINTER', 2: 'SPRING', 3: 'SUMMER', 4: 'FALL'}
-        season = season_map[((now.month - 1) // 3) + 1]
+    try:
+        if category == 'trending':
+            items = client.trending(page=page, limit=_ANILIST_PAGE_SIZE)
+        elif category == 'popular':
+            items = client.popular(page=page, limit=_ANILIST_PAGE_SIZE)
+        elif category == 'top_rated':
+            items = client.top_rated(page=page, limit=_ANILIST_PAGE_SIZE)
+        else:  # current_season
+            from datetime import datetime as _dt
+            now = _dt.utcnow()
+            season_map = {1: 'WINTER', 2: 'SPRING', 3: 'SUMMER', 4: 'FALL'}
+            season = season_map[((now.month - 1) // 3) + 1]
         items = client.current_season(season=season, year=now.year,
                                        page=page, limit=_ANILIST_PAGE_SIZE)
+    except Exception as e:
+        logger.warning(f"AniList {category} 上游异常: {e}")
+        items = []
+    if not items:
+        fallback = _stale_fallback(_ANILIST_SCOPE, cache_key, ttl)
+        if fallback is not None:
+            return fallback
 
     out = [it.to_dict() for it in items]
+    # L3 读 + 写：fresh 命中用 L3 字段覆盖；miss/stale 才 upsert
+    anilist_ids = [d.get('anilist_id') for d in out if d.get('anilist_id')]
+    l3_keys = [('anilist', str(aid)) for aid in anilist_ids]
+    l3_rows = metadata_store.get_batch(l3_keys) if l3_keys else {}
+    # stale 行批量入队 refresh
+    try:
+        from web.backend.services.metadata_maintenance import enqueue_refresh as _enq_refresh
+        for (src, sid), row in l3_rows.items():
+            if metadata_store.is_stale(row):
+                _enq_refresh(src, sid)
+    except Exception:
+        pass
+    for d in out:
+        aid = d.get('anilist_id')
+        row = l3_rows.get(('anilist', str(aid))) if aid else None
+        if row is not None and not metadata_store.is_stale(row):
+            # 用 L3 字段覆盖（更稳定）
+            ext = row.ext or {}
+            # row.title 是英文（title_english），title_zh AniList 通常 None
+            if row.title: d['title_english'] = d.get('title_english') or row.title
+            if row.title_zh: d['title_zh'] = row.title_zh
+            # 显示标题（按 display_language；AniList 无中文时 fallback 到英文）
+            d['title_display'] = _display_title_for(row)
+            if ext.get('title_romaji'): d['title_romaji'] = ext['title_romaji']
+            if ext.get('title_native'): d['title_native'] = ext['title_native']
+            if row.poster_url: d['cover_image'] = row.poster_url
+            if ext.get('description'): d['description'] = ext['description']
+            if ext.get('genres'): d['genres'] = ext['genres']
+            if ext.get('studios'): d['studios'] = ext['studios']
+            if ext.get('average_score') is not None: d['average_score'] = ext['average_score']
+            if ext.get('popularity') is not None: d['popularity'] = ext['popularity']
+            if ext.get('episodes') is not None: d['episodes'] = ext['episodes']
+            if ext.get('duration') is not None: d['duration'] = ext['duration']
+            if ext.get('format'): d['format'] = ext['format']
+            if ext.get('status'): d['status'] = ext['status']
+        else:
+            _upsert_anilist_item(d)
     result = {
         "count": len(out), "items": out,
         "category": category, "page": page, "limit": _ANILIST_PAGE_SIZE,
         "has_more": len(out) >= _ANILIST_PAGE_SIZE,
     }
-    _kv_set(_ANILIST_SCOPE, cache_key, result)
+    if out:
+        _kv_set(_ANILIST_SCOPE, cache_key, result)
     return {**result, "cached": False}
+
+
+def _upsert_anilist_item(d: dict) -> None:
+    """AniList item dict → L3 upsert。是 list 也是简化 detail（AniListItem 字段相同）。
+
+    title 字段语义：
+      DB.title    = title_english (英文)
+      DB.title_zh = NULL（AniList 不提供官方中文翻译）
+      original_title = title_native (日文)
+    """
+    anilist_id = d.get('anilist_id')
+    if not anilist_id:
+        return
+    try:
+        title_en = d.get('title_english') or d.get('title_romaji')
+        original_title = d.get('title_native') or d.get('title_romaji')
+        year = d.get('season_year')
+        # ext：AniList 独有 + 非公共字段
+        ext = {
+            'title_romaji': d.get('title_romaji'),
+            'title_native': d.get('title_native'),
+            'description': d.get('description'),
+            'banner_image': d.get('banner_image'),
+            'season': d.get('season'),
+            'season_year': d.get('season_year'),
+            'episodes': d.get('episodes'),
+            'duration': d.get('duration'),
+            'format': d.get('format'),
+            'status': d.get('status'),
+            'average_score': d.get('average_score'),
+            'popularity': d.get('popularity'),
+            'genres': d.get('genres') or [],
+            'studios': d.get('studios') or [],
+        }
+        ext = {k: v for k, v in ext.items() if v is not None and v != []}
+        bridge_ids = {'anilist_id': int(anilist_id)}
+        if d.get('tmdb_id'):
+            # AniList → TMDB 反查（已决：启用跨 source 桥接）
+            bridge_ids['tmdb_id'] = int(d['tmdb_id'])
+        metadata_store.upsert(
+            source='anilist', source_id=str(anilist_id),
+            public={
+                'media_type': 'anime',
+                'title': title_en,             # 英文
+                'title_zh': None,              # AniList 无中文（前端 fallback 用 title）
+                'original_title': original_title,
+                'year': year,
+                'poster_url': d.get('cover_image'),
+            },
+            ext=ext,
+            bridge_ids=bridge_ids,
+        )
+    except Exception:
+        logger.exception(f"L3 upsert anilist 失败 anilist_id={anilist_id}")
 
 
 # ============================================================================
@@ -797,16 +1187,38 @@ def _enrich_items_from_detail_cache(items: List[Dict]) -> List[str]:
 
 
 def _douban_prefetch_consumer():
-    """全局单消费者：从队列里逐个吃 douban_id，全局共享一个 DoubanClient
-    （rate_limit + PoW cookie 都跟着 client 走 → 严格 douban_request_delay 全局限速）。
-    线程永不退出（队列空时阻塞 .get）"""
+    """全局单消费者：保守抓豆瓣 detail，含熔断机制
+      - 每条间隔 douban.worker_delay（默认 30s）
+      - 连续失败 worker_max_failures 次 → 进 cooldown，停 worker_cooldown_seconds（默认 1h）
+      - 冷却期内不消费队列（堆积无所谓，反正是异步预取）
+    """
+    import time as _time
     from common.douban_client import DoubanClient
+    # 用更长 delay 避免反爬：跟前台请求 client 分开，独立 rate_limit
     client = DoubanClient(
         user_agent=settings.douban_user_agent,
-        delay=settings.douban_request_delay,
+        delay=settings.douban_worker_delay,
     )
-    logger.info("豆瓣详情预取消费者线程启动")
+    max_failures = max(1, int(settings.douban_worker_max_failures))
+    cooldown_seconds = max(60, int(settings.douban_worker_cooldown_seconds))
+    consecutive_failures = 0
+    cooldown_until = 0.0
+
+    logger.info(
+        f"豆瓣预取 worker 启动：delay={settings.douban_worker_delay}s "
+        f"max_failures={max_failures} cooldown={cooldown_seconds}s"
+    )
     while True:
+        # 熔断中？分段睡（避免阻塞太久无法响应进程退出）
+        now = _time.time()
+        if now < cooldown_until:
+            wait = cooldown_until - now
+            logger.warning(
+                f"豆瓣预取 worker 冷却中，剩余 {wait:.0f}s（连续失败 {max_failures} 次后启动）"
+            )
+            _time.sleep(min(wait, 60))
+            continue
+
         try:
             did = _douban_prefetch_queue.get()
         except Exception as e:
@@ -816,15 +1228,46 @@ def _douban_prefetch_consumer():
             # 再读一次缓存：可能用户主动点"简介"/"搜种子"提前填上了
             cached = _kv_get(_DOUBAN_DETAIL_SCOPE, did, ttl_seconds=_DOUBAN_DETAIL_TTL)
             if isinstance(cached, dict) and cached.get('summary'):
+                # 命中缓存不算失败，不增减计数
                 continue
             detail = client.fetch_subject_summary(did)
             if detail and detail.get('summary'):
+                # 成功：清零计数
+                consecutive_failures = 0
                 _kv_set(_DOUBAN_DETAIL_SCOPE, did, detail)
+                try:
+                    _upsert_douban_detail(detail)
+                except Exception:
+                    logger.exception(f"L3 upsert douban (prefetch) 失败 {did}")
+                if detail.get('imdb_id'):
+                    try:
+                        from web.backend.api.ratings import enqueue_mdblist_by_imdb
+                        enqueue_mdblist_by_imdb(detail['imdb_id'], 'movie')
+                    except Exception:
+                        logger.exception(f"MDB List 入队（豆瓣 prefetch）失败 {did}")
                 logger.debug(f"豆瓣详情预取写入缓存 {did}")
             else:
-                logger.warning(f"豆瓣详情预取 {did} 拿到空 detail（反爬或条目失效）")
+                # 失败：计数 +1，达阈值进熔断
+                consecutive_failures += 1
+                logger.warning(
+                    f"豆瓣预取 {did} 失败（连续 {consecutive_failures}/{max_failures}）"
+                )
+                if consecutive_failures >= max_failures:
+                    cooldown_until = _time.time() + cooldown_seconds
+                    logger.error(
+                        f"豆瓣预取 worker 进入冷却：连续 {consecutive_failures} 次失败，"
+                        f"暂停 {cooldown_seconds}s"
+                    )
+                    consecutive_failures = 0
         except Exception as e:
-            logger.warning(f"豆瓣详情预取 {did} 失败: {e}")
+            consecutive_failures += 1
+            logger.warning(f"豆瓣详情预取 {did} 异常: {e}（连续 {consecutive_failures}/{max_failures}）")
+            if consecutive_failures >= max_failures:
+                cooldown_until = _time.time() + cooldown_seconds
+                logger.error(
+                    f"豆瓣预取 worker 进入冷却（异常路径），暂停 {cooldown_seconds}s"
+                )
+                consecutive_failures = 0
         finally:
             with _douban_prefetch_seen_lock:
                 _douban_prefetch_seen.discard(did)
@@ -937,9 +1380,23 @@ def get_douban_lists(
         "limit": page_size,
         "has_more": len(items) >= page_size,
     }
-    # 豆瓣页面拉空（很可能是反爬）就不要写缓存，避免长 TTL 把空结果钉死
+    # 上游拉到数据 → 正常写缓存
     if items:
         _kv_set(_DOUBAN_SCOPE, cache_key, result)
+        return _finalize(result, from_cache=False)
+
+    # 上游拉空（反爬 403 / 维护页 / 真的没数据）→ 降级用过期 KV 兜底
+    # 比给用户白屏强；同时不污染 KV（不刷新 cached_at）
+    stale = _kv_get(_DOUBAN_SCOPE, cache_key, ttl_seconds=ttl, allow_stale=True)
+    if stale is not None:
+        logger.info(
+            f"豆瓣 doulist {doulist_id} 上游拉空，降级用过期缓存"
+            f"（{stale.get('_cache_age_seconds')}s 前，{len(stale.get('items') or [])} 条）"
+        )
+        # 把 stale meta 字段从 result_obj 剥掉再走 finalize
+        stale_clean = _strip_cache_meta(stale)
+        return _finalize(stale_clean, from_cache=True)
+
     return _finalize(result, from_cache=False)
 
 
@@ -961,6 +1418,18 @@ def get_anilist_detail(anilist_id: int, refresh: bool = False):
         cached = _strip_cache_meta(_kv_get(_ANILIST_DETAIL_SCOPE, cache_key, ttl_seconds=_ANILIST_DETAIL_TTL))
         if cached is not None:
             return {**cached, "cached": True}
+        # L3 命中 fresh 直接返回（跳过 AniList GraphQL）
+        l3_row = metadata_store.get_by_source('anilist', str(anilist_id))
+        if l3_row is not None:
+            if metadata_store.is_stale(l3_row):
+                try:
+                    from web.backend.services.metadata_maintenance import enqueue_refresh
+                    enqueue_refresh('anilist', str(anilist_id))
+                except Exception:
+                    pass
+            else:
+                full = metadata_store.row_to_full_dict(l3_row)
+                return {**full, "cached": True, "_from_metadata": True}
 
     from common.anilist_client import AniListClient
     client = AniListClient(
@@ -968,11 +1437,81 @@ def get_anilist_detail(anilist_id: int, refresh: bool = False):
         request_delay=cfg.request_delay,
         timeout=cfg.timeout_seconds,
     )
-    detail = client.detail(int(anilist_id))
-    if not detail:
-        raise HTTPException(status_code=404, detail="AniList 中未找到该条目")
-    _kv_set(_ANILIST_DETAIL_SCOPE, cache_key, detail)
-    return {**detail, "cached": False}
+    try:
+        detail = client.detail(int(anilist_id))
+    except Exception as e:
+        logger.warning(f"AniList detail {anilist_id} 上游异常: {e}")
+        detail = None
+    if detail:
+        _kv_set(_ANILIST_DETAIL_SCOPE, cache_key, detail)
+        _upsert_anilist_detail(detail)
+        return {**detail, "cached": False}
+    # 上游失败 → stale 兜底
+    fallback = _stale_fallback(_ANILIST_DETAIL_SCOPE, cache_key, _ANILIST_DETAIL_TTL)
+    if fallback is not None:
+        return fallback
+    raise HTTPException(status_code=404, detail="AniList 中未找到该条目")
+
+
+def _upsert_anilist_detail(d: dict) -> None:
+    """AniList detail dict → L3 upsert（含 characters/relations）。
+
+    title 字段语义同 _upsert_anilist_item：title = title_english, title_zh = NULL。
+    """
+    anilist_id = d.get('anilist_id') or d.get('id')
+    if not anilist_id:
+        return
+    try:
+        title_en = d.get('title_english') or d.get('title_romaji')
+        original_title = d.get('title_native') or d.get('title_romaji')
+        year = d.get('season_year')
+        ext = {
+            'title_romaji': d.get('title_romaji'),
+            'title_native': d.get('title_native'),
+            'idMal': d.get('idMal') or d.get('id_mal'),
+            'description': d.get('description'),
+            'banner_image': d.get('banner_image'),
+            'season': d.get('season'),
+            'season_year': d.get('season_year'),
+            'start_date': d.get('start_date'),
+            'end_date': d.get('end_date'),
+            'episodes': d.get('episodes'),
+            'duration': d.get('duration'),
+            'format': d.get('format'),
+            'status': d.get('status'),
+            'source': d.get('source'),
+            'country_of_origin': d.get('country_of_origin'),
+            'average_score': d.get('average_score'),
+            'mean_score': d.get('mean_score'),
+            'popularity': d.get('popularity'),
+            'favourites': d.get('favourites'),
+            'genres': d.get('genres') or [],
+            'tags': d.get('tags') or [],
+            'studios': d.get('studios') or [],
+            'trailer': d.get('trailer'),
+            'external_links': d.get('external_links') or [],
+            'characters': d.get('characters') or [],
+            'relations': d.get('relations') or [],
+        }
+        ext = {k: v for k, v in ext.items() if v is not None and v != []}
+        bridge_ids = {'anilist_id': int(anilist_id)}
+        if d.get('tmdb_id'):
+            bridge_ids['tmdb_id'] = int(d['tmdb_id'])
+        metadata_store.upsert(
+            source='anilist', source_id=str(anilist_id),
+            public={
+                'media_type': 'anime',
+                'title': title_en,             # 英文
+                'title_zh': None,              # AniList 无中文
+                'original_title': original_title,
+                'year': year,
+                'poster_url': d.get('cover_image'),
+            },
+            ext=ext,
+            bridge_ids=bridge_ids,
+        )
+    except Exception:
+        logger.exception(f"L3 upsert anilist detail 失败 anilist_id={anilist_id}")
 
 
 _DOUBAN_DETAIL_SCOPE = 'douban_detail'
@@ -997,6 +1536,23 @@ def get_douban_detail(douban_id: str, refresh: bool = False):
         cached = _strip_cache_meta(_kv_get(_DOUBAN_DETAIL_SCOPE, cache_key, ttl_seconds=_DOUBAN_DETAIL_TTL))
         if cached is not None:
             return {**cached, "cached": True}
+        # L3 命中 fresh 直接返回（豆瓣反爬最严，命中价值最高）
+        # 仅在 store_douban_full=true 时 L3 行才包含 summary 等正文字段
+        l3_row = metadata_store.get_by_source('douban', str(douban_id))
+        if l3_row is not None:
+            if metadata_store.is_stale(l3_row):
+                try:
+                    from web.backend.services.metadata_maintenance import enqueue_refresh
+                    enqueue_refresh('douban', str(douban_id))
+                except Exception:
+                    pass
+            else:
+                ext = l3_row.ext or {}
+                # summary 是详情页核心字段；store_douban_full=false 时 L3 不存 summary，
+                # 但事实字段（countries/genres）仍可用——也直接返回
+                if ext.get('summary') or not settings.metadata_store_douban_full:
+                    full = metadata_store.row_to_full_dict(l3_row)
+                    return {**full, "cached": True, "_from_metadata": True}
 
     from common.douban_client import DoubanClient
     client = DoubanClient(
@@ -1004,10 +1560,94 @@ def get_douban_detail(douban_id: str, refresh: bool = False):
         delay=settings.douban_request_delay,
     )
     detail = client.fetch_subject_summary(str(douban_id))
-    if not detail:
-        raise HTTPException(status_code=404, detail="豆瓣条目页拉取失败（可能反爬或条目不存在）")
 
     # 拉到正文才写缓存（避免反爬空结果占位）
-    if detail.get('summary'):
+    if detail and detail.get('summary'):
         _kv_set(_DOUBAN_DETAIL_SCOPE, cache_key, detail)
-    return {**detail, "cached": False}
+        _upsert_douban_detail(detail)
+        return {**detail, "cached": False}
+
+    # 上游失败 / 反爬 → 降级用过期 KV 兜底
+    stale = _kv_get(_DOUBAN_DETAIL_SCOPE, cache_key, ttl_seconds=_DOUBAN_DETAIL_TTL, allow_stale=True)
+    if stale is not None:
+        logger.info(
+            f"豆瓣 detail {douban_id} 上游失败，降级过期缓存"
+            f"（{stale.get('_cache_age_seconds')}s 前）"
+        )
+        return {**_strip_cache_meta(stale), "cached": True}
+
+    raise HTTPException(status_code=404, detail="豆瓣条目页拉取失败（可能反爬或条目不存在）")
+
+
+def _split_douban_title(raw: str) -> tuple:
+    """
+    把豆瓣条目页 title 拆成 (中文部分, 英文部分)。
+    示例：
+      "蝙蝠侠：黑暗骑士 The Dark Knight" → ("蝙蝠侠：黑暗骑士", "The Dark Knight")
+      "让子弹飞"                        → ("让子弹飞", "")
+      "The Matrix"                       → ("", "The Matrix")
+    策略：从首个 ASCII 字母位置切；前段视为中文，后段视为英文。
+    """
+    if not raw:
+        return ('', '')
+    import re
+    m = re.search(r'[A-Za-z]', raw)
+    if not m:
+        return (raw.strip(), '')
+    cut = m.start()
+    if cut == 0:
+        return ('', raw.strip())
+    return (raw[:cut].strip(), raw[cut:].strip())
+
+
+def _upsert_douban_detail(detail: dict) -> None:
+    """
+    豆瓣 detail → L3 upsert。按 settings.metadata_store_douban_full 裁剪字段。
+    full=true：含 summary/cast/director/poster_url（默认）
+    full=false：只存事实（countries/languages/genres/duration）
+    """
+    douban_id = str(detail.get('douban_id') or '')
+    if not douban_id:
+        return
+    try:
+        full_mode = bool(settings.metadata_store_douban_full)
+        # ext 公共部分（事实，永远存）
+        ext = {
+            'countries': detail.get('countries') or [],
+            'languages': detail.get('languages') or [],
+            'genres': detail.get('genres') or [],
+            'duration': detail.get('duration'),
+        }
+        if full_mode:
+            # 全字段模式：加上 summary / director / cast / 评分副本
+            ext.update({
+                'summary': detail.get('summary'),
+                'director': detail.get('director'),
+                'cast': detail.get('cast') or [],   # 字符串数组（已简化）
+                'rating': detail.get('rating'),     # 副本：SOT 在 media_ratings
+                'votes': detail.get('votes'),
+            })
+        ext = {k: v for k, v in ext.items() if v is not None and v != []}
+
+        # 豆瓣 detail.title 通常是 "<中文> <英文>" 拼接（如 "蝙蝠侠：黑暗骑士 The Dark Knight"）
+        # 拆分：从第一个 ASCII 字母位置切开
+        raw_title = (detail.get('title') or '').strip()
+        title_zh, title_en = _split_douban_title(raw_title)
+        public = {
+            'media_type': 'movie',   # 豆瓣条目无明确 movie/tv 区分；卡片展示默认 movie
+            'title': title_en or None,            # 英文部分（可能空）
+            'title_zh': title_zh or raw_title,    # 中文部分；拆不出来时整段当中文
+            'year': detail.get('year'),
+            'release_date': detail.get('release_date'),
+        }
+        if full_mode:
+            public['poster_url'] = detail.get('poster_url')
+        bridge_ids = {}
+        if detail.get('imdb_id'):
+            bridge_ids['imdb_id'] = detail['imdb_id']
+        metadata_store.upsert(
+            source='douban', source_id=douban_id,
+            public=public, ext=ext, bridge_ids=bridge_ids,
+        )
+    except Exception:
+        logger.exception(f"L3 upsert douban detail 失败 douban_id={douban_id}")

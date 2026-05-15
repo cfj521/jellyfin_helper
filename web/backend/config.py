@@ -136,6 +136,22 @@ class Settings(BaseSettings):
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     )
+    # 豆瓣 detail 后台预取 worker（保守策略，避免触发反爬封禁）
+    douban_worker_delay: float = _yaml_config.get('douban', {}).get('worker_delay', 30.0)
+    douban_worker_max_failures: int = _yaml_config.get('douban', {}).get('worker_max_failures', 5)
+    douban_worker_cooldown_seconds: int = _yaml_config.get('douban', {}).get('worker_cooldown_seconds', 3600)
+
+    # ---- 媒体元数据实体表（media_metadata）----
+    # 详见 docs/2026-05-15-media-metadata-store.md
+    # L3 长缓存：跨 discover 类 source 共享，独立 TTL + LRU
+    metadata_store_douban_full: bool = _yaml_config.get('metadata', {}).get('store_douban_full', True)
+    metadata_lru_keep_days: int = _yaml_config.get('metadata', {}).get('lru_keep_days', 365)
+    metadata_refresh_ttl_days: int = _yaml_config.get('metadata', {}).get('refresh_ttl_days', 30)
+    # 语言配置：刮削（上游拉数据语言）+ 显示（前端展示语言）
+    # 默认 'en'。豆瓣无独立配置项——爬虫源永远只能拿中文，按全局配置走时也会
+    # 自动 fallback 到 title_zh（豆瓣行 title_zh 永远有值）
+    metadata_scrape_language: str = _yaml_config.get('metadata', {}).get('scrape_language', 'en')
+    metadata_display_language: str = _yaml_config.get('metadata', {}).get('display_language', 'en')
 
     # OpenSubtitles 配置
     opensubtitles_api_key: str = _yaml_config.get('subtitle', {}).get('opensubtitles_api_key', '')

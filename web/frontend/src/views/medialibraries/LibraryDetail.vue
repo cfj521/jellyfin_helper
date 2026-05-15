@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container">
+  <div class="page-container lib-detail-root">
     <!-- 顶栏：返回 + 库名 + 操作 -->
     <div class="page-header">
       <div class="header-left">
@@ -103,139 +103,106 @@
       </el-card>
     </div>
 
-    <!-- toolbar 的 sticky 哨兵：sentinel 离开视口顶端 → toolbar 已 stuck → 加 .stuck class 触发 compact 样式
-         （CSS position:sticky 本身没"stuck"事件，IntersectionObserver 是标准 hack） -->
-    <div ref="toolbarSentinel" class="toolbar-sentinel" aria-hidden="true"></div>
-
-    <!-- 媒体处理工具栏：放在路径/统计之后；stick 到 .app-main 顶部，滚动时 paths/stats 滚走后自动收缩 -->
+    <!-- 媒体批量工具栏：inline 显示在路径/统计下方 -->
     <MediaToolbar
       v-if="library"
       ref="mediaToolbarRef"
       :scope="toolbarScope"
-      :class="{ 'is-stuck': toolbarStuck }"
       @clear-selection="clearSelection"
     />
 
-    <!-- 内容预览：直接展示在页面下方（替代原来的 tabs 默认页） -->
-    <el-card shadow="never" class="items-card">
-      <template #header>
-        <div class="card-header">
-          <!-- 排序栏 + 派生字段 filter（共用 chip 视觉，区分单选 sort 和多选 filter） -->
-          <div class="sort-bar">
-            <span class="sort-label">排序：</span>
-            <button
-              v-for="opt in sortOptions"
-              :key="opt.field"
-              :class="['sort-chip', { active: sortField === opt.field }]"
-              @click="setSort(opt.field)"
-            >
-              {{ opt.label }}
-              <el-icon v-if="sortField === opt.field" class="sort-arrow">
-                <CaretTop v-if="sortDir === 'asc'" />
-                <CaretBottom v-else />
-              </el-icon>
-            </button>
-            <!-- filter chips：紧跟在评分之后。点击切换 on/off，激活时显示 ✓
-                 跟 sort chip 视觉一致但语义是多选 filter（互相独立可叠加） -->
-            <span class="filter-divider" aria-hidden="true">·</span>
-            <button
-              :class="['sort-chip', 'filter-chip', { active: filterHasHealthIssue }]"
-              :title="filterHasHealthIssue ? '点击取消「健康度」过滤' : '只看健康有问题的条目（未识别 / 名称错配 / 嵌套主文件等）'"
-              @click="filterHasHealthIssue = !filterHasHealthIssue"
-            >
-              <el-icon v-if="filterHasHealthIssue" class="filter-check"><Check /></el-icon>
-              健康度
-            </button>
-            <button
-              :class="['sort-chip', 'filter-chip', { active: filterMissingTmdb }]"
-              :title="filterMissingTmdb ? '点击取消「缺 TMDB」过滤' : '只看没有 TMDB ID 的条目'"
-              @click="filterMissingTmdb = !filterMissingTmdb"
-            >
-              <el-icon v-if="filterMissingTmdb" class="filter-check"><Check /></el-icon>
-              缺 TMDB
-            </button>
-          </div>
-
-          <!-- 搜索框：跨整库按名称模糊搜（透传 Jellyfin SearchTerm，服务端做匹配） -->
-          <el-input
-            v-model="searchInput"
-            placeholder="按标题搜索本库..."
-            clearable
-            size="small"
-            style="width: 220px"
-            @keyup.enter="onSearchSubmit"
-            @clear="onSearchSubmit"
+    <!-- 排序/筛选栏：独立 sticky div，直接在 .app-main 的 flow 里 sticky，避免 el-card
+         overflow:hidden 把 sticky 的滚动容器限定为 el-card 自身（el-card 不滚 → 永不触发）-->
+    <div v-if="library" class="items-sort-bar">
+      <div class="card-header">
+        <!-- 排序栏 + 派生字段 filter -->
+        <div class="sort-bar">
+          <span class="sort-label">排序：</span>
+          <button
+            v-for="opt in sortOptions"
+            :key="opt.field"
+            :class="['sort-chip', { active: sortField === opt.field }]"
+            @click="setSort(opt.field)"
           >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
-
-          <!-- 年份过滤：多选，change 即提交 -->
-          <el-select
-            v-model="searchYears"
-            multiple
-            collapse-tags
-            collapse-tags-tooltip
-            filterable
-            allow-create
-            placeholder="年份"
-            size="small"
-            style="width: 160px"
-            @change="onSearchSubmit"
+            {{ opt.label }}
+            <el-icon v-if="sortField === opt.field" class="sort-arrow">
+              <CaretTop v-if="sortDir === 'asc'" />
+              <CaretBottom v-else />
+            </el-icon>
+          </button>
+          <span class="filter-divider" aria-hidden="true">·</span>
+          <button
+            :class="['sort-chip', 'filter-chip', { active: filterHasHealthIssue }]"
+            :title="filterHasHealthIssue ? '点击取消「健康度」过滤' : '只看健康有问题的条目'"
+            @click="filterHasHealthIssue = !filterHasHealthIssue"
           >
-            <el-option
-              v-for="y in yearOptions"
-              :key="y"
-              :label="String(y)"
-              :value="String(y)"
-            />
-          </el-select>
-
-          <!-- 风格过滤：多选；options 来自后端拉取的库内 Genres -->
-          <el-select
-            v-model="searchGenres"
-            multiple
-            collapse-tags
-            collapse-tags-tooltip
-            filterable
-            placeholder="风格/类型"
-            size="small"
-            style="width: 200px"
-            @change="onSearchSubmit"
-            @visible-change="onGenrePopoverOpen"
+            <el-icon v-if="filterHasHealthIssue" class="filter-check"><Check /></el-icon>
+            健康度
+          </button>
+          <button
+            :class="['sort-chip', 'filter-chip', { active: filterMissingTmdb }]"
+            :title="filterMissingTmdb ? '点击取消「缺 TMDB」过滤' : '只看没有 TMDB ID 的条目'"
+            @click="filterMissingTmdb = !filterMissingTmdb"
           >
-            <el-option
-              v-for="g in genreOptions"
-              :key="g"
-              :label="g"
-              :value="g"
-            />
-          </el-select>
-
-          <!-- 右侧组：进度统计 + Folder 开关 -->
-          <div class="header-right-group">
-            <!-- 无限滚动：展示"已加载 X / 共 Y"，替代原分页器 -->
-            <span v-if="itemsTotal > 0" class="items-progress">
-              已加载 {{ items.length }} / 共 {{ itemsTotal }}
-            </span>
-            <!-- 忽略 Folder 开关：与 Jellyfin Web 默认行为对齐 -->
-            <div class="toggle-folder">
-              <span class="switch-label">忽略 Folder</span>
-              <el-switch v-model="hideFolders" size="small" />
-              <el-tooltip placement="top">
-                <template #content>
-                  Jellyfin Web 默认隐藏 type=Folder 的未识别条目。<br/>
-                  打开后行为对齐 Jellyfin（仅在本工具中作为查找视图）。
-                </template>
-                <el-icon class="hint-icon"><InfoFilled /></el-icon>
-              </el-tooltip>
-            </div>
-            <!-- 派生字段 filter 已移到 sort-bar 里作 chip 形式（紧跟评分后）-->
-            <ViewModeToggle v-model="viewMode" />
-          </div>
+            <el-icon v-if="filterMissingTmdb" class="filter-check"><Check /></el-icon>
+            缺 TMDB
+          </button>
         </div>
-      </template>
+
+        <!-- 搜索框 -->
+        <el-input
+          v-model="searchInput"
+          placeholder="按标题搜索本库..."
+          clearable
+          size="small"
+          style="width: 220px"
+          @keyup.enter="onSearchSubmit"
+          @clear="onSearchSubmit"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
+
+        <!-- 年份过滤 -->
+        <el-select
+          v-model="searchYears"
+          multiple collapse-tags collapse-tags-tooltip filterable allow-create
+          placeholder="年份" size="small" style="width: 160px"
+          @change="onSearchSubmit"
+        >
+          <el-option v-for="y in yearOptions" :key="y" :label="String(y)" :value="String(y)" />
+        </el-select>
+
+        <!-- 风格过滤 -->
+        <el-select
+          v-model="searchGenres"
+          multiple collapse-tags collapse-tags-tooltip filterable
+          placeholder="风格/类型" size="small" style="width: 200px"
+          @change="onSearchSubmit"
+          @visible-change="onGenrePopoverOpen"
+        >
+          <el-option v-for="g in genreOptions" :key="g" :label="g" :value="g" />
+        </el-select>
+
+        <!-- 右侧组 -->
+        <div class="header-right-group">
+          <div class="toggle-folder">
+            <span class="switch-label">忽略 Folder</span>
+            <el-switch v-model="hideFolders" size="small" />
+            <el-tooltip placement="top">
+              <template #content>
+                Jellyfin Web 默认隐藏 type=Folder 的未识别条目。<br/>
+                打开后行为对齐 Jellyfin（仅在本工具中作为查找视图）。
+              </template>
+              <el-icon class="hint-icon"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </div>
+          <ViewModeToggle v-model="viewMode" />
+        </div>
+      </div>
+    </div>
+
+    <!-- 内容预览：el-card 只包正文，不再使用 header slot -->
+    <el-card shadow="never" class="items-card">
 
       <div v-if="itemsLoading" class="loading-block">
         <el-icon class="spin"><Loading /></el-icon> 加载中...
@@ -288,6 +255,28 @@
                 :class="`grid-health-dot--${row.health.level}`"
                 :title="(row.health.issues || []).map(i => i.label).join('\n')"
               />
+              <!-- Jellyfin 社区评分（5 角星）：点击展开多维评分；只 Movie/Series 才有意义 -->
+              <div
+                v-if="row.community_rating != null && (row.type === 'Movie' || row.type === 'Series')"
+                class="grid-rating"
+                :class="{ expanded: expandedRatings[row.id] }"
+                :title="expandedRatings[row.id] ? '点击收起多维评分' : '点击展开多维评分'"
+                @click.stop="toggleRatings(row)"
+              >
+                <el-icon><Star /></el-icon>
+                {{ row.community_rating.toFixed(1) }}
+              </div>
+              <!-- 5 角星正下方展开的多维评分（竖排）-->
+              <RatingsBadges
+                v-if="expandedRatings[row.id]
+                  && (row.type === 'Movie' || row.type === 'Series')
+                  && ratingFor(row)"
+                compact
+                direction="column"
+                :rating="ratingFor(row)"
+                class="grid-ratings-expanded"
+                @click.stop
+              />
             </div>
             <div class="grid-meta">
               <div class="grid-title" :title="row.name">{{ row.name }}</div>
@@ -311,13 +300,6 @@
         :indent="32"
         :row-class-name="rowClassName"
       >
-        <!-- 行号列：仅顶层行（Series/Movie）显示序号，Season/Episode 子行留空 -->
-        <el-table-column label="#" width="56" align="center" class-name="col-row-index">
-          <template #default="{ row, $index }">
-            <span v-if="(row.level || 0) === 0" class="row-index">{{ $index + 1 }}</span>
-          </template>
-        </el-table-column>
-
         <!--
           ============ 左侧大 cell（合并 选择/展开/海报/标题）============
           整行内容用一个 div 包起来，padding-left 按 row.level 缩进
@@ -871,7 +853,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, Refresh, MagicStick, Loading, Check, Close, Search, Link, Star,
@@ -993,12 +975,16 @@ const hasMore = ref(true)               // 后端还有下一批 = true
 const itemsTable = ref(null)
 const sentinelRef = ref(null)           // 底部"加载更多/已到底"提示行（仅视觉，不再做 IO 观察）
 const gridViewRef = ref(null)           // <div.grid-view> 的 DOM ref，用于 cardsPerRow 实测
-const toolbarSentinel = ref(null)       // toolbar 的 sticky 哨兵：在 toolbar 前面 1px 高占位
 const mediaToolbarRef = ref(null)
-const toolbarStuck = ref(false)         // sticky 状态：true 时给 toolbar 加 .is-stuck → CSS 切到 compact 样式
 const selectedItems = ref([])
 // 已展开行 id 集合（仅用于 chevron 状态显示；展开/折叠靠 el-table 内部 store 处理）
 const expandedSet = ref(new Set())
+// grid 视图：点击海报右上角 5 角星 → 展开/收起该卡的多维评分徽章
+const expandedRatings = reactive({})
+const toggleRatings = (row) => {
+  if (!row || !row.id) return
+  expandedRatings[row.id] = !expandedRatings[row.id]
+}
 // 已懒加载的子节点：{ [parentId]: childrenArray }
 // el-table lazy 模式下 row._children 不可靠（取决于 store 内部），自管一份用于级联选择
 const childrenMap = ref({})
@@ -1953,11 +1939,27 @@ const loadMore = (presetState = null) => {
 
 // 用 rect-walk 实测的滚动状态：scrolled = 已滚过的行数；visible = 视口内可见的行数
 // 返回对象以便 loadMore 用 visible 做 buffer，debug 用 total = scrolled + visible
+// 滚动容器是 .app-main（整页滚），rect-walk 用它的 getBoundingClientRect 顶/底做视口边界
 const _currentScrollState = () => {
-  const scroller = document.querySelector('.items-card > .el-card__body')
+  const scroller = document.querySelector('.app-main')
   if (!scroller) return { scrolled: 0, visible: 0 }
   const scrollerRect = scroller.getBoundingClientRect()
   let viewportTop = scrollerRect.top
+  // 多层 sticky 元素遮挡内容时把高度补偿到 viewportTop（rect-walk 判定行可见时算"未被遮挡区"）
+  // 仅当元素 *当前实际* 钉在视口顶端（rect.top 接近 scrollerRect.top）才补偿——
+  // 否则它还在自然位置（在视口下方），并不遮挡 items
+  const _stickyOffsetIfAtTop = (selector, expectedStickyTopPx = 0) => {
+    const el = document.querySelector(selector)
+    if (!el) return 0
+    const r = el.getBoundingClientRect()
+    // 误差容忍 2px：sticky 渲染时偶尔有 fractional pixel 偏移
+    // 返回"视口内可见高度"（处理 top:-20 这种向上 bleed 的情况，bar.top 在视口外）
+    return Math.abs(r.top - (scrollerRect.top + expectedStickyTopPx)) < 2
+      ? Math.max(0, r.bottom - scrollerRect.top)
+      : 0
+  }
+  // items-sort-bar sticky at top:0（.app-main padding-top 已被 :has 全局规则清 0）；被遮挡时补偿高度
+  viewportTop += _stickyOffsetIfAtTop('.items-sort-bar', 0)
   if (viewMode.value === 'list') {
     const header = document.querySelector('.items-card .el-table__header-wrapper')
     if (header) viewportTop += header.offsetHeight
@@ -2473,38 +2475,13 @@ const formatSize = (bytes) => {
   return `${bytes.toFixed(1)} ${units[i]}`
 }
 
-// toolbar sticky observer：监 sentinel 离开视口 → toolbar 进入 stuck 态切 compact 样式
-// sentinel 是 toolbar 前面的 1px 占位 div，paths/stats 滚走时它先离开 → toolbar 自然贴顶
-let toolbarStickyObserver = null
-const setupToolbarStickyObserver = () => {
-  if (toolbarStickyObserver) toolbarStickyObserver.disconnect()
-  const target = toolbarSentinel.value
-  if (!target) return
-  toolbarStickyObserver = new IntersectionObserver(([entry]) => {
-    // sentinel 离开视口（intersectionRatio=0 且在视口上方）→ toolbar stuck
-    toolbarStuck.value = !entry.isIntersecting && entry.boundingClientRect.top < 0
-  }, {
-    // rootMargin: 顶部边界往上 1px，避免临界值抖动
-    threshold: [0, 1],
-    rootMargin: '-1px 0px 0px 0px',
-  })
-  toolbarStickyObserver.observe(target)
-}
-
 onMounted(async () => {
   loadStatsPrefs(id.value)
   await loadAll()
-  // window capture 抓所有滚动事件（含 .app-main 内部 / .el-card__body 内部）
+  // window capture 抓所有滚动事件（含 .app-main 内部）
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
   writeDebug()
   updateScrollRow()
-  // 数据加载完 + DOM 挂上后再装 observer（sentinel 才有真实位置）
-  await nextTick()
-  setupToolbarStickyObserver()
-})
-
-onUnmounted(() => {
-  if (toolbarStickyObserver) toolbarStickyObserver.disconnect()
 })
 
 // 切换不同库（router 复用同组件）：渲染锁释放
@@ -2528,7 +2505,8 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 // 切视图（list ↔ grid）时回顶部 —— 列表和网格的行高 / 卡片高完全不一样，
 // 停留在 list 第 80 行的位置切到 grid 会落到完全不相关的卡片中间，体验割裂
 watch(viewMode, () => {
-  const scroller = document.querySelector('.items-card > .el-card__body')
+  // 整页改回外层滚动后，回顶 target = .app-main
+  const scroller = document.querySelector('.app-main')
   if (scroller) scroller.scrollTop = 0
 })
 
@@ -2540,6 +2518,18 @@ onUnmounted(() => {
   debugInfo.enabled = false
 })
 </script>
+
+<!--
+  非 scoped 全局规则：仅在本页挂载时（DOM 里存在 .lib-detail-root）生效，
+  把 .app-main 的 padding-top 清 0，让 .items-sort-bar 的 sticky top:0 真正贴在视口最顶。
+  组件卸载后 .lib-detail-root 消失，:has 不匹配 → .app-main 回到默认 padding:20px，对其他页面无影响。
+  顶部呼吸感由 .page-container 自身 padding-top: 20px 补回。
+-->
+<style>
+body:has(.lib-detail-root) .app-main {
+  padding-top: 0;
+}
+</style>
 
 <style lang="scss" scoped>
 .page-header {
@@ -2565,44 +2555,6 @@ onUnmounted(() => {
   }
 }
 
-// MediaToolbar 的 sticky 哨兵：1px 占位，IntersectionObserver 用它探测"已 stuck"
-.toolbar-sentinel {
-  height: 1px;
-  margin: 0;
-}
-
-// 把 MediaToolbar sticky 到 .app-main 顶部。is-stuck 时切到 compact 样式：
-//   - padding 收紧
-//   - 加阴影增强"浮起"感
-//   - 隐藏 scope-label / scope-icon（信息冗余且占垂直空间）
-:deep(.media-toolbar) {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  transition: padding 0.2s, box-shadow 0.2s, gap 0.2s, margin-bottom 0.2s;
-
-  &.is-stuck {
-    padding: 6px 14px;
-    gap: 4px;
-    margin-bottom: 8px;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-    border-radius: 0 0 8px 8px;
-    // 顶部贴边：sticky 后去掉上 border 让它显得跟 viewport 连成一体
-    border-top: none;
-
-    // 隐藏 scope 行（"作用范围: 当前库"那段），按钮区独占整行
-    .toolbar-scope {
-      display: none;
-    }
-
-    // 按钮稍微压扁，节省垂直空间
-    .toolbar-actions :deep(.el-button),
-    .toolbar-actions .el-button {
-      padding: 6px 10px;
-      font-size: 12px;
-    }
-  }
-}
 
 .top-row {
   display: grid;
@@ -2751,38 +2703,135 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 
-// 让整个页面 flex column 占满 .app-main 给的高度，items-card 自动吃剩余空间
+// 整页正常 block flow：滚动发生在外层 .app-main，paths/stats 滚走时 MediaToolbar 才能 sticky 起来
+// （之前的内部双层滚动模型让 MediaToolbar 的 position:sticky 永远不会触发 stuck，IO 检测也失效）
 .page-container {
-  display: flex;
-  flex-direction: column;
-  // 占满 .app-main content 区域（parent 已经扣掉 header + padding）
-  height: 100%;
+  // 不再 flex column / height:100%；让内容自然撑开高度，整页在 .app-main 里滚
+  // ★ 顶部 20px 补偿：因为 :has 全局规则在本页期间清掉了 .app-main 的 padding-top，
+  //   把那段呼吸感搬到 .page-container 自己身上（让 page-header / library 信息卡保持距视口顶的间距），
+  //   而 sticky 元素的 top:0 不受这层 padding 影响（sticky 锚点是滚动祖先 .app-main 的 padding-box）
+  padding-top: 20px;
+}
+
+// 排序/筛选栏：独立 sticky，直接在 .app-main 的 flow 里，不受 el-card overflow 限制
+// 视觉上与下方 el-card 拼合（下边框缺省，由 el-card 上边框补）
+// ★ 配合本文件末尾 :has 全局规则：本页期间 .app-main 的 padding-top 被清 0，所以这里
+//   直接 top: 0 就能贴视口顶（padding 保持对称 12/12，无 bleed）
+.items-sort-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #fff;
+  border: 1px solid var(--el-card-border-color, #e4e7ed);
+  border-radius: var(--el-card-border-radius, 4px) var(--el-card-border-radius, 4px) 0 0;
+  padding: 12px 20px;
+  margin-bottom: 0;
+
+  // 忽略 Folder 开关（右侧）
+  .toggle-folder {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+
+    .switch-label {
+      font-size: 13px;
+      color: #475569;
+    }
+
+    .hint-icon {
+      color: #94a3b8;
+      cursor: help;
+      font-size: 14px;
+    }
+  }
+
+  // 排序栏：chip 风格，活动项品牌色 + 方向箭头
+  .sort-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+
+    .sort-label {
+      font-size: 13px;
+      color: #64748b;
+      margin-right: 4px;
+    }
+
+    .sort-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: #475569;
+      background: transparent;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.15s;
+
+      &:hover {
+        border-color: #c7d2fe;
+        color: #4f46e5;
+      }
+
+      &.active {
+        background: #6366f1;
+        border-color: #6366f1;
+        color: #fff;
+        font-weight: 500;
+
+        .sort-arrow {
+          font-size: 11px;
+        }
+      }
+
+      // filter-chip：跟 sort-chip 同款胶囊形，激活态琥珀色（过滤器开启状态区分）
+      &.filter-chip {
+        &.active {
+          background: #f59e0b;
+          border-color: #f59e0b;
+          color: #fff;
+        }
+        .filter-check {
+          font-size: 11px;
+          margin-right: 2px;
+        }
+      }
+    }
+
+    // sort chip 和 filter chip 之间的分隔点
+    .filter-divider {
+      color: #cbd5e1;
+      margin: 0 2px;
+      user-select: none;
+    }
+  }
+
+  // 表头右侧组：进度文字 + Folder 开关 + 视图切换，整体推到行尾
+  .header-right-group {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+  }
+
+  .header-pagination {
+    flex-shrink: 0;
+  }
 }
 
 .items-card {
   margin-top: 0;
-  flex: 1;
-  // 关键：min-height: 0 让 flex 子元素能正确收缩；不然内容会撑高 page-container 出页面滚动条
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-
-  // 内部 body 占满 card 剩余高度，内容溢出在 body 内部滚动（不是页面整体）
-  :deep(.el-card__body) {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: auto;
-  }
-
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
+  // el-card 顶部圆角去掉、顶边去掉：让上方 sort-bar 的 border-bottom 充当两者共用的分割线
+  // （避免 sort-bar 底边 + el-card 顶边叠成双线）
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 
   .poster-thumb {
     // ★ 关键：必须 inline-flex（不能 block flex），否则会把 .cell 里 Element Plus 注入的
@@ -3073,91 +3122,6 @@ onUnmounted(() => {
     }
   }
 
-  // 忽略 Folder 开关（卡片头右侧）
-  .toggle-folder {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;  // 推到最右
-
-    .switch-label {
-      font-size: 13px;
-      color: #475569;
-    }
-
-    .hint-icon {
-      color: #94a3b8;
-      cursor: help;
-      font-size: 14px;
-    }
-  }
-
-  // 排序栏：chip 风格，活动项品牌色 + 方向箭头
-  .sort-bar {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
-    // 不再 margin-right: auto —— toggle-folder 用 margin-left: auto 推到右
-
-    .sort-label {
-      font-size: 13px;
-      color: #64748b;
-      margin-right: 4px;
-    }
-
-    .sort-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 2px;
-      padding: 4px 10px;
-      font-size: 12px;
-      color: #475569;
-      background: transparent;
-      border: 1px solid #e2e8f0;
-      border-radius: 14px;
-      cursor: pointer;
-      transition: all 0.15s;
-
-      &:hover {
-        border-color: #c7d2fe;
-        color: #4f46e5;
-      }
-
-      &.active {
-        background: #6366f1;
-        border-color: #6366f1;
-        color: #fff;
-        font-weight: 500;
-
-        .sort-arrow {
-          font-size: 11px;
-        }
-      }
-
-      // filter-chip：跟 sort-chip 同款胶囊形，但激活态用琥珀色区分（表达"过滤器开启"而非"排序选中"）
-      // 视觉上一组按钮里能看出"哪几个是单选 sort，哪几个是多选 filter"
-      &.filter-chip {
-        &.active {
-          background: #f59e0b;
-          border-color: #f59e0b;
-          color: #fff;
-        }
-        .filter-check {
-          font-size: 11px;
-          margin-right: 2px;
-        }
-      }
-    }
-
-    // sort chip 和 filter chip 之间的分隔点
-    .filter-divider {
-      color: #cbd5e1;
-      margin: 0 2px;
-      user-select: none;
-    }
-  }
-
   // ---- 网格视图 ----
   // 16:9 横版卡片：宽度固定 280px、海报高度固定 158px（≈ 280 * 9/16）。
   // 不依赖 aspect-ratio（在 flex column / grid stretch 场景偶尔被外层布局规则覆盖），
@@ -3265,6 +3229,40 @@ onUnmounted(() => {
 
     &--error   { background: #ef4444; }
     &--warning { background: #f59e0b; }
+  }
+  // 海报右上角的 jellyfin 评分胶囊（5 角星 + 数字）—— 点击展开多维评分
+  .grid-rating {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #ffd700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+    z-index: 3;
+    &:hover { background: rgba(0, 0, 0, 0.85); transform: scale(1.05); }
+    &.expanded {
+      background: rgba(99, 102, 241, 0.92);
+      color: #fff;
+    }
+  }
+  // 5 角星正下方展开的多维评分（竖排，半透明背景在海报上可读）
+  .grid-ratings-expanded {
+    position: absolute;
+    top: 32px;
+    right: 6px;
+    z-index: 2;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+    border-radius: 4px;
+    max-width: calc(100% - 12px);
   }
   .grid-meta {
     padding: 10px 12px 12px;
@@ -3440,29 +3438,6 @@ onUnmounted(() => {
     &.level-error   { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.20); }
   }
 
-  // 表头右侧组：分页 + Folder 开关绑定在一起整体推到行尾
-  .header-right-group {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-shrink: 0;
-    flex-wrap: nowrap;  // 组内不允许换行，分页和开关永远贴一起
-  }
-
-  // 无限滚动进度文字（替代原 el-pagination）
-  .items-progress {
-    flex-shrink: 0;
-    color: #6b7280;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  // 旧 header-pagination 已被无限滚动取代；样式保留以兼容其他可能引用，flex-shrink 防止压缩
-  .header-pagination {
-    flex-shrink: 0;
-  }
 }
 
 // 无限滚动哨兵：默认极薄（仅作 IntersectionObserver 触发器），
@@ -3470,13 +3445,6 @@ onUnmounted(() => {
 // 无限滚动哨兵：仅作位置锚点，不可见
 .scroll-sentinel {
   height: 1px;
-}
-
-// 行号列：弱化展示
-.row-index {
-  color: #94a3b8;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 @keyframes spin {
@@ -3689,6 +3657,8 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 @keyframes spin {
