@@ -34,6 +34,7 @@ def copy_file_with_progress(
     progress_cb: Optional[Callable[[int, int], None]] = None,
     buffer_size: int = DEFAULT_BUFFER,
     resume: bool = True,
+    on_displace: Optional[Callable[[Path], None]] = None,
 ) -> int:
     """
     流式复制单文件，progress_cb(bytes_done, bytes_total) 每个 buffer 块回调一次。
@@ -46,6 +47,9 @@ def copy_file_with_progress(
         视为跨种子冲突（D7 PROPER/REPACK），抛 CrossTorrentCollisionError，由上层决策
       - 目标已存在但 size > 源 size 或 mtime 异常 → 删除后从头复制（防文件损坏）
       - 目标不存在 → 从头复制
+
+    on_displace: 即将硬删 dst 之前的钩子（异常分支），调用方可以把旧文件转入 trash。
+                 不提供时保留旧行为（直接 unlink）。
     """
     src = Path(src)
     dst = Path(dst)
@@ -97,14 +101,27 @@ def copy_file_with_progress(
             open_mode = 'ab'
         else:
             # 异常（dst_size > total 或为 0 或 stat 失败）→ 重头复制
+            # 这里**不再直接 unlink**：先调 on_displace 让上层把旧文件移到 trash（保命）。
+            # 没注入钩子时退回到原 unlink 行为（兜底，不阻断流水线）。
             logger.warning(
                 f"copy: dst 状态异常 {dst} "
-                f"(dst_size={dst_size}, total={total}) → 删除后重头复制"
+                f"(dst_size={dst_size}, total={total}) → "
+                f"{'on_displace 钩子' if on_displace else 'unlink'} 后重头复制"
             )
-            try:
-                dst.unlink()
-            except Exception as e:
-                logger.warning(f"copy: 删除旧 dst 失败 {dst}: {e}（继续，open 会覆盖）")
+            if on_displace is not None:
+                try:
+                    on_displace(dst)
+                except Exception as e:
+                    logger.warning(f"copy: on_displace 钩子抛错 {dst}: {e}（兜底 unlink）")
+                    try:
+                        dst.unlink()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    dst.unlink()
+                except Exception as e:
+                    logger.warning(f"copy: 删除旧 dst 失败 {dst}: {e}（继续，open 会覆盖）")
 
     if skip == 0:
         # 全新复制：明确记录 src→dst + size，事后可追溯哪个文件什么时候被搬过

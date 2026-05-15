@@ -84,7 +84,7 @@ STATUS_SUCCEEDED     = 'succeeded'      # 该 phase 成功（即将进入下一 
 STATUS_FAILED        = 'failed'         # 失败 —— sweeper 重派
 STATUS_WARNED        = 'warned'         # 非阻断警告（如 jellyfin refresh 调用失败但继续）
 STATUS_SKIPPED       = 'skipped'        # 该 phase 因条件不适用跳过
-STATUS_NEEDS_REVIEW  = 'needs_review'   # 等用户审核（仅 PHASE_ANALYZING）
+STATUS_NEEDS_REVIEW  = 'needs_review'   # 等用户审核（PHASE_ANALYZING 低置信识别 / PHASE_COPYING 跨种子目标冲突）
 
 # downloading 阶段专属
 STATUS_METADATA_PENDING = 'metadata_pending'   # qB metaDL/allocating

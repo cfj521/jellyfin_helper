@@ -491,6 +491,10 @@ export const dispatchApi = {
   restoreDismissed: (hash) => api.post(`/api/dispatch/needs-review/${hash}/restore`),
   adoptScanNow: () => api.post('/api/dispatch/adopt/scan-now'),
   retryDispatchRow: (hash) => api.post(`/api/dispatch/dispatch-map/${hash}/retry`),
+  // copy-phase 跨种子冲突决策
+  getCopyConflict:     (hash) => api.get(`/api/dispatch/copy-conflict/${hash}`),
+  copyConflictReplace: (hash) => api.post(`/api/dispatch/copy-conflict/${hash}/replace`),
+  copyConflictSkip:    (hash) => api.post(`/api/dispatch/copy-conflict/${hash}/skip`),
 }
 
 export default api

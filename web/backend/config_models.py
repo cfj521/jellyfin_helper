@@ -35,13 +35,21 @@ class SeedingConfig(BaseModel):
 
 class DispatchRule(BaseModel):
     """
-    单个分类的目标库 + 路径模板。
+    单个分类的目标库 + 路径模板 + 同源去重策略。
     location_template 渲染成目录；file_template 渲染成目录内文件 stem（自动加扩展名）。
     move_mode 已迁移到 DispatchConfig.default_move_mode（统一全局）。
+
+    duplicate_policy：目标位置已被其他 dispatch_map 行占用时怎么办：
+      - 'higher_quality_wins'：用质量 tier 比较，新种子更高 → 旧文件入 trash 再覆盖；
+                              同等或更低 → 跳过（保留旧的）
+      - 'always_skip'：永远跳过新种子（保守，番号默认）
+      - 'always_replace'：永远用新的覆盖（旧文件先入 trash 兜底）
+      - 'needs_review'：标 phase_status=needs_review，等用户点 UI 决策
     """
     library_id: str = ''                   # jellyfin 库 ID（前端选）
     location_template: str = '{library_root}/{title}'
     file_template: str = '{title}'         # 目录内的文件 stem（不含扩展名）
+    duplicate_policy: str = 'higher_quality_wins'
 
 
 class DispatchConfig(BaseModel):
@@ -62,18 +70,22 @@ class DispatchConfig(BaseModel):
         'movie': DispatchRule(
             location_template='{library_root}/{title} ({year})',
             file_template='{title} ({year})',
+            duplicate_policy='higher_quality_wins',
         ),
         'tv': DispatchRule(
             location_template='{library_root}/{series_name}/Season {season:02d}',
             file_template='({series_name})S{season:02d}E{episode:02d}',
+            duplicate_policy='higher_quality_wins',
         ),
         'anime': DispatchRule(
             location_template='{library_root}/{anime_name}',
             file_template='({anime_name}){episode:03d}',
+            duplicate_policy='higher_quality_wins',
         ),
         'adult': DispatchRule(
             location_template='{library_root}/{code}',
             file_template='{code}({title})',
+            duplicate_policy='always_skip',  # 番号同 code 不轻易覆盖
         ),
     })
 

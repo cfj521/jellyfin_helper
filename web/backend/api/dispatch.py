@@ -1264,3 +1264,142 @@ def retry_dispatch_row(torrent_hash: str, db: Session = Depends(get_db)):
     _fire_all_triggers()
     logger.info(f"retry: {h[:16]}.. {old_phase} → {new_phase}（用户从 UI 重试）")
     return {'ok': True, 'torrent_hash': h, 'old_phase': old_phase, 'new_phase': new_phase}
+
+
+# ============================================================================
+# copy-phase 冲突决策（phase=copying, phase_status=needs_review）
+# 由 organizer 的 duplicate_resolver 或 copier 的 CrossTorrentCollisionError 触发
+# ============================================================================
+
+def _load_copy_conflict(row: DownloadDispatchMap) -> Dict:
+    """从 row.error_log JSON 反序列化冲突上下文（duplicate.py 写入的格式）。"""
+    import json as _json
+    if not row.error_log:
+        raise HTTPException(status_code=400, detail='缺少冲突上下文（error_log 为空）')
+    try:
+        info = _json.loads(row.error_log)
+        if not isinstance(info, dict):
+            raise ValueError('error_log 不是 dict')
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f'error_log 解析失败: {e}')
+    return info
+
+
+def _assert_copy_conflict(row: DownloadDispatchMap) -> Dict:
+    from tools.dispatch.phases import PHASE_COPYING, STATUS_NEEDS_REVIEW
+    if row.phase != PHASE_COPYING or row.phase_status != STATUS_NEEDS_REVIEW:
+        raise HTTPException(
+            status_code=400,
+            detail=f'当前不在 copy-phase needs_review（phase={row.phase}/{row.phase_status}）',
+        )
+    return _load_copy_conflict(row)
+
+
+@router.get('/copy-conflict/{torrent_hash}')
+def get_copy_conflict(torrent_hash: str, db: Session = Depends(get_db)):
+    """返回 copy-phase 冲突上下文，给前端审核 modal 展示用。"""
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+    info = _assert_copy_conflict(row)
+    return {
+        'torrent_hash': h,
+        'phase': row.phase,
+        'phase_status': row.phase_status,
+        'title': row.title,
+        'media_type': row.media_type,
+        'conflict': info,
+    }
+
+
+@router.post('/copy-conflict/{torrent_hash}/replace')
+def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_db)):
+    """
+    用户选择"用新种子覆盖"：
+      1. 把对家行（占用 dst 的那条）的 dispatched_files 里这条路径移除（仍保留行，
+         它的副本还在 NVMe，仍可做种 / 配额清理）
+      2. 如果对家 dst 文件还在，移到 trash（_replaced/<ts>_<old_hash[:8]>/）
+      3. 本行 phase 重置回 copying/running，pipeline_worker 下一轮重跑
+    """
+    import json as _json
+    import shutil as _shutil
+    import time as _time
+    from pathlib import Path as _Path
+    from tools.dispatch.phases import PHASE_COPYING, STATUS_RUNNING
+
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+    info = _assert_copy_conflict(row)
+
+    dst_str = info.get('dst')
+    existing_hash = (info.get('existing_hash') or '').lower()
+    if not dst_str or not existing_hash:
+        raise HTTPException(status_code=400, detail='冲突上下文不完整（缺 dst / existing_hash）')
+
+    # 1. 把对家 dispatched_files 里这条路径移除
+    other = db.query(DownloadDispatchMap).filter_by(torrent_hash=existing_hash).first()
+    if other and other.dispatched_files:
+        new_list = [p for p in other.dispatched_files if p != dst_str]
+        if len(new_list) != len(other.dispatched_files):
+            other.dispatched_files = new_list
+            logger.info(
+                f"copy-conflict replace: 对家 {existing_hash[:16]}.. dispatched_files "
+                f"移除 {dst_str}（剩 {len(new_list)} 条）"
+            )
+
+    # 2. 旧物理文件入 trash
+    trash_dir = _Path(settings.dispatch.trash_dir) if settings.dispatch.trash_dir else None
+    dst_path = _Path(dst_str)
+    moved_to = None
+    if dst_path.exists() and trash_dir:
+        ts = _time.strftime('%Y%m%d-%H%M%S')
+        sub = trash_dir / '_replaced' / f"{ts}_{existing_hash[:8]}"
+        sub.mkdir(parents=True, exist_ok=True)
+        target = sub / dst_path.name
+        try:
+            _shutil.move(str(dst_path), str(target))
+            moved_to = str(target)
+            logger.info(f"copy-conflict replace: 旧文件入 trash {dst_path} → {target}")
+        except Exception as e:
+            logger.warning(f"copy-conflict replace: 入 trash 失败 {dst_path} → {target}: {e}")
+
+    # 3. 本行重置到 copying/running，让 worker 重新跑
+    row.phase = PHASE_COPYING
+    row.phase_status = STATUS_RUNNING
+    row.status_message = f'用户决策"覆盖" → 重新复制（旧文件已入 trash）'
+    row.error_log = None
+    db.commit()
+
+    try:
+        from tools.dispatch.pipeline_worker import trigger as _pt
+        _pt.set()
+    except Exception:
+        pass
+    return {'ok': True, 'torrent_hash': h, 'displaced_to': moved_to}
+
+
+@router.post('/copy-conflict/{torrent_hash}/skip')
+def resolve_copy_conflict_skip(torrent_hash: str, db: Session = Depends(get_db)):
+    """
+    用户选择"保留旧的，跳过本种子"：本行标 succeeded/skipped + 跳出 copy 进入终态。
+    不动 qB 那边（用户仍可手动从 qB 移除）。
+    """
+    from tools.dispatch.phases import PHASE_COPYING, STATUS_SKIPPED
+
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+    _assert_copy_conflict(row)
+
+    row.phase_status = STATUS_SKIPPED
+    row.status_message = '用户决策"跳过" — 旧版本仍在库'
+    row.dispatched_files = []
+    # phase 保留 copying：跟"已完成→all_jobs_done"区分开，这是用户拒收的终态分支
+    # sweeper 不会再 retry skipped 状态
+    db.commit()
+    logger.info(f"copy-conflict skip: {h[:16]}.. 用户跳过")
+    return {'ok': True, 'torrent_hash': h}

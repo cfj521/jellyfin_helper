@@ -18,10 +18,14 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from tools.dispatch.copier import copy_file_with_progress
+
+# duplicate resolver 注入点：organizer 不直接依赖 DB，由调用方传入 callable。
+# 签名: (src: Path, dst: Path) -> 'proceed' | 'skip'；抛 DuplicateConflictError 让上层接
 
 logger = logging.getLogger(__name__)
 
@@ -124,18 +128,22 @@ class TorrentOrganizer:
         metadata: Dict,
         rule: Dict,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
+        duplicate_resolver: Optional[Callable[[Path, Path], str]] = None,
     ) -> Dict:
         """
         把 src_root 整理复制到 target_dir。
 
         rule: 配置中该 media_type 的 DispatchRule（含 file_template 等）
         metadata: {title, year, series_name, season, episode, code, anime_name, ...}
+        duplicate_resolver: 渲染 dst 后调一次，返回 'proceed'/'skip'，
+                            抛 DuplicateConflictError → organize 也透传给调用方
 
         返回: {
             'dispatched_files': [str(absolute target paths)],
             'src_files': [...],
             'junk_count': N,
             'bytes_copied': total,
+            'skipped_files': [(src, dst, reason)],   # 因 duplicate policy 跳过的
         }
         """
         src_root = Path(src_root)
@@ -162,6 +170,8 @@ class TorrentOrganizer:
         if not rule_with_tpl.get('file_template'):
             rule_with_tpl['file_template'] = _DEFAULT_FILE_TEMPLATES.get(media_type, '')
 
+        skipped_files: List[Tuple[str, str, str]] = []
+
         if media_type in ('tv', 'anime') and len(videos) > 1:
             # 整季 pack：每个 video 按 SxxExx 拆到对应 Season 目录
             for v in videos:
@@ -179,11 +189,20 @@ class TorrentOrganizer:
                         f"video {v.name} 提不出 SxxExx，落到顶层 {dst}（建议手动重命名后再扫库）"
                     )
 
+                # duplicate-policy 决策点：proceed / skip / raise DuplicateConflictError
+                if duplicate_resolver is not None:
+                    action = duplicate_resolver(v, dst)
+                    if action == 'skip':
+                        skipped_files.append((str(v), str(dst), 'duplicate_policy'))
+                        logger.info(f"organize: skip {v.name} (duplicate_policy)")
+                        continue
+
                 bytes_copied += copy_file_with_progress(
                     v, dst,
                     progress_cb=lambda d, t, base=bytes_copied, name=v.name: (
                         progress_cb(base + d, bytes_total, name) if progress_cb else None
                     ),
+                    on_displace=self._displace_to_trash,
                 )
                 dispatched.append(str(dst))
                 # 字幕跟随
@@ -192,11 +211,20 @@ class TorrentOrganizer:
             # 单文件场景（电影 / 单集 / 番号）
             for v in videos:
                 dst = self._compose_movie_path(target_dir, v, rule_with_tpl, metadata)
+
+                if duplicate_resolver is not None:
+                    action = duplicate_resolver(v, dst)
+                    if action == 'skip':
+                        skipped_files.append((str(v), str(dst), 'duplicate_policy'))
+                        logger.info(f"organize: skip {v.name} (duplicate_policy)")
+                        continue
+
                 bytes_copied += copy_file_with_progress(
                     v, dst,
                     progress_cb=lambda d, t, base=bytes_copied, name=v.name: (
                         progress_cb(base + d, bytes_total, name) if progress_cb else None
                     ),
+                    on_displace=self._displace_to_trash,
                 )
                 dispatched.append(str(dst))
                 self._dispatch_subs_for_video(v, dst, subs, dispatched)
@@ -206,9 +234,34 @@ class TorrentOrganizer:
             'src_files': [str(v) for v in videos],
             'junk_count': len(junk),
             'bytes_copied': bytes_copied,
+            'skipped_files': skipped_files,
         }
 
     # ---- helpers ----
+
+    def _displace_to_trash(self, dst: Path):
+        """copy_file_with_progress 的异常分支钩子：把要被覆盖的旧 dst 转入 trash 而不是 unlink。
+        路径：<trash_dir>/_displaced/<YYYYMMDD-HHMMSS>/<basename>"""
+        if not self.trash_dir:
+            logger.warning(f"trash_dir 未配置，displace 退回 unlink {dst}")
+            try:
+                dst.unlink()
+            except Exception as e:
+                logger.warning(f"unlink 失败 {dst}: {e}")
+            return
+        ts = time.strftime('%Y%m%d-%H%M%S')
+        sub = self.trash_dir / '_displaced' / ts
+        sub.mkdir(parents=True, exist_ok=True)
+        target = sub / dst.name
+        try:
+            shutil.move(str(dst), str(target))
+            logger.info(f"displace → trash: {dst} → {target}")
+        except Exception as e:
+            logger.warning(f"displace 入 trash 失败 {dst} → {target}: {e}（unlink 兜底）")
+            try:
+                dst.unlink()
+            except Exception as e2:
+                logger.warning(f"unlink 兜底也失败 {dst}: {e2}")
 
     def _move_to_trash(self, src_root: Path, junk_file: Path):
         """把 junk_file 移到 trash_dir，保持相对结构便于事后人工恢复。"""

@@ -164,6 +164,73 @@
              连接配置仅在 config.yaml 里维护（database: 段），
              form.database 保留以便保存时不丢字段，但不再渲染表单 -->
 
+        <!-- ===== 媒体元数据 ===== -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge meta-badge">META</span>
+              <span>媒体元数据</span>
+            </div>
+          </template>
+
+          <!-- 缓存策略 -->
+          <el-divider content-position="left">
+            <span class="sub-section-title">缓存</span>
+          </el-divider>
+          <el-form :model="form.metadata" label-width="160px" @submit.prevent>
+            <el-form-item label="保存豆瓣完整信息">
+              <el-switch v-model="form.metadata.store_douban_full" />
+              <span class="form-hint" style="margin-left: 8px">
+                关闭后只保存类型/时长等基本信息，不保存简介/海报/演员
+              </span>
+            </el-form-item>
+            <el-form-item label="缓存保留天数">
+              <el-input-number
+                v-model="form.metadata.lru_keep_days"
+                :min="0" :max="3650" :step="30"
+                controls-position="right"
+              />
+              <span class="form-hint" style="margin-left: 8px">
+                超过该天数未访问的条目会被清掉；填 0 永不清理
+              </span>
+            </el-form-item>
+            <el-form-item label="自动更新天数">
+              <el-input-number
+                v-model="form.metadata.refresh_ttl_days"
+                :min="1" :max="365" :step="1"
+                controls-position="right"
+              />
+              <span class="form-hint" style="margin-left: 8px">
+                超过该天数后台自动重新获取
+              </span>
+            </el-form-item>
+          </el-form>
+
+          <!-- 元数据语言 -->
+          <el-divider content-position="left">
+            <span class="sub-section-title">语言</span>
+          </el-divider>
+          <el-form :model="form.metadata" label-width="160px" @submit.prevent>
+            <el-form-item label="刮削语言">
+              <el-select v-model="form.metadata.scrape_language" style="width: 200px">
+                <el-option label="English" value="en" />
+                <el-option label="简体中文" value="zh" />
+                <el-option label="日本語" value="ja" />
+                <el-option label="한국어" value="ko" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="显示语言">
+              <el-select v-model="form.metadata.display_language" style="width: 200px">
+                <el-option label="English" value="en" />
+                <el-option label="简体中文" value="zh" />
+              </el-select>
+            </el-form-item>
+            <div class="form-hint" style="margin: -4px 0 4px 160px">
+              豆瓣源不受此选项影响，始终为中文
+            </div>
+          </el-form>
+        </el-card>
+
         <!-- ===== 工具路径 section（原独立 tab 并入此处）===== -->
         <el-card shadow="never" class="cfg-card">
           <template #header>
@@ -343,30 +410,80 @@
           </el-form>
         </el-card>
 
-        <!-- 豆瓣 -->
+        <!-- 豆瓣（评分 + 片单 合并卡片）-->
         <el-card shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
               <span class="badge douban">豆</span>
-              <span>豆瓣评分（HTML 爬虫）</span>
+              <span>豆瓣（评分 + 片单，HTML 爬虫）</span>
               <el-tag size="small" :type="form.douban.enabled ? 'success' : 'info'" effect="plain">
                 {{ form.douban.enabled ? '已启用' : '未启用' }}
               </el-tag>
             </div>
           </template>
-          <el-form :model="form.douban" label-width="120px">
+
+          <el-form :model="form.douban" label-width="140px">
             <el-form-item label="启用">
               <el-switch v-model="form.douban.enabled" />
-              <div class="form-hint">
-                豆瓣无官方公开 API，靠抓 HTML；首次访问异步爬取（10-20s），结果落库 30 天内不再重抓
-              </div>
+              <div class="form-hint">关闭后评分和片单同时不工作</div>
             </el-form-item>
+
+            <!-- 前台同步路径 -->
+            <el-divider content-position="left">
+              <span class="sub-section-title">前台请求（用户点开详情/简介时同步抓）</span>
+            </el-divider>
             <el-form-item label="请求延迟(秒)">
               <el-input-number v-model="form.douban.request_delay" :min="0" :max="60" :step="1" />
-              <div class="form-hint">豆瓣反爬较严，建议 ≥5s。短了容易被临时封 IP</div>
+              <div class="form-hint">用户主动触发的同步抓取间隔，建议 ≥5</div>
             </el-form-item>
-            <el-form-item label="缓存 TTL(天)">
+            <el-form-item label="评分缓存(天)">
               <el-input-number v-model="form.douban.cache_ttl_days" :min="1" :max="365" />
+              <div class="form-hint">单条评分缓存有效期（MediaRating 表 douban_fetched_at）</div>
+            </el-form-item>
+            <el-form-item label="片单缓存(天)" v-if="form.douban_lists">
+              <el-input-number v-model="form.douban_lists.cache_days" :min="1" :max="30" />
+              <div class="form-hint">doulist 整页结果缓存。片单几乎不变，建议 ≥3</div>
+            </el-form-item>
+
+            <!-- 后台预取路径 -->
+            <el-divider content-position="left">
+              <span class="sub-section-title">后台预取 worker（自动批量补 detail，避开反爬）</span>
+            </el-divider>
+            <el-form-item label="抓取间隔(秒)">
+              <el-input-number v-model="form.douban.worker_delay" :min="5" :max="300" :step="5" />
+              <div class="form-hint">后台串行任务的请求间隔。比前台保守，≥30 推荐</div>
+            </el-form-item>
+            <el-form-item label="失败熔断阈值">
+              <el-input-number v-model="form.douban.worker_max_failures" :min="1" :max="50" :step="1" />
+              <div class="form-hint">连续失败 N 次后 worker 进冷却</div>
+            </el-form-item>
+            <el-form-item label="冷却时长(秒)">
+              <el-input-number v-model="form.douban.worker_cooldown_seconds" :min="60" :max="86400" :step="300" />
+              <div class="form-hint">冷却期间不消费队列，默认 3600 = 1h</div>
+            </el-form-item>
+
+            <!-- 片单白名单 -->
+            <el-divider content-position="left">
+              <span class="sub-section-title">片单白名单（Discover 豆瓣 tab 下拉）</span>
+            </el-divider>
+            <el-form-item label="片单列表" v-if="form.douban_lists">
+              <div class="doulist-rows">
+                <div v-for="(item, idx) in form.douban_lists.lists" :key="idx" class="doulist-row">
+                  <el-input v-model="item.name" placeholder="显示名（如 高分韩剧）" style="width: 200px" />
+                  <el-input v-model="item.doulist_id" placeholder="doulist_id（数字 / chart / nowplaying / upcoming）" style="width: 220px" />
+                  <el-select v-model="item.media_type" style="width: 100px">
+                    <el-option label="电影" value="movie" />
+                    <el-option label="剧集" value="tv" />
+                  </el-select>
+                  <el-button text type="danger" :icon="Delete" @click="form.douban_lists.lists.splice(idx, 1)" />
+                </div>
+                <el-button :icon="Plus" @click="form.douban_lists.lists.push({ name: '', doulist_id: '', media_type: 'movie' })">
+                  添加片单
+                </el-button>
+              </div>
+              <div class="form-hint">
+                doulist_id 取自 <code>douban.com/doulist/&lt;ID&gt;/</code>；特殊：<code>chart</code>=排行榜 <code>nowplaying</code>=正在上映 <code>upcoming</code>=即将上映
+              </div>
             </el-form-item>
           </el-form>
         </el-card>
@@ -518,49 +635,6 @@
           </el-form>
         </el-card>
 
-        <!-- 豆瓣片单：白名单 + 长缓存 -->
-        <el-card shadow="never" class="cfg-card">
-          <template #header>
-            <div class="cfg-card-head">
-              <span class="badge douban">豆</span>
-              <span>豆瓣片单（doulist HTML 爬取）</span>
-              <el-tag size="small" :type="form.douban_lists.enabled ? 'success' : 'info'" effect="plain">
-                {{ form.douban_lists.enabled ? '已启用' : '未启用' }}
-              </el-tag>
-            </div>
-          </template>
-          <el-form :model="form.douban_lists" label-width="120px">
-            <el-form-item label="启用">
-              <el-switch v-model="form.douban_lists.enabled" />
-              <div class="form-hint">
-                复用上方"豆瓣评分"的限速 / User-Agent；空结果不写缓存（避免反爬期把空命中钉死）
-              </div>
-            </el-form-item>
-            <el-form-item label="缓存 TTL(天)">
-              <el-input-number v-model="form.douban_lists.cache_days" :min="1" :max="30" />
-              <div class="form-hint">豆瓣反爬严 + 片单内容变化慢（如 Top 250），建议 ≥3 天</div>
-            </el-form-item>
-            <el-form-item label="片单白名单">
-              <div class="doulist-rows">
-                <div v-for="(item, idx) in form.douban_lists.lists" :key="idx" class="doulist-row">
-                  <el-input v-model="item.name" placeholder="显示名（如 高分韩剧）" style="width: 200px" />
-                  <el-input v-model="item.doulist_id" placeholder="doulist_id（数字）" style="width: 160px" />
-                  <el-select v-model="item.media_type" style="width: 100px">
-                    <el-option label="电影" value="movie" />
-                    <el-option label="剧集" value="tv" />
-                  </el-select>
-                  <el-button text type="danger" :icon="Delete" @click="form.douban_lists.lists.splice(idx, 1)" />
-                </div>
-                <el-button :icon="Plus" @click="form.douban_lists.lists.push({ name: '', doulist_id: '', media_type: 'movie' })">
-                  添加片单
-                </el-button>
-              </div>
-              <div class="form-hint">
-                doulist_id 来自 <code>douban.com/doulist/&lt;ID&gt;/</code> 中的数字部分
-              </div>
-            </el-form-item>
-          </el-form>
-        </el-card>
       </el-tab-pane>
 
       <!-- ============ 字幕下载 ============ -->
@@ -1052,6 +1126,16 @@
                     <el-input v-model="form.dispatch.rules[mt.key].file_template" />
                     <span class="form-hint default-hint">文件默认：{{ DISPATCH_DEFAULT_FILE[mt.key] }}（不含扩展名）</span>
                   </el-form-item>
+
+                  <el-form-item label="去重策略">
+                    <el-select v-model="form.dispatch.rules[mt.key].duplicate_policy" style="width: 100%">
+                      <el-option label="质量更高胜出（旧入 trash 再覆盖）"   value="higher_quality_wins" />
+                      <el-option label="永远跳过新种子（保留旧的）"          value="always_skip" />
+                      <el-option label="永远用新的覆盖（旧入 trash）"        value="always_replace" />
+                      <el-option label="标记待人工决策"                      value="needs_review" />
+                    </el-select>
+                    <span class="form-hint default-hint">目标位置已被其他种子占用时的处理方式</span>
+                  </el-form-item>
                 </el-form>
               </div>
             </el-col>
@@ -1306,10 +1390,10 @@ const blank = () => ({
     default_move_mode: 'copy',
     trash_dir: '/downloads/.trash',
     rules: {
-      movie: { library_id: '', location_template: '{library_root}/{title} ({year})',                  file_template: '{title} ({year})' },
-      tv:    { library_id: '', location_template: '{library_root}/{series_name}/Season {season:02d}', file_template: '({series_name})S{season:02d}E{episode:02d}' },
-      anime: { library_id: '', location_template: '{library_root}/{anime_name}',                     file_template: '({anime_name}){episode:03d}' },
-      adult: { library_id: '', location_template: '{library_root}/{code}',                            file_template: '{code}({title})' },
+      movie: { library_id: '', location_template: '{library_root}/{title} ({year})',                  file_template: '{title} ({year})',                       duplicate_policy: 'higher_quality_wins' },
+      tv:    { library_id: '', location_template: '{library_root}/{series_name}/Season {season:02d}', file_template: '({series_name})S{season:02d}E{episode:02d}', duplicate_policy: 'higher_quality_wins' },
+      anime: { library_id: '', location_template: '{library_root}/{anime_name}',                     file_template: '({anime_name}){episode:03d}',            duplicate_policy: 'higher_quality_wins' },
+      adult: { library_id: '', location_template: '{library_root}/{code}',                            file_template: '{code}({title})',                        duplicate_policy: 'always_skip' },
     },
   },
   database: { host: '', port: 5432, name: '', user: '', password: '' },
@@ -1319,7 +1403,20 @@ const blank = () => ({
     library_days: 7,
   },
   mdblist: { enabled: true, api_key: '', request_delay: 1.0, cache_ttl_days: 30 },
-  douban: { enabled: true, request_delay: 5.0, cache_ttl_days: 30 },
+  douban: {
+    enabled: true, request_delay: 5.0, cache_ttl_days: 30,
+    worker_delay: 30.0, worker_max_failures: 5, worker_cooldown_seconds: 3600,
+  },
+  // 媒体元数据实体表 (L3 长缓存) + 全局元数据语言
+  // 详见 docs/2026-05-15-media-metadata-store.md
+  // 注：豆瓣 / MDB List 无语言选择（爬虫源单语，自动 fallback 处理）
+  metadata: {
+    store_douban_full: true,
+    lru_keep_days: 365,
+    refresh_ttl_days: 30,
+    scrape_language: 'en',
+    display_language: 'en',
+  },
   // 第三方推荐源（互补 TMDB）
   trakt: {
     enabled: false,
@@ -1414,10 +1511,10 @@ const mergeIntoForm = (cfg) => {
   // dispatch.rules 兜底：用户 yaml 里若只配了部分 media_type，要保证全部 key 都在，
   // 否则 mergeIntoForm 整体替换 rules dict 会让缺失的 media_type 在 UI 上消失
   const rulesDefaults = {
-    movie: { library_id: '', location_template: '{library_root}/{title} ({year})',                  file_template: '{title} ({year})' },
-    tv:    { library_id: '', location_template: '{library_root}/{series_name}/Season {season:02d}', file_template: '({series_name})S{season:02d}E{episode:02d}' },
-    anime: { library_id: '', location_template: '{library_root}/{anime_name}',                     file_template: '({anime_name}){episode:03d}' },
-    adult: { library_id: '', location_template: '{library_root}/{code}',                            file_template: '{code}({title})' },
+    movie: { library_id: '', location_template: '{library_root}/{title} ({year})',                  file_template: '{title} ({year})',                       duplicate_policy: 'higher_quality_wins' },
+    tv:    { library_id: '', location_template: '{library_root}/{series_name}/Season {season:02d}', file_template: '({series_name})S{season:02d}E{episode:02d}', duplicate_policy: 'higher_quality_wins' },
+    anime: { library_id: '', location_template: '{library_root}/{anime_name}',                     file_template: '({anime_name}){episode:03d}',            duplicate_policy: 'higher_quality_wins' },
+    adult: { library_id: '', location_template: '{library_root}/{code}',                            file_template: '{code}({title})',                        duplicate_policy: 'always_skip' },
   }
   if (!form.dispatch.rules || typeof form.dispatch.rules !== 'object') {
     form.dispatch.rules = rulesDefaults
@@ -2222,6 +2319,10 @@ onBeforeRouteLeave(async () => {
 .badge.dispatch-badge {
   background: #ecfdf5;
   color: #047857;
+}
+.badge.meta-badge {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #92400e;
 }
 
 // ---- 流水线规则卡（双列布局，每条规则一个紧凑 row） ----
