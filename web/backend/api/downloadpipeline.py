@@ -32,8 +32,36 @@ class DownloadRequest(BaseModel):
     save_path: Optional[str] = None
     category: Optional[str] = None
     source: str = "jackett"
-    # 用户在搜索页选的分类，作为 user_hint 帮助识别（搜索页 form.category）
+    # 用户在搜索页选的分类（form.category），作为 user_hint 帮助识别 —— 最高优先
     user_hint_media_type: Optional[str] = None
+    # Jackett 每行的 CategoryDesc 原文（如 "TV/Documentary", "Movies/HD", "XXX/UHD"），
+    # 作为 user_hint 兜底；只在 user_hint_media_type 缺失时启用
+    category_desc: Optional[str] = None
+
+
+def _jackett_category_to_media_type(desc: Optional[str]) -> Optional[str]:
+    """把 Jackett CategoryDesc 文本映射成 media_type（'movie' / 'tv' / 'anime' / 'adult'）。
+    无法判定返回 None，让 identify 链路自行兜底。
+
+    形态示例：
+      'TV/Documentary' → tv      'TV/Anime' → anime
+      'Movies/HD'      → movie   'Movies/UHD' → movie
+      'XXX/UHD'        → adult
+      'Audio/...'      → None（不处理）
+    """
+    if not desc:
+        return None
+    parts = desc.split('/', 1)
+    head = parts[0].strip().lower()
+    sub = parts[1].strip().lower() if len(parts) > 1 else ''
+    if head == 'tv':
+        return 'anime' if 'anime' in sub else 'tv'
+    if head == 'movies':
+        # 极少数 indexer 把动画电影放 Movies/Anime；先按 movie 处理（identify 会再修）
+        return 'movie'
+    if head == 'xxx':
+        return 'adult'
+    return None
 
 
 def _qb():
@@ -66,9 +94,15 @@ def push_download(
     分析由 scheduler 的 analyzer 后台跑：高置信自动入流水线，低置信落 needs_review。
     """
     src_hint = (request.magnet or request.torrent_url or '')[:120]
+    # 用户 form 显式选 > Jackett 分类兜底；最终落到 dispatch_map.media_type
+    effective_hint = (
+        request.user_hint_media_type
+        or _jackett_category_to_media_type(request.category_desc)
+    )
     logger.info(
         f"/pipeline/download POST: title={request.title!r} src={src_hint!r} "
-        f"category={request.category!r} user_hint={request.user_hint_media_type!r}"
+        f"category={request.category!r} user_hint={request.user_hint_media_type!r} "
+        f"category_desc={request.category_desc!r} → effective_hint={effective_hint!r}"
     )
     if not settings.qbittorrent_host or not settings.qbittorrent_username:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
@@ -122,7 +156,7 @@ def push_download(
             logger.info(f"push: 重置已拒绝的 dispatch_map 行 hash={info_hash[:16]}..")
             existing.phase = PHASE_ANALYZING
             existing.phase_status = STATUS_RUNNING
-            existing.media_type = request.user_hint_media_type or 'unknown'
+            existing.media_type = effective_hint or 'unknown'
             existing.title = request.title
             existing.status_message = '从已拒绝重新提交，等待分析...'
             existing.cleaned_at = None
@@ -137,7 +171,7 @@ def push_download(
                 torrent_hash=info_hash,
                 phase=PHASE_ANALYZING,
                 phase_status=STATUS_RUNNING,
-                media_type=request.user_hint_media_type or 'unknown',
+                media_type=effective_hint or 'unknown',
                 title=request.title,
                 status_message='等待分析中...',
                 created_at=datetime.utcnow(),

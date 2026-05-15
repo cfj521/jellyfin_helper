@@ -1267,6 +1267,141 @@ def retry_dispatch_row(torrent_hash: str, db: Session = Depends(get_db)):
 
 
 # ============================================================================
+# 通用手动编辑：dispatch_map 任意行改 media_type / 标题 / 目标库 / 目标路径
+# 跟 /needs-review/confirm 区别：不强制 phase 流转，仅就地更新字段
+# 主要场景：用户发现某条已自动入流水线但识别错了，想 mid-flight 修正
+# ============================================================================
+
+class DispatchEditRequest(BaseModel):
+    """手动编辑 dispatch_map 行。所有字段都是 optional：传谁改谁。"""
+    media_type: Optional[str] = None           # movie / tv / anime / adult
+    title: Optional[str] = None
+    year: Optional[int] = None
+    series_name: Optional[str] = None
+    target_library_id: Optional[str] = None
+    target_path: Optional[str] = None          # backend view；reverse-translate 后入库
+    # True：忽略上面 target_library_id/target_path，按规则按 media_type+title+year 重算
+    recompute_target: bool = False
+
+
+# 仍可改的 phase：未开始落盘的阶段。落盘后改路径 / 库需要先迁文件，目前 UI 不做这事
+_EDITABLE_PHASES = {
+    'analyzing', 'dispatch_queued', 'downloading', 'download_done',
+}
+
+
+@router.post('/dispatch-map/{torrent_hash}/edit')
+def edit_dispatch_row(
+    torrent_hash: str,
+    request: DispatchEditRequest,
+    db: Session = Depends(get_db),
+):
+    """手动覆盖 dispatch_map 行的识别 / 目标字段。
+
+    行为：
+      - 只更新显式传入的字段；其它保持
+      - recompute_target=True 或者 (改了 media_type 但没传 target_*) → 按规则重算目标
+      - phase ∈ {copying, organizing, jellyfin_recognizing, ...} → 返回 warning：
+        文件可能已落到旧路径，本接口只改 DB 不迁文件，需用户自己处理
+      - phase ∈ {cleaned, dismissed, all_jobs_done} → 拒绝（再编辑没意义）
+    """
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+
+    if row.phase in ('cleaned', 'dismissed', 'all_jobs_done'):
+        raise HTTPException(
+            status_code=400,
+            detail=f'当前 phase={row.phase}，已是终态，无法编辑（请删除后重新添加）',
+        )
+
+    warning = None
+    if row.phase not in _EDITABLE_PHASES:
+        # copying / organizing / jellyfin_recognizing / subtitle_fetching / ...
+        # 允许改字段，但提示用户：文件已落到旧路径
+        warning = (
+            f'当前 phase={row.phase}，文件可能已落到旧目标位置（{row.target_path!r}）。'
+            f'本接口只改 DB 不迁移文件；如需重新落库请手动删除旧文件后从 download_done 阶段重试。'
+        )
+
+    old = {
+        'media_type': row.media_type,
+        'title': row.title,
+        'year': row.year,
+        'series_name': row.series_name,
+        'target_library_id': row.target_library_id,
+        'target_path': row.target_path,
+    }
+
+    # 1. 字段更新：传谁改谁
+    if request.media_type is not None:
+        row.media_type = request.media_type
+    if request.title is not None:
+        row.title = request.title
+    if request.year is not None:
+        row.year = request.year
+    if request.series_name is not None:
+        row.series_name = request.series_name
+
+    # 2. 目标解析：三档
+    #    (a) 显式传了 target_library_id + target_path → 直接用（reverse-translate）
+    #    (b) recompute_target=True → 强制按规则重算
+    #    (c) 否则：改了 media_type/title/year/series_name 之一 但没传目标 → 也重算（最常用）
+    media_type_changed = request.media_type is not None and request.media_type != old['media_type']
+    title_or_meta_changed = any(
+        request.__dict__.get(k) is not None and getattr(row, k) != old[k]
+        for k in ('title', 'year', 'series_name')
+    )
+
+    if request.target_library_id and request.target_path:
+        from web.backend.path_translator import reverse_translate_path_with_settings
+        row.target_library_id = request.target_library_id
+        row.target_path = reverse_translate_path_with_settings(request.target_path) or request.target_path
+    elif request.recompute_target or media_type_changed or title_or_meta_changed:
+        identified = {
+            'media_type': row.media_type,
+            'title': row.title,
+            'year': row.year,
+            'series_name': row.series_name,
+        }
+        target_info = _resolve_target(identified)
+        if not target_info.get('library_id') or not target_info.get('target_path'):
+            raise HTTPException(
+                status_code=400,
+                detail=f'无法为 media_type={row.media_type} 推算目标，请在 UI 手动填写 target_library_id + target_path',
+            )
+        row.target_library_id = target_info['library_id']
+        row.target_root = target_info.get('library_root')
+        row.target_path = target_info['target_path']
+
+    # 3. 写一条短消息说明被手动改了
+    row.status_message = f'用户手动编辑（{old["media_type"]}→{row.media_type}）'
+    db.commit()
+
+    logger.info(
+        f"edit: {h[:16]}.. 字段更新 "
+        f"media_type {old['media_type']!r}→{row.media_type!r} "
+        f"target {old['target_path']!r}→{row.target_path!r}"
+    )
+
+    return {
+        'ok': True,
+        'torrent_hash': h,
+        'before': old,
+        'after': {
+            'media_type': row.media_type,
+            'title': row.title,
+            'year': row.year,
+            'series_name': row.series_name,
+            'target_library_id': row.target_library_id,
+            'target_path': row.target_path,
+        },
+        'warning': warning,
+    }
+
+
+# ============================================================================
 # copy-phase 冲突决策（phase=copying, phase_status=needs_review）
 # 由 organizer 的 duplicate_resolver 或 copier 的 CrossTorrentCollisionError 触发
 # ============================================================================

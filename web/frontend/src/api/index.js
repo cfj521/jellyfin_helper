@@ -170,6 +170,13 @@ export const mediaApi = {
   findDuplicatesByMetadata: (libraryId) =>
     api.get('/api/media/duplicates-by-metadata', { params: { library_id: libraryId } }),
 
+  // SSE 进度流版本（事件 data 是 JSON: {phase, message, percent, current?, result?}）
+  // 调用方用 EventSource(url) 自行订阅；这里只负责拼 URL
+  findDuplicatesStreamUrl: (path) =>
+    `/api/media/duplicates/stream?path=${encodeURIComponent(path)}`,
+  findDuplicatesByMetadataStreamUrl: (libraryId) =>
+    `/api/media/duplicates-by-metadata/stream?library_id=${encodeURIComponent(libraryId)}`,
+
   analyzeStorage: (path) =>
     api.get('/api/media/storage', { params: { path } })
 }
@@ -491,6 +498,9 @@ export const dispatchApi = {
   restoreDismissed: (hash) => api.post(`/api/dispatch/needs-review/${hash}/restore`),
   adoptScanNow: () => api.post('/api/dispatch/adopt/scan-now'),
   retryDispatchRow: (hash) => api.post(`/api/dispatch/dispatch-map/${hash}/retry`),
+  // 手动编辑 dispatch_map 行（media_type / 标题 / 目标库 / 目标路径）
+  editDispatchRow: (hash, payload) =>
+    api.post(`/api/dispatch/dispatch-map/${hash}/edit`, payload),
   // copy-phase 跨种子冲突决策
   getCopyConflict:     (hash) => api.get(`/api/dispatch/copy-conflict/${hash}`),
   copyConflictReplace: (hash) => api.post(`/api/dispatch/copy-conflict/${hash}/replace`),

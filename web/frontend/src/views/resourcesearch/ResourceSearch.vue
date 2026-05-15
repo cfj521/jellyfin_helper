@@ -230,6 +230,9 @@ const pushDownload = async (row) => {
         form.value.category && form.value.category !== 'all'
           ? form.value.category
           : undefined,
+      // 每行 Jackett CategoryDesc（"TV/Documentary" / "Movies/HD" / ...）作为兜底 hint
+      // —— 用户用"全部"搜时，靠它把分类信号传到后端 identify，避免误识别成 adult/movie
+      category_desc: row.category_desc || undefined,
     })
     ElMessage.success(`${row.title}：已加入分析队列，识别后自动入流水线`)
   } catch (e) {
