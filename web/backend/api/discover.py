@@ -1187,10 +1187,10 @@ def _enrich_items_from_detail_cache(items: List[Dict]) -> List[str]:
 
 
 def _douban_prefetch_consumer():
-    """全局单消费者：保守抓豆瓣 detail，含熔断机制
-      - 每条间隔 douban.worker_delay（默认 30s）
-      - 连续失败 worker_max_failures 次 → 进 cooldown，停 worker_cooldown_seconds（默认 1h）
-      - 冷却期内不消费队列（堆积无所谓，反正是异步预取）
+    """全局单消费者：保守抓豆瓣 detail。
+    熔断由 DoubanClient 的全局熔断器统一管（见 common/douban_client.py 顶部
+    _GlobalBreaker）—— worker 在循环顶端 peek，open 时分段睡；
+    失败/成功计数全由 client 内部上报，本 worker 不再维护本地计数器。
     """
     import time as _time
     from common.douban_client import DoubanClient
@@ -1199,24 +1199,13 @@ def _douban_prefetch_consumer():
         user_agent=settings.douban_user_agent,
         delay=settings.douban_worker_delay,
     )
-    max_failures = max(1, int(settings.douban_worker_max_failures))
-    cooldown_seconds = max(60, int(settings.douban_worker_cooldown_seconds))
-    consecutive_failures = 0
-    cooldown_until = 0.0
 
-    logger.info(
-        f"豆瓣预取 worker 启动：delay={settings.douban_worker_delay}s "
-        f"max_failures={max_failures} cooldown={cooldown_seconds}s"
-    )
+    logger.info(f"豆瓣预取 worker 启动：delay={settings.douban_worker_delay}s（熔断走全局）")
     while True:
-        # 熔断中？分段睡（避免阻塞太久无法响应进程退出）
-        now = _time.time()
-        if now < cooldown_until:
-            wait = cooldown_until - now
-            logger.warning(
-                f"豆瓣预取 worker 冷却中，剩余 {wait:.0f}s（连续失败 {max_failures} 次后启动）"
-            )
-            _time.sleep(min(wait, 60))
+        # 全局熔断 peek：open 时短睡跳过，等熔断器恢复
+        open_, remaining = DoubanClient.breaker_status()
+        if open_:
+            _time.sleep(min(max(remaining, 1.0), 60.0))
             continue
 
         try:
@@ -1228,12 +1217,14 @@ def _douban_prefetch_consumer():
             # 再读一次缓存：可能用户主动点"简介"/"搜种子"提前填上了
             cached = _kv_get(_DOUBAN_DETAIL_SCOPE, did, ttl_seconds=_DOUBAN_DETAIL_TTL)
             if isinstance(cached, dict) and cached.get('summary'):
-                # 命中缓存不算失败，不增减计数
+                continue
+            # 拉之前再 peek 一次：worker 在 _get 等待 self.delay 期间熔断器可能被
+            # 另一路径触发，避免拿过期信号还硬发请求
+            open_, _ = DoubanClient.breaker_status()
+            if open_:
                 continue
             detail = client.fetch_subject_summary(did)
             if detail and detail.get('summary'):
-                # 成功：清零计数
-                consecutive_failures = 0
                 _kv_set(_DOUBAN_DETAIL_SCOPE, did, detail)
                 try:
                     _upsert_douban_detail(detail)
@@ -1246,28 +1237,9 @@ def _douban_prefetch_consumer():
                     except Exception:
                         logger.exception(f"MDB List 入队（豆瓣 prefetch）失败 {did}")
                 logger.debug(f"豆瓣详情预取写入缓存 {did}")
-            else:
-                # 失败：计数 +1，达阈值进熔断
-                consecutive_failures += 1
-                logger.warning(
-                    f"豆瓣预取 {did} 失败（连续 {consecutive_failures}/{max_failures}）"
-                )
-                if consecutive_failures >= max_failures:
-                    cooldown_until = _time.time() + cooldown_seconds
-                    logger.error(
-                        f"豆瓣预取 worker 进入冷却：连续 {consecutive_failures} 次失败，"
-                        f"暂停 {cooldown_seconds}s"
-                    )
-                    consecutive_failures = 0
+            # 失败计数已由 client._get / report_antibot 上报到全局熔断器，这里不重复
         except Exception as e:
-            consecutive_failures += 1
-            logger.warning(f"豆瓣详情预取 {did} 异常: {e}（连续 {consecutive_failures}/{max_failures}）")
-            if consecutive_failures >= max_failures:
-                cooldown_until = _time.time() + cooldown_seconds
-                logger.error(
-                    f"豆瓣预取 worker 进入冷却（异常路径），暂停 {cooldown_seconds}s"
-                )
-                consecutive_failures = 0
+            logger.warning(f"豆瓣详情预取 {did} 异常: {e}")
         finally:
             with _douban_prefetch_seen_lock:
                 _douban_prefetch_seen.discard(did)

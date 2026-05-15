@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
@@ -27,6 +28,79 @@ import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 全局熔断（豆瓣进程内所有 DoubanClient 实例共享）
+# ============================================================================
+# 任意路径（前台 / 后台 prefetch / ratings 回填 / metadata 修复）触发请求都先过
+# 这层；连续 N 次失败 → 进 cooldown，期间所有路径直接返回 None，不发请求。
+# 失败计入条件（按可观察到的"被限/被识破"信号）：
+#   - HTTP 403 / 429 / 503（豆瓣反爬常见状态码）
+#   - PoW 挑战页且求解失败
+#   - 网络异常（连超时、连接拒绝等）
+#   - 上层（fetch_subject_summary）识别到反爬/登录拦截 → 显式 report_antibot()
+# 成功清零：HTTP 200 且不是 PoW 挑战页 / 反爬页。
+class _GlobalBreaker:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._consecutive_failures = 0
+        self._cooldown_until = 0.0
+        self._max_failures = 5
+        self._cooldown_seconds = 3600
+        self._last_blocked_log_at = 0.0
+
+    def configure(self, max_failures: int, cooldown_seconds: int):
+        with self._lock:
+            self._max_failures = max(1, int(max_failures))
+            self._cooldown_seconds = max(60, int(cooldown_seconds))
+
+    def is_open(self) -> Tuple[bool, float]:
+        """返回 (是否熔断中, 剩余秒数)。"""
+        with self._lock:
+            remaining = self._cooldown_until - time.time()
+            return (remaining > 0, max(0.0, remaining))
+
+    def report_success(self):
+        with self._lock:
+            if self._consecutive_failures:
+                self._consecutive_failures = 0
+
+    def report_failure(self, reason: str):
+        with self._lock:
+            self._consecutive_failures += 1
+            n = self._consecutive_failures
+            if n >= self._max_failures:
+                self._cooldown_until = time.time() + self._cooldown_seconds
+                self._consecutive_failures = 0
+                logger.error(
+                    f"豆瓣【全局熔断】触发 ({reason}): 连续 {n} 次失败 → "
+                    f"暂停所有请求 {self._cooldown_seconds}s"
+                )
+            else:
+                logger.warning(
+                    f"豆瓣请求失败 ({reason}): 连续 {n}/{self._max_failures}"
+                )
+
+    def maybe_log_blocked(self, op: str):
+        """熔断期内被拦截的请求日志：节流到 60s 一条，避免刷屏。"""
+        with self._lock:
+            now = time.time()
+            if now - self._last_blocked_log_at < 60:
+                return
+            self._last_blocked_log_at = now
+            remaining = max(0.0, self._cooldown_until - now)
+            logger.warning(f"豆瓣熔断中：跳过 {op} (剩余 {remaining:.0f}s)")
+
+    def force_reset(self):
+        """诊断/手动恢复用：清零状态。"""
+        with self._lock:
+            self._consecutive_failures = 0
+            self._cooldown_until = 0.0
+            self._last_blocked_log_at = 0.0
+
+
+_GLOBAL_BREAKER = _GlobalBreaker()
 
 
 # 大搜索页（www.douban.com/search）—— 初始 HTML 不带结果（SPA），保留仅为兼容引用
@@ -75,6 +149,27 @@ class DoubanRating:
 
 class DoubanClient:
     """豆瓣评分爬虫，懒拉取场景使用。"""
+
+    # ---- 全局熔断（进程内所有实例共享，见模块顶部 _GlobalBreaker）----
+    @classmethod
+    def configure_global_breaker(cls, max_failures: int, cooldown_seconds: int):
+        """应用启动时调一次，从 settings 读阈值配置全局熔断。"""
+        _GLOBAL_BREAKER.configure(max_failures, cooldown_seconds)
+
+    @classmethod
+    def breaker_status(cls) -> Tuple[bool, float]:
+        """(open, remaining_seconds)。worker 在循环顶端 peek 用。"""
+        return _GLOBAL_BREAKER.is_open()
+
+    @classmethod
+    def report_antibot(cls):
+        """上层识别到反爬/登录拦截页（HTTP 200 但内容被掉包）时显式上报失败。"""
+        _GLOBAL_BREAKER.report_failure('antibot_page')
+
+    @classmethod
+    def reset_breaker(cls):
+        """诊断 / 手动恢复用。"""
+        _GLOBAL_BREAKER.force_reset()
 
     def __init__(
         self,
@@ -167,18 +262,26 @@ class DoubanClient:
         return resp.text
 
     def _get(self, url: str, params: Optional[dict] = None) -> Optional[str]:
+        # 全局熔断：任意路径触发请求都先 peek，open 时不发请求直接返回 None
+        open_, _ = _GLOBAL_BREAKER.is_open()
+        if open_:
+            _GLOBAL_BREAKER.maybe_log_blocked(url)
+            return None
+
         for attempt in range(self.max_retries + 1):
             self._rate_limit()
             try:
                 resp = self._session.get(url, params=params, timeout=self.timeout)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"豆瓣请求异常: {url} - {e}")
+                _GLOBAL_BREAKER.report_failure(f'network_exception:{type(e).__name__}')
                 return None
 
             if resp.status_code == 429 or resp.status_code in (403, 503):
                 # 反爬触发：豆瓣经常返回 403/503
                 if attempt >= self.max_retries:
                     logger.warning(f"豆瓣访问受限 HTTP {resp.status_code} {url}")
+                    _GLOBAL_BREAKER.report_failure(f'http_{resp.status_code}')
                     return None
                 backoff = (attempt + 1) * max(self.delay * 2, 10.0)
                 logger.warning(f"豆瓣 {resp.status_code}，{backoff}s 后重试")
@@ -187,6 +290,7 @@ class DoubanClient:
 
             if resp.status_code != 200:
                 logger.warning(f"豆瓣 HTTP {resp.status_code}: {url}")
+                _GLOBAL_BREAKER.report_failure(f'http_{resp.status_code}')
                 return None
 
             # PoW 反爬挑战页：~3KB 的"载入中..."shim，JS 算 SHA-512 PoW 再 submit
@@ -195,10 +299,15 @@ class DoubanClient:
                 logger.info(f"豆瓣返回 PoW 挑战页 {url}，求解中…")
                 solved = self._try_solve_pow(resp.text, resp.url or url)
                 if solved:
+                    # PoW 成功 = 真请求成功，清零熔断计数
+                    _GLOBAL_BREAKER.report_success()
                     return solved
-                # PoW 失败 → 同一 attempt 内直接放弃（重试也大概率拿同一个挑战）
+                # PoW 失败 → 计入失败 + 同一 attempt 内直接放弃（重试也大概率拿同一个挑战）
+                _GLOBAL_BREAKER.report_failure('pow_solve_failed')
                 return None
 
+            # HTTP 200 + 非 PoW → 成功，清零失败计数
+            _GLOBAL_BREAKER.report_success()
             return resp.text
         return None
 
@@ -398,6 +507,8 @@ class DoubanClient:
             logger.warning(
                 f"豆瓣条目 {douban_id}: 命中反爬/登录拦截页（HTML 长度 {len(html)}）"
             )
+            # 上报全局熔断 —— _get 已认为是 200 成功并清零了计数，这里要纠正回来
+            self.report_antibot()
             return None
 
         try:
