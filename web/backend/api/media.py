@@ -228,8 +228,13 @@ def run_media_scan(task_id: int, path: str, recursive: bool):
 
 def _quick_hash(path: Path, chunk_size: int = 65536) -> Optional[str]:
     """
-    对文件计算"首尾 hash"——读首 64KB + 末 64KB + 文件大小，做 sha1。
-    完整 hash 太慢；同大小文件 + 首尾内容相同则几乎确定相同。
+    对文件计算"首/中/尾 hash"——读首 64KB + 中 64KB + 末 64KB + 文件大小，做 sha1。
+
+    剧集场景：同一剧集的不同集（或同集不同版本）头尾常带固定 OP/ED，仅靠首尾
+    hash 会把"头尾相同正片不同"误判为重复。多采一个文件中段 chunk（基本不会
+    跟 OP/ED 重叠），把正片差异采进 hash。
+
+    完整 hash 太慢；同大小 + 首/中/尾 三段都一致 → 几乎确定真重复。
     """
     try:
         size = path.stat().st_size
@@ -242,6 +247,15 @@ def _quick_hash(path: Path, chunk_size: int = 65536) -> Optional[str]:
         with open(path, 'rb') as f:
             head = f.read(min(chunk_size, size))
             h.update(head)
+            # 中段：文件大于 3 个 chunk 时才采（小于这个量首尾已经覆盖到中段）
+            # 偏移点取文件中点对齐到 chunk_size 边界，避免读取跨块降低 OS 缓存命中
+            if size > chunk_size * 3:
+                mid_offset = (size // 2) & ~(chunk_size - 1)
+                # 防御：mid 不能跟 head/tail 重叠
+                if chunk_size <= mid_offset <= size - 2 * chunk_size:
+                    f.seek(mid_offset)
+                    mid = f.read(chunk_size)
+                    h.update(mid)
             if size > chunk_size * 2:
                 f.seek(-chunk_size, os.SEEK_END)
                 tail = f.read(chunk_size)
@@ -395,7 +409,9 @@ def find_duplicates_by_metadata(
         raise HTTPException(status_code=400, detail="未配置 Jellyfin API Key")
 
     client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
-    fields = "ProviderIds,ProductionYear,Path,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber"
+    # RunTimeTicks 顶层兜底：MediaSources 偶尔残缺时仍能从 item 顶层取到时长
+    # MediaStreams：拉视频流的 Width/Height 给前端展示分辨率（2160p/1080p 等）
+    fields = "ProviderIds,ProductionYear,Path,MediaSources,MediaStreams,RunTimeTicks,SeriesName,SeriesId,ParentIndexNumber,IndexNumber"
 
     logger.info(f"/media/duplicates-by-metadata 进入: library_id={library_id!r}")
 
@@ -430,6 +446,53 @@ def find_duplicates_by_metadata(
                 return sz
         return 0
 
+    def _duration_seconds(item: dict) -> int:
+        """从 RunTimeTicks（100ns 单位）取秒数，方便前端展示时长。
+        MediaSources[0].RunTimeTicks 优先；item 顶层 RunTimeTicks 兜底（剧集偶尔不带 MediaSources）。"""
+        ms = item.get('MediaSources') or []
+        if ms and isinstance(ms, list):
+            ticks = ms[0].get('RunTimeTicks')
+            if isinstance(ticks, int) and ticks > 0:
+                return ticks // 10_000_000
+        ticks = item.get('RunTimeTicks')
+        if isinstance(ticks, int) and ticks > 0:
+            return ticks // 10_000_000
+        return 0
+
+    def _resolution_label(item: dict) -> str:
+        """从 MediaSources[0].MediaStreams 找第一个 Video 流的 Height，转成标签
+        ("2160p" / "1080p" / "720p" / "480p" / "{H}p"）。拿不到返回 ''."""
+        ms = item.get('MediaSources') or []
+        streams = []
+        if ms and isinstance(ms, list):
+            streams = ms[0].get('MediaStreams') or []
+        height = 0
+        width = 0
+        for s in streams:
+            if (s.get('Type') or '').lower() == 'video':
+                h = s.get('Height') or 0
+                w = s.get('Width') or 0
+                if isinstance(h, int) and h > height:
+                    height = h
+                if isinstance(w, int) and w > width:
+                    width = w
+                # 第一个 video 流即可（多视频流极罕见，PIP 之类）
+                break
+        if not height:
+            return ''
+        # 行业惯例标签：按短边（height）映射；4K/8K 用 UHD 习惯
+        if height >= 4000:
+            return '8K'
+        if height >= 2000 or width >= 3800:
+            return '4K'
+        if height >= 1000:
+            return '1080p'
+        if height >= 700:
+            return '720p'
+        if height >= 400:
+            return '480p'
+        return f'{height}p'
+
     from web.backend.path_translator import translate_path_with_settings
 
     def _slim(item: dict, version_label: str = '') -> dict:
@@ -439,6 +502,8 @@ def find_duplicates_by_metadata(
             "year": item.get('ProductionYear'),
             "path": translate_path_with_settings(item.get('Path')) if item.get('Path') else None,
             "size": _file_size(item),
+            "duration_sec": _duration_seconds(item),
+            "resolution": _resolution_label(item),
             "version_label": version_label,
         }
 
