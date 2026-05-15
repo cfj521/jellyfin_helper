@@ -100,15 +100,14 @@ def _extract_episode(name: str) -> Optional[Tuple[int, int]]:
 
 
 def _format_template(template: str, **kwargs) -> str:
-    """安全地格式化模板，缺失变量时保留占位符不抛错。"""
-    class SafeDict(dict):
-        def __missing__(self, key):
-            return '{' + key + '}'
-    try:
-        return template.format_map(SafeDict(kwargs))
-    except (ValueError, KeyError) as e:
-        logger.warning(f"模板格式化失败 {template!r}: {e}")
-        return template
+    """渲染模板：空占位符智能去括号 + 文件名级别 sanitize。
+
+    委托给 tools.dispatch.template_render —— 跟 dispatch.py 的 location_template 渲染共用同一套规则。
+    """
+    from tools.dispatch.template_render import render_template, sanitize_path_segment
+    rendered = render_template(template, kwargs)
+    # file stem 是单段路径名，需要 sanitize（非法字符、保留名、长度等）
+    return sanitize_path_segment(rendered)
 
 
 class TorrentOrganizer:
