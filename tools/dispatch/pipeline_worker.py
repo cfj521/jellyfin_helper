@@ -468,6 +468,11 @@ class DispatchPipeline:
                 'copy_bytes_total': bytes_copied,
             },
         )
+        # 关键：把刚写库的 dispatched_files 同步回内存 row dict，
+        # 不然 _step_jellyfin_send(row) 拿到的还是 claim 时的空数组 → 只发整库 scan
+        row['dispatched_files'] = list(dispatched_files)
+        row['copy_bytes_done'] = bytes_copied
+        row['copy_bytes_total'] = bytes_copied
         return True
 
     def _step_organize(self, row: Dict) -> bool:
@@ -527,24 +532,23 @@ class DispatchPipeline:
                     paths_for_jf = list(dispatched_files)
 
                 if jf.notify_media_updated(paths_for_jf, update_type='Created'):
-                    notified_via.append('media_updated')
+                    notified_via.append(f'media_updated×{len(paths_for_jf)}(精确路径)')
 
             # ② 整库 scan_changes —— 兜底首次入库场景（新 Series 顶层结构生成）
             #    跟 ① 同时调，jellyfin 内部会合并防抖
             if lib_id:
                 if jf.refresh_library(lib_id, mode='scan_changes'):
-                    notified_via.append('refresh_library')
+                    notified_via.append(f'refresh_library({lib_id[:8]}…全库)')
 
         except Exception as e:
             logger.warning(f"jellyfin 通知失败（不阻断，watcher 接管）: {e}")
 
         if notified_via:
             logger.info(
-                f"jellyfin 通知 {h[:16]}.. lib_id={lib_id!r} "
-                f"paths={len(dispatched_files)} via={notified_via}"
+                f"jellyfin 通知 {h[:16]}.. lib_id={lib_id!r} → {' + '.join(notified_via)}"
             )
             _set_phase(h, PHASE_JELLYFIN_RECOGNIZING, STATUS_RUNNING,
-                       message=f'已通知 jellyfin（{"+".join(notified_via)}），等扫描完成',
+                       message=f'已通知 jellyfin（{" + ".join(notified_via)}），等扫描完成',
                        extra={'dispatched_at': datetime.utcnow()})
         else:
             logger.warning(
