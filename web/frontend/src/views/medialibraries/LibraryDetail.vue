@@ -705,20 +705,30 @@
               >
                 <el-radio :label="dupFileKey(file)" class="file-radio">保留</el-radio>
                 <div class="file-meta">
-                  <div class="file-name">
-                    {{ file.name }}
-                    <span v-if="file.version_label && file.version_label !== file.name" class="version-label">[{{ file.version_label }}]</span>
+                  <div class="file-name-row">
+                    <span class="file-name">
+                      {{ file.name }}
+                      <span v-if="file.version_label && file.version_label !== file.name" class="version-label">[{{ file.version_label }}]</span>
+                    </span>
+                    <el-tag v-if="file.resolution" size="small" type="success" effect="dark" class="tag-resolution">
+                      {{ file.resolution }}
+                    </el-tag>
+                    <el-tag v-if="file.duration_sec" size="small" type="info" class="tag-duration">
+                      {{ formatDupDuration(file.duration_sec) }}
+                    </el-tag>
+                    <el-tag size="small" class="tag-size">{{ formatSize(file.size) }}</el-tag>
                   </div>
                   <div class="file-path">{{ file.path }}</div>
                 </div>
-                <el-tag size="small" class="file-size">{{ formatSize(file.size) }}</el-tag>
               </label>
             </el-radio-group>
 
             <div class="dup-group-actions">
               <el-button
-                size="small"
+                size="default"
                 type="danger"
+                plain
+                class="dup-delete-btn"
                 :disabled="!canDeleteOthers(group, idx)"
                 :loading="dupDeleting[dupGroupKey(group, idx)] || false"
                 @click="deleteOthersInGroup(group, idx)"
@@ -777,17 +787,27 @@
               >
                 <el-radio :label="dupFileKey(file)" class="file-radio">保留</el-radio>
                 <div class="file-meta">
-                  <div class="file-name">{{ file.name }}</div>
+                  <div class="file-name-row">
+                    <span class="file-name">{{ file.name }}</span>
+                    <el-tag v-if="file.resolution" size="small" type="success" effect="dark" class="tag-resolution">
+                      {{ file.resolution }}
+                    </el-tag>
+                    <el-tag v-if="file.duration_sec" size="small" type="info" class="tag-duration">
+                      {{ formatDupDuration(file.duration_sec) }}
+                    </el-tag>
+                    <el-tag size="small" class="tag-size">{{ formatSize(file.size) }}</el-tag>
+                  </div>
                   <div class="file-path">{{ file.path }}</div>
                 </div>
-                <el-tag size="small" class="file-size">{{ formatSize(file.size) }}</el-tag>
               </label>
             </el-radio-group>
 
             <div class="dup-group-actions">
               <el-button
-                size="small"
+                size="default"
                 type="danger"
+                plain
+                class="dup-delete-btn"
                 :disabled="!canDeleteOthers(group, idx)"
                 :loading="dupDeleting[dupGroupKey(group, idx)] || false"
                 @click="deleteOthersInGroup(group, idx)"
@@ -1576,6 +1596,17 @@ const formatRuntime = (seconds) => {
       : { value: h, suffix: ' h' }
   }
   return { value: h, suffix: ' h' }
+}
+
+// 重复检测对话框里的时长单元格：紧凑字符串（"1h32m" / "45m" / "1h"）
+// 用于横向比较"同组不同版本的时长是否一致"——差几秒/几分时一眼能看出
+const formatDupDuration = (seconds) => {
+  if (!seconds || seconds <= 0) return ''
+  const total_min = Math.round(seconds / 60)
+  if (total_min < 60) return `${total_min}m`
+  const h = Math.floor(total_min / 60)
+  const m = total_min % 60
+  return m ? `${h}h${String(m).padStart(2, '0')}m` : `${h}h`
 }
 
 const metrics = computed(() => {
@@ -3576,12 +3607,12 @@ body:has(.lib-detail-root) .app-main {
     width: 100%;
   }
 
-  // 每个 file 行：3 列 grid（保留 radio | 文件信息 | 大小）
-  // 文件信息列允许 name + path 都换行，长名字不再挤压 path
+  // 每个 file 行：2 列 grid（保留 radio | 文件信息）
+  // 文件信息列：标题行 (name + 分辨率/时长/大小 tag) + 路径行
   .file-row {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
     gap: 12px;
     padding: 10px 4px;
     border-bottom: 1px solid #f1f5f9;
@@ -3606,7 +3637,17 @@ body:has(.lib-detail-root) .app-main {
       min-width: 0;     // 允许被 grid 列正确收缩；不加这个长字会撑爆 grid
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 4px;
+    }
+
+    // 标题行：文件名 + 分辨率/时长/大小 tag 同排
+    // flex-wrap 让窄屏时 tag 整体掉到下一行，但不会被截断
+    .file-name-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
     }
 
     .file-name {
@@ -3616,6 +3657,8 @@ body:has(.lib-detail-root) .app-main {
       word-break: break-word;
       overflow-wrap: anywhere;       // 长 .release.tag 串也能在任意位置断
       line-height: 1.4;
+      flex: 1 1 auto;                // 占满剩余宽度，把 tag 推到右侧
+      min-width: 0;
     }
 
     .file-path {
@@ -3626,7 +3669,11 @@ body:has(.lib-detail-root) .app-main {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
 
-    .file-size {
+    // 标题行内的 tag：分辨率（success 绿）/ 时长（info 灰蓝）/ 大小（默认灰）
+    // 三个一组紧贴文件名右侧，size=small 视觉更轻
+    .tag-resolution,
+    .tag-duration,
+    .tag-size {
       flex-shrink: 0;
     }
 
@@ -3646,6 +3693,27 @@ body:has(.lib-detail-root) .app-main {
   padding: 12px 4px 4px;
   border-top: 1px solid #f1f5f9;
   margin-top: 4px;
+
+  // 强化"按钮感"：outlined plain 风格（红边 + 浅底）跟旁边实色填充的 el-tag 视觉拉开；
+  // 再加内边距/粗体/hover 反馈让"可点击"信号更明显
+  .dup-delete-btn {
+    padding-inline: 18px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    border-width: 1.5px;
+
+    &:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 6px rgba(220, 38, 38, 0.25);
+    }
+    &:not(:disabled):active {
+      transform: translateY(0);
+    }
+
+    .el-icon {
+      margin-right: 4px;
+    }
+  }
 
   .dup-group-hint {
     color: #94a3b8;
