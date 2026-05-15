@@ -412,22 +412,22 @@ def _resolve_target(identified: Dict) -> Dict:
             )
         else:
             try:
-                target_path = rule['location_template'].format(
-                    library_root=library_root,
-                    title=title or '',
-                    year=year or '',
-                    series_name=series_name or '',
-                    anime_name=anime_name or '',
-                    season=identified.get('season') or 1,
-                    episode=identified.get('episode') or 1,
-                    code=code or title or '',
-                )
-                # 模板里 year 占位符是 "{title} ({year})"。year 缺失时会留下空括号 " ()"
-                # → 清理掉，避免 "Schindlers List ()" 这种丑文件名
-                # （类似 anime/tv 模板的 ({series_name}) 在 series_name 必填校验下不会变空）
-                target_path = re.sub(r'\s*\(\s*\)\s*', '', target_path)
-                # 顺手把可能产生的连续空格收一收
-                target_path = re.sub(r'  +', ' ', target_path).rstrip()
+                from tools.dispatch.template_render import render_template, sanitize_path
+                # render_template 处理空值智能去括号 + 多空格折叠；空值不再传 '' 兜底，
+                # 直接传 None 让 render_template 决定要不要保留周围的字面字符
+                target_path = render_template(rule['location_template'], {
+                    'library_root': library_root,
+                    'title': title,
+                    'year': year,
+                    'series_name': series_name,
+                    'anime_name': anime_name,
+                    'season': identified.get('season'),
+                    'episode': identified.get('episode'),
+                    'code': code or title,
+                })
+                # sanitize 每个路径段（去 <>:"|?* + 控制字符 + Windows 保留名 + 截长度）；
+                # 保留 / 盘符
+                target_path = sanitize_path(target_path)
             except Exception as e:
                 logger.warning(f"location_template 渲染失败: {e}")
 
@@ -1398,6 +1398,197 @@ def edit_dispatch_row(
             'target_path': row.target_path,
         },
         'warning': warning,
+    }
+
+
+@router.post('/dispatch-map/{torrent_hash}/redispatch')
+def redispatch_completed(
+    torrent_hash: str,
+    db: Session = Depends(get_db),
+):
+    """完整重跑：把已完结（或被跳过/拒绝）的种子从分析阶段重新走一遍流水线。
+
+    跟 /retry 的区别：
+      - /retry 只重跑当前 phase（适用 failed 状态）；终态行拒绝
+      - /redispatch 把 phase 重置回 analyzing/running，让 analyzer 重识别 → 高置信
+        自动入流水线 → 拷贝 → 通知 Jellyfin → 后处理。识别失败照常落 needs_review
+        等用户审核。
+
+    适用：phase=all_jobs_done / cleaned / dismissed；以及 phase=copying & status=skipped
+    （之前因 duplicate_policy 跳过的，用户想重做）。
+    """
+    from tools.dispatch.phases import (
+        PHASE_ANALYZING, PHASE_ALL_JOBS_DONE, PHASE_CLEANED, PHASE_DISMISSED,
+        PHASE_COPYING, STATUS_RUNNING, STATUS_SKIPPED,
+    )
+
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+
+    # 允许的源 phase：终态 + duplicate_policy 跳过的 copying
+    redispatchable = (
+        row.phase in (PHASE_ALL_JOBS_DONE, PHASE_CLEANED, PHASE_DISMISSED)
+        or (row.phase == PHASE_COPYING and row.phase_status == STATUS_SKIPPED)
+    )
+    if not redispatchable:
+        raise HTTPException(
+            status_code=400,
+            detail=f'当前 phase={row.phase}/{row.phase_status}，仅"已完成 / 已清理 / 已跳过"的任务可重新入库',
+        )
+
+    old_phase = row.phase
+    old_status = row.phase_status
+
+    # 重置：phase 回 analyzing，清掉所有上轮的识别 + 目标 + 中间产物
+    # （analyzer 看 row.media_type 当 user_hint 用，不清就会带着上次偏见重识别 —— 跟"重新入库"语义不一致）
+    row.phase = PHASE_ANALYZING
+    row.phase_status = STATUS_RUNNING
+    row.status_message = f'用户手动重新入库（原 phase={old_phase}）'
+    row.error_log = None
+    # 识别信息
+    row.media_type = None
+    row.tmdb_id = None
+    row.imdb_id = None
+    row.series_tmdb_id = None
+    row.series_name = None
+    row.title = None
+    row.year = None
+    # 目标位置
+    row.target_library_id = None
+    row.target_root = None
+    row.target_path = None
+    # 中间产物
+    row.dispatched_files = []
+    row.copy_bytes_done = 0
+    row.copy_bytes_total = 0
+    row.dispatched_at = None
+    row.cleaned_at = None
+    # 清重试计数（避免 sweeper 误认为这是老的失败任务）
+    timings = dict(row.phase_timings or {})
+    timings.pop('sweeper_gave_up', None)
+    timings.pop('sweeper_attempts', None)
+    # 清重复检测缓存（analyzer 会重新跑）
+    timings.pop('duplicates', None)
+    row.phase_timings = timings
+    db.commit()
+
+    # 如果之前 qB 端是暂停态（dismissed 流程会暂停），resume 让它继续做种 / 验证元数据
+    qb_resumed = False
+    try:
+        from common.qbittorrent_client import QBittorrentClient
+        if settings.qbittorrent_host and settings.qbittorrent_username:
+            qb = QBittorrentClient(
+                settings.qbittorrent_host,
+                settings.qbittorrent_username,
+                settings.qbittorrent_password,
+            )
+            qb.resume(h)
+            qb_resumed = True
+    except Exception as e:
+        logger.warning(f"redispatch: qB resume 失败（不致命，analyzer 会自己拿状态）: {e}")
+
+    # 触发 analyzer 立刻处理
+    try:
+        from tools.dispatch.analyzer import trigger as analyzer_trigger
+        analyzer_trigger.set()
+    except Exception:
+        pass
+
+    logger.info(
+        f"redispatch: {h[:16]}.. {old_phase}/{old_status} → analyzing/running "
+        f"(用户手动重新入库，qb_resumed={qb_resumed})"
+    )
+    return {
+        'ok': True,
+        'torrent_hash': h,
+        'old_phase': old_phase,
+        'new_phase': PHASE_ANALYZING,
+    }
+
+
+@router.post('/dispatch-map/{torrent_hash}/reidentify')
+def reidentify_dispatch_row(
+    torrent_hash: str,
+    db: Session = Depends(get_db),
+):
+    """重新走识别链路。返回新识别结果但**不写库**，由前端决定是否保存。
+
+    跟 /edit 的区别：edit 是用户在对话框里手填后写库，本接口是"刷新建议"——
+    让用户点对话框左下的"重新识别"按钮就地拿到一份新结果回填表单。
+
+    步骤：拉 qB 文件列表 → 调 identify_media（不传 user_hint，让规则/TMDB/LLM 完整跑）
+    → 返回 dict（媒体类型 / 标题 / 年份 / 剧名 / source / confidence / 推算目标）
+    """
+    h = (torrent_hash or '').lower()
+    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
+
+    if not settings.qbittorrent_host or not settings.qbittorrent_username:
+        raise HTTPException(status_code=400, detail='未配置 qBittorrent')
+
+    # 拉 qB 文件列表
+    files: List[Dict] = []
+    try:
+        from common.qbittorrent_client import QBittorrentClient
+        qb = QBittorrentClient(
+            settings.qbittorrent_host,
+            settings.qbittorrent_username,
+            settings.qbittorrent_password,
+        )
+        qb_info = qb.get_torrent_info(h) or {}
+        torrent_name = qb_info.get('name') or row.title or ''
+        try:
+            raw_files = qb.get_files(h) or []
+            files = [
+                {'index': i, 'name': f.get('name'), 'size': f.get('size')}
+                for i, f in enumerate(raw_files)
+            ]
+        except Exception as e:
+            logger.warning(f"reidentify: 拉 {h[:16]}.. 文件列表失败: {e}（用空文件列表跑）")
+    except Exception as e:
+        logger.warning(f"reidentify: 连 qB 失败 {h[:16]}..: {e}（仍用 row.title 跑识别）")
+        torrent_name = row.title or ''
+
+    if not torrent_name:
+        raise HTTPException(status_code=400, detail='种子名为空，无法识别')
+
+    # 跑识别链 + 推算目标
+    from tools.dispatch.identify import identify_media
+    from tools.dispatch.adopt import _resolve_target_safe
+    identified = identify_media(torrent_name, files=files, user_hint=None)
+
+    target_info = _resolve_target_safe(identified)
+
+    logger.info(
+        f"reidentify: {h[:16]}.. → media_type={identified.get('media_type')!r} "
+        f"title={identified.get('title')!r} year={identified.get('year')!r} "
+        f"source={identified.get('source')!r} conf={identified.get('confidence')}"
+    )
+
+    return {
+        'ok': True,
+        'torrent_hash': h,
+        'torrent_name': torrent_name,
+        'identified': {
+            'media_type': identified.get('media_type'),
+            'title': identified.get('title'),
+            'year': identified.get('year'),
+            'series_name': identified.get('series_name'),
+            'season': identified.get('season'),
+            'episode': identified.get('episode'),
+            'source': identified.get('source'),
+            'confidence': identified.get('confidence'),
+            'tmdb_id': identified.get('tmdb_id'),
+            'series_tmdb_id': identified.get('series_tmdb_id'),
+        },
+        'target': {
+            'target_library_id': target_info.get('library_id'),
+            'target_path': target_info.get('target_path'),
+            'library_name': target_info.get('library_name'),
+        },
     }
 
 

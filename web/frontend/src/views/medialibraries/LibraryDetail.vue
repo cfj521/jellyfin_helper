@@ -737,7 +737,7 @@
                 删除其它 {{ group.files.length - 1 }} 项（保留勾选的）
               </el-button>
               <span class="dup-group-hint">
-                Jellyfin DELETE 会同时移除物理文件（需 EnableContentDeletion 权限）
+                同时会删除磁盘上的视频文件（需要 Jellyfin 设置里允许删除媒体）
               </span>
             </div>
           </el-collapse-item>
@@ -816,7 +816,7 @@
                 删除其它 {{ group.files.length - 1 }} 项（保留勾选的）
               </el-button>
               <span class="dup-group-hint">
-                hash 模式：通过路径反查 Jellyfin Item 后删除（含物理文件）
+                按文件路径定位 Jellyfin 里的条目后删除，磁盘文件一并清掉
               </span>
             </div>
           </el-collapse-item>
@@ -3587,18 +3587,24 @@ body:has(.lib-detail-root) .app-main {
 }
 
 // 让选择列的复选框更显眼：边框加粗 + 颜色加深 + 尺寸略大
+// 注意：Element Plus 对勾是 ::after border-rotate 45° 拼出来的，box 大小变了
+// 必须按比例调 width/height/left/top（默认 3×7 ratio），否则会显得"歪"
 .items-card :deep(.el-table) {
   .el-checkbox__inner {
     width: 18px;
     height: 18px;
     border-color: #94a3b8;
     border-width: 2px;
+    border-radius: 3px;
 
     &::after {
-      // 对勾粗一些
+      // 默认值: width 3 / height 7 / left 4 / top 1 / border 1px（14×14 box 用）
+      // 按 18/14 = 1.28 等比放大并对齐 2px 边框
       border-width: 2px;
-      height: 9px;
+      width: 4px;
+      height: 8px;
       left: 5px;
+      top: 1px;
     }
   }
 

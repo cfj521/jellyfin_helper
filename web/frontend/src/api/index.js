@@ -501,6 +501,12 @@ export const dispatchApi = {
   // 手动编辑 dispatch_map 行（media_type / 标题 / 目标库 / 目标路径）
   editDispatchRow: (hash, payload) =>
     api.post(`/api/dispatch/dispatch-map/${hash}/edit`, payload),
+  // 重新识别（跑识别链拿建议，不写库；前端用返回值回填编辑对话框）
+  reidentifyDispatchRow: (hash) =>
+    api.post(`/api/dispatch/dispatch-map/${hash}/reidentify`),
+  // 重新入库：把已完成的任务从分析阶段重跑（识别 → 拷贝 → 通知 Jellyfin → 后处理）
+  redispatchDispatchRow: (hash) =>
+    api.post(`/api/dispatch/dispatch-map/${hash}/redispatch`),
   // copy-phase 跨种子冲突决策
   getCopyConflict:     (hash) => api.get(`/api/dispatch/copy-conflict/${hash}`),
   copyConflictReplace: (hash) => api.post(`/api/dispatch/copy-conflict/${hash}/replace`),
