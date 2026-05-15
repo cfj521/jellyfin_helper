@@ -158,7 +158,22 @@ dispatch:
       file_template: "{code}({title})"
       duplicate_policy: always_skip
 
-# LLM 兜底识别（实测 qwen-plus 30/30 准确率 100%，¥0.74/1000 调用）
+# LLM 媒体识别（实测 qwen-plus 30/30 准确率 100%，¥0.74/1000 调用）
+#
+# 识别链置信度参考（tools/dispatch/identify.py 用，**硬编码不可改**，列在这里供查阅）：
+#   regex_avcode_verified  = 0.95   番号 regex 命中 + scraper 验证存在
+#   regex_avcode_unverified= 0.50   番号 regex 命中但所有 scraper 都查不到 → 标 adult 待审核
+#   regex_episode + TMDB   = 0.90   SxxExx 命中 + TMDB tv 验证
+#   regex_episode (no TMDB)= 0.70   SxxExx 命中但 TMDB 没查到
+#   regex_anime            = 0.75   [字幕组]xxx - 01 风格
+#   tmdb_search (movie+yr) = 0.85   "Title YYYY" 命中 + TMDB title fuzzy 校验通过
+#   tmdb_search_weak       = 0.50   TMDB 命中但 title fuzzy 校验未过（防 "Planet Earth 2006" → 灾难片那种）
+#   tmdb_generic           = 0.70   清洗 release tag 后通用 tv/movie 搜索命中
+#   llm_with_tmdb          = LLM 给的 conf（高，TMDB 又能验证到）
+#   llm_only               = LLM 给的 conf（无 TMDB 验证，conf 低一档）
+#
+# HIGH 阈值（硬编码 0.70）：识别链中任一步置信度 ≥ 0.70 立即返回，不再往下走
+# 全部步骤都 < 0.70 时取累计 best；< analyzer 自动入流水线门槛时落 needs_review
 llm:
   enabled: false                # 默认关闭（需配 api_key 后启用）
   provider: qwen                # qwen / deepseek / openai / lmstudio
@@ -168,7 +183,9 @@ llm:
   timeout_seconds: 180          # 单次 LLM 调用最长等待时间（秒）
   max_retries: 1
   cache_ttl_days: 30
-  confidence_threshold: 0.85
+  # 默认 false：LLM 作为兜底（番号→动漫→TMDB→LLM）
+  # true：LLM 排在识别链首位，正则/TMDB 作为兜底（适合 LLM 准确率信得过的场景）
+  prefer_first: false
 
 # 第三方推荐源（互补 TMDB）
 # Trakt：实时观看活动信号；https://trakt.tv/oauth/applications 创建 app 拿 client_id

@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 # 用 [A-Z]{2,5} 匹配公司前缀；过严容易漏，过宽容易误中
 _AV_PATTERNS = [
     re.compile(r'\b(FC2[\s\-_]*PPV)[\s\-_]*(\d{3,8})\b', re.I),
-    re.compile(r'\b([A-Z]{2,7})[\s\-_]+(\d{3,5})(?:[\s\-_]*[A-Z]{1,3})?\b'),
+    # 番号 prefix + 编号；编号若是 4 位且落在 19xx/20xx → 当年份不当番号
+    # （之前 "Planet Earth III 2023" 里 "III 2023" 被误命中成 III-2023 番号）
+    re.compile(r'\b([A-Z]{2,7})[\s\-_]+(?!(?:19|20)\d{2}\b)(\d{3,5})(?:[\s\-_]*[A-Z]{1,3})?\b'),
 ]
 
 _EPISODE_PATTERNS = [
@@ -83,6 +85,48 @@ _ANIME_GROUP_PREFIX = re.compile(
 # ============================================================================
 # 启发式识别
 # ============================================================================
+
+_AV_VERIFY_SCOPE = 'av_verify'
+_AV_VERIFY_TTL_DAYS = 30
+
+
+def verify_av_code(code: str) -> bool:
+    """跑 ScraperManager（merge=False，第一源命中即返回）验证番号是否真实存在。
+    结果存 KvCache 30 天，避免重复爬。
+
+    返回 True = 至少一个源能查到这个番号（很可能是 AV）；False = regex 命中但 scraper 全 miss
+    （多半是误命中，得降置信度让用户审核）。
+    """
+    if not code:
+        return False
+    code = code.upper().strip()
+    # 优先查缓存
+    try:
+        from web.backend.cache_store import get_cached, set_cached
+        cached = get_cached(_AV_VERIFY_SCOPE, code, ttl_seconds=_AV_VERIFY_TTL_DAYS * 86400)
+        if isinstance(cached, dict) and 'verified' in cached:
+            return bool(cached['verified'])
+    except Exception:
+        get_cached = set_cached = None  # type: ignore
+
+    # 实跑 scraper（merge=False：第一源命中即返回，快）
+    try:
+        from tools.adult_manager.scrapers.manager import ScraperManager
+        mgr = ScraperManager()
+        result = mgr.scrape(code, merge=False)
+        verified = bool(result and result.title)
+    except Exception as e:
+        logger.warning(f"verify_av_code 失败 {code}: {e}（按未验证处理）")
+        return False
+
+    if set_cached is not None:
+        try:
+            set_cached(_AV_VERIFY_SCOPE, code, {'verified': verified})
+        except Exception:
+            pass
+    logger.info(f"verify_av_code {code} → {'命中' if verified else '未命中（多半是误中）'}")
+    return verified
+
 
 def match_av_code(torrent_name: str, files: Optional[List[Dict]] = None) -> Optional[str]:
     """
@@ -309,53 +353,188 @@ def _log_identify_result(torrent_name: str, user_hint: Optional[Dict], result: D
         logger.info(log_msg)
 
 
-def _identify_chain(torrent_name: str, files: List[Dict]) -> Dict:
-    """完整识别链路（无 user_hint 影响）。任一规则命中即返回，否则走 LLM / unknown。"""
-    # ② 番号
+# confidence-driven 识别链：
+#   - 每步产出 (result, conf) 累计到 best
+#   - 任一步 conf >= HIGH 直接返回（短路）
+#   - 全跑完仍无人达 HIGH 时返回 best
+HIGH_CONFIDENCE = 0.70
+
+
+def _title_similarity(a: str, b: str) -> float:
+    """简单 token Jaccard 相似度。用来挡 TMDB 误匹配
+    （'Planet Earth 2006' → 'Final Days of Planet Earth' 这种 token 重合度很低）。
+    a 是用户 release 来的标题，b 是 TMDB 返回的标题；都 lowercase + 去标点 + 分词。"""
+    def _tokens(s: str) -> set:
+        if not s:
+            return set()
+        # 去标点符号 + lowercase + 拆词
+        s = re.sub(r'[^\w\s]', ' ', s.lower())
+        return {t for t in s.split() if len(t) >= 2}
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return inter / union if union else 0.0
+
+
+# release 标签词（清洗时剥掉这些保留标题骨架）
+_RELEASE_TAG_TOKENS = re.compile(
+    r'\b(?:2160p|1080p|720p|480p|4K|UHD|HDR|HDR10\+?|DV|DolbyVision|Atmos|TrueHD|'
+    r'BluRay|Blu-ray|BDRip|BDRemux|REMUX|WEB-?DL|WEBRip|HDTV|DVDRip|'
+    r'x264|x265|H\.?264|H\.?265|HEVC|AVC|10bit|8bit|AAC|AC3|DTS(?:-HD|HD)?|MA|5\.1|7\.1|'
+    r'PROPER|REPACK|RERIP|EXTENDED|INTERNAL|LIMITED|UNCUT|UNRATED|IMAX|'
+    r'TERMiNAL|YTS\.MX|YIFY|RARBG|EZTV|UTR|EVO|FGT|GalaxyRG)\b',
+    re.I,
+)
+
+
+def _clean_release_name(name: str) -> str:
+    """去 release 标签 + 年份 + 文件扩展，留 title 骨架。供"无年份通用 TMDB 搜"用。
+    e.g. 'Planet.Earth II 2160p 4K UHD 10bit HDR BluRay AAC 5' → 'Planet Earth II'
+    """
+    s = name
+    # 去括号/方括号包裹的整段（YTS 标签 / 字幕组 / 站点水印）
+    s = re.sub(r'[\[\(][^\[\]\(\)]{1,40}[\]\)]', ' ', s)
+    # 先去 AAC/AC3/DTS/TrueHD/Atmos 后面跟的声道数字（5.1 / 7.1 / 5 / 7）—— 先清这个，
+    # 否则下一步 _RELEASE_TAG_TOKENS 只清 AAC 等字母词，孤立的数字 5 / 7 留着会污染标题
+    s = re.sub(
+        r'\b(?:AAC|AC3|DTS(?:-HD|HD)?|MA|TrueHD|Atmos|DDP?|EAC3)[\s.\-]+\d+(?:\.\d+)?\b',
+        ' ',
+        s,
+        flags=re.I,
+    )
+    # 去 release 标签词
+    s = _RELEASE_TAG_TOKENS.sub(' ', s)
+    # 去年份
+    s = _YEAR_RE.sub(' ', s)
+    # 去文件扩展
+    s = re.sub(r'\.(mkv|mp4|avi|m2ts|ts|wmv)$', '', s, flags=re.I)
+    # . _ - → 空格；多空格折叠
+    s = re.sub(r'[._\-]+', ' ', s).strip()
+    s = re.sub(r'\s+', ' ', s)
+    return s
+
+
+def _pick_llm_title(hit: Dict, fallback: str) -> str:
+    """从 LLM hit 里按用户语言偏好选 title。
+    settings.metadata_scrape_language 控制：en* → 英文优先；zh* → 中文优先；其它 → native。"""
+    try:
+        from web.backend.config import settings
+        lang = (settings.metadata_scrape_language or 'en').lower()
+    except Exception:
+        lang = 'en'
+    zh = hit.get('title_zh')
+    en = hit.get('title_en')
+    native = hit.get('title_native')
+    if lang.startswith('zh'):
+        return zh or en or native or fallback
+    if lang.startswith('en'):
+        return en or native or zh or fallback
+    # 其它（日语/韩语等）→ native 优先
+    return native or en or zh or fallback
+
+
+def _run_llm(torrent_name: str, files: List[Dict]) -> Optional[Dict]:
+    """跑 LLM + TMDB 反查。失败 / 未启用返回 None。conf 是 LLM 自己给的，不再卡阈值。"""
+    try:
+        from common.llm_client import get_default_client
+        from web.backend.config import settings
+        if not (settings.llm.enabled and settings.llm.api_key):
+            return None
+        llm = get_default_client()
+        llm_result = llm.classify_torrent(torrent_name, files)
+    except Exception as e:
+        logger.warning(f"LLM 识别异常: {e}")
+        return None
+
+    conf = float(llm_result.get('confidence') or 0)
+    if conf <= 0:
+        return None
+
+    hit = dict(llm_result)
+    hit['source'] = 'llm_only'
+    # 无条件 TMDB 反查：不只是验证，更是为了拿 tmdb_id（后续重复检测 / jellyfin 关联都要用）
+    hint = llm_result.get('tmdb_search_hint')
+    if hint:
+        if llm_result.get('media_type') == 'movie':
+            verified = _tmdb_search_movie(hint, year=llm_result.get('year'))
+            if verified:
+                hit.update(verified)
+                hit['source'] = 'llm_with_tmdb'
+        elif llm_result.get('media_type') in ('tv', 'anime'):
+            verified = _tmdb_search_tv(hint)
+            if verified:
+                hit['series_tmdb_id'] = verified['tmdb_id']
+                hit['title'] = verified['title']    # 用 TMDB 标题覆盖（按 tmdb_language 配置返回）
+                hit['source'] = 'llm_with_tmdb'
+
+    # 标准化 title：按用户语言偏好选
+    hit['title'] = _pick_llm_title(hit, fallback=torrent_name[:80])
+    if hit.get('media_type') in ('tv', 'anime') and not hit.get('series_name'):
+        hit['series_name'] = hit['title']
+    hit['confidence'] = conf
+    return hit
+
+
+def _try_av(torrent_name: str, files: List[Dict]) -> Optional[Dict]:
+    """步 1：番号 regex + scraper 验证。"""
     av = match_av_code(torrent_name, files)
-    if av:
-        return {
-            'media_type': 'adult',
-            'title': av,
-            'code': av,
-            'source': 'regex_avcode',
-            'confidence': 0.95,
-        }
+    if not av:
+        return None
+    verified = verify_av_code(av)
+    return {
+        'media_type': 'adult',
+        'title': av,
+        'code': av,
+        'source': 'regex_avcode_verified' if verified else 'regex_avcode_unverified',
+        'confidence': 0.95 if verified else 0.50,
+    }
 
-    # ③ SxxExx 剧集
-    ep = extract_episode_info(torrent_name)
-    if ep:
-        # 尝试 TMDB 反查 series
-        tv = _tmdb_search_tv(ep['series_name_hint']) if ep['series_name_hint'] else None
-        return {
-            'media_type': 'anime' if (tv and tv.get('is_anime')) else 'tv',
-            'title': (tv or {}).get('title') or ep['series_name_hint'],
-            'series_name': (tv or {}).get('title') or ep['series_name_hint'],
-            'series_tmdb_id': (tv or {}).get('tmdb_id'),
-            'season': ep['season'],
-            'episode': ep['episode'],
-            'source': 'regex_episode',
-            'confidence': 0.9 if tv else 0.7,
-        }
 
-    # ④ 动漫单集
+def _try_anime(torrent_name: str) -> Optional[Dict]:
+    """步 2：动漫单集格式（字幕组前缀 + 集号）。"""
     anime = extract_anime_episode(torrent_name)
-    if anime and anime.get('has_group_prefix'):
-        return {
-            'media_type': 'anime',
-            'title': anime['anime_name_hint'],
-            'series_name': anime['anime_name_hint'],
-            'season': anime['season'],
-            'episode': anime['episode'],
-            'source': 'regex_anime',
-            'confidence': 0.75,
-        }
+    if not anime or not anime.get('has_group_prefix'):
+        return None
+    return {
+        'media_type': 'anime',
+        'title': anime['anime_name_hint'],
+        'series_name': anime['anime_name_hint'],
+        'season': anime['season'],
+        'episode': anime['episode'],
+        'source': 'regex_anime',
+        'confidence': 0.75,
+    }
 
-    # ⑤ 电影名 + 年份
+
+def _try_episode_tmdb(torrent_name: str) -> Optional[Dict]:
+    """步 3a：SxxExx 命中 + TMDB tv 搜索。"""
+    ep = extract_episode_info(torrent_name)
+    if not ep:
+        return None
+    tv = _tmdb_search_tv(ep['series_name_hint']) if ep['series_name_hint'] else None
+    return {
+        'media_type': 'anime' if (tv and tv.get('is_anime')) else 'tv',
+        'title': (tv or {}).get('title') or ep['series_name_hint'],
+        'series_name': (tv or {}).get('title') or ep['series_name_hint'],
+        'series_tmdb_id': (tv or {}).get('tmdb_id'),
+        'season': ep['season'],
+        'episode': ep['episode'],
+        'source': 'regex_episode',
+        'confidence': 0.90 if tv else 0.70,
+    }
+
+
+def _try_movie_tmdb(torrent_name: str) -> Optional[Dict]:
+    """步 3b：电影名 + 年份 → TMDB movie 搜索。加 title fuzzy 校验防误匹配。"""
     movie = extract_movie_info(torrent_name)
-    if movie:
-        tmdb = _tmdb_search_movie(movie['title'], year=movie['year'])
-        if tmdb:
+    if not movie:
+        return None
+    tmdb = _tmdb_search_movie(movie['title'], year=movie['year'])
+    if tmdb:
+        sim = _title_similarity(movie['title'], tmdb.get('title') or '')
+        if sim >= 0.5:
             return {
                 'media_type': 'movie',
                 'tmdb_id': tmdb['tmdb_id'],
@@ -364,55 +543,138 @@ def _identify_chain(torrent_name: str, files: List[Dict]) -> Dict:
                 'source': 'tmdb_search',
                 'confidence': 0.85,
             }
-        # 即使 TMDB 没命中，仍判定为 movie（中等置信度）
+        # 命中但相似度低 —— 可能 TMDB 返回了同年的不同片（'Planet Earth 2006' → 'Final Days...'）
+        logger.info(
+            f"tmdb_search 弱命中（title fuzzy sim={sim:.2f}）: "
+            f"query={movie['title']!r} → tmdb={tmdb.get('title')!r}"
+        )
         return {
             'media_type': 'movie',
-            'title': movie['title'],
+            'tmdb_id': tmdb['tmdb_id'],
+            'title': movie['title'],     # 用 release 标题，不用可疑的 TMDB 结果
             'year': movie['year'],
-            'source': 'regex_movie',
-            'confidence': 0.6,
+            'source': 'tmdb_search_weak',
+            'confidence': 0.50,
         }
-
-    # ⑥ LLM 兜底
-    try:
-        from common.llm_client import get_default_client
-        from web.backend.config import settings
-        if settings.llm.enabled and settings.llm.api_key:
-            llm = get_default_client()
-            llm_result = llm.classify_torrent(torrent_name, files)
-            conf = float(llm_result.get('confidence') or 0)
-            if conf >= settings.llm.confidence_threshold:
-                hit = dict(llm_result)
-                hit['source'] = 'llm_only'
-                # 无条件 TMDB 反查：不只是验证，更是为了拿 tmdb_id（后续重复检测 / jellyfin 关联都要用）
-                hint = llm_result.get('tmdb_search_hint')
-                if hint:
-                    if llm_result.get('media_type') == 'movie':
-                        verified = _tmdb_search_movie(hint, year=llm_result.get('year'))
-                        if verified:
-                            hit.update(verified)
-                            hit['source'] = 'llm_with_tmdb'
-                    elif llm_result.get('media_type') in ('tv', 'anime'):
-                        verified = _tmdb_search_tv(hint)
-                        if verified:
-                            hit['series_tmdb_id'] = verified['tmdb_id']
-                            hit['source'] = 'llm_with_tmdb'
-                # 标准化字段名
-                hit['title'] = (
-                    hit.get('title_zh') or hit.get('title_en')
-                    or hit.get('title_native') or torrent_name[:80]
-                )
-                if hit.get('media_type') in ('tv', 'anime') and not hit.get('series_name'):
-                    hit['series_name'] = hit['title']
-                hit['confidence'] = conf
-                return hit
-    except Exception as e:
-        logger.warning(f"LLM 识别异常: {e}")
-
-    # ⑦ 都没识别
+    # TMDB 没命中：regex_movie 中等置信度
     return {
+        'media_type': 'movie',
+        'title': movie['title'],
+        'year': movie['year'],
+        'source': 'regex_movie',
+        'confidence': 0.60,
+    }
+
+
+def _try_generic_tmdb(torrent_name: str) -> Optional[Dict]:
+    """步 3c：清洗 release tag 后通用 tv + movie 搜（不要求年份）。
+    解决 'Planet.Earth II 2160p 4K UHD ...' 这种没年份 / 没 SxxExx 的整季 pack。"""
+    cleaned = _clean_release_name(torrent_name)
+    if len(cleaned) < 3:
+        return None
+    tv = _tmdb_search_tv(cleaned)
+    mv = _tmdb_search_movie(cleaned)
+
+    # 各自算 fuzzy 相似度，挑分高的；都低就回 None
+    tv_sim = _title_similarity(cleaned, (tv or {}).get('title') or '') if tv else 0.0
+    mv_sim = _title_similarity(cleaned, (mv or {}).get('title') or '') if mv else 0.0
+
+    if not tv and not mv:
+        return None
+    if tv_sim >= mv_sim and tv_sim >= 0.4:
+        return {
+            'media_type': 'anime' if tv.get('is_anime') else 'tv',
+            'title': tv['title'],
+            'series_name': tv['title'],
+            'series_tmdb_id': tv['tmdb_id'],
+            'source': 'tmdb_generic',
+            'confidence': 0.70,
+        }
+    if mv_sim >= 0.4:
+        return {
+            'media_type': 'movie',
+            'tmdb_id': mv['tmdb_id'],
+            'title': mv['title'],
+            'year': mv.get('year'),
+            'source': 'tmdb_generic',
+            'confidence': 0.70,
+        }
+    return None
+
+
+def _identify_chain(torrent_name: str, files: List[Dict]) -> Dict:
+    """完整识别链路（无 user_hint 影响）。
+
+    confidence-driven：每步产出 result + conf；conf ≥ HIGH_CONFIDENCE 立即返回；
+    否则累计 best，跑完所有步骤后返回当前 best（或 unknown）。
+
+    步骤顺序（默认）：① 番号 ② 动漫 ③ TMDB 链（SxxExx → movie+year → generic） ④ LLM
+    settings.llm.prefer_first=True 时把 ④ 挪到 ① 前面。
+
+    详细置信度参考 config.yaml.example 里 llm 段的注释。
+    """
+    best: Optional[Dict] = None
+    fallback_default = {
         'media_type': 'unknown',
         'title': torrent_name[:120],
         'source': 'unknown',
         'confidence': 0.0,
     }
+
+    def consider(candidate: Optional[Dict]) -> bool:
+        """累计 candidate；返回 True 表示触达 HIGH 阈值，调用方应短路返回 best。"""
+        nonlocal best
+        if candidate is None:
+            return False
+        c = float(candidate.get('confidence') or 0)
+        if best is None or c > float(best.get('confidence') or 0):
+            best = candidate
+        return c >= HIGH_CONFIDENCE
+
+    # 读 prefer_first 开关
+    prefer_llm_first = False
+    try:
+        from web.backend.config import settings
+        prefer_llm_first = bool(getattr(settings.llm, 'prefer_first', False))
+    except Exception:
+        pass
+
+    # 步骤集合（生成器；按需调用，避免无意义的 TMDB / LLM HTTP）
+    def llm_step():
+        return _run_llm(torrent_name, files)
+
+    def av_step():
+        return _try_av(torrent_name, files)
+
+    def anime_step():
+        return _try_anime(torrent_name)
+
+    def tmdb_steps():
+        # 三个子步骤按相对置信度顺序：SxxExx > movie+year > generic
+        for fn in (_try_episode_tmdb, _try_movie_tmdb, _try_generic_tmdb):
+            yield fn(torrent_name)
+
+    if prefer_llm_first:
+        # LLM 优先模式：LLM → 番号 → 动漫 → TMDB 链
+        if consider(llm_step()):
+            return best
+        if consider(av_step()):
+            return best
+        if consider(anime_step()):
+            return best
+        for cand in tmdb_steps():
+            if consider(cand):
+                return best
+    else:
+        # 默认：番号 → 动漫 → TMDB 链 → LLM
+        if consider(av_step()):
+            return best
+        if consider(anime_step()):
+            return best
+        for cand in tmdb_steps():
+            if consider(cand):
+                return best
+        if consider(llm_step()):
+            return best
+
+    return best or fallback_default
