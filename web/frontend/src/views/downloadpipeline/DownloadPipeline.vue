@@ -248,8 +248,21 @@
               @click="openReview(row)"
             >人工审核</el-button>
             <template v-else>
-              <el-button v-if="isPaused(row.state)" size="small" @click="resume(row)">恢复</el-button>
-              <el-button v-else size="small" @click="pause(row)">暂停</el-button>
+              <el-tooltip
+                v-if="isPipelineBusy(row)"
+                :content="busyTooltip(row)"
+                placement="top"
+              >
+                <!-- disabled 按钮要包一层 span 才能正常响应 hover 触发 tooltip -->
+                <span>
+                  <el-button v-if="isPaused(row.state)" size="small" disabled>恢复</el-button>
+                  <el-button v-else size="small" disabled>暂停</el-button>
+                </span>
+              </el-tooltip>
+              <template v-else>
+                <el-button v-if="isPaused(row.state)" size="small" @click="resume(row)">恢复</el-button>
+                <el-button v-else size="small" @click="pause(row)">暂停</el-button>
+              </template>
             </template>
             <el-dropdown trigger="click" @command="cmd => onRowCommand(cmd, row)">
               <el-button size="small">
@@ -267,9 +280,16 @@
                     command="edit_dispatch"
                     style="color: #409eff"
                   >编辑识别/目标</el-dropdown-item>
-                  <el-dropdown-item command="force_start">强制启动</el-dropdown-item>
-                  <el-dropdown-item command="recheck">重新校验</el-dropdown-item>
-                  <el-dropdown-item command="reannounce">重新汇报</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canRedispatchRow(row)"
+                    command="redispatch"
+                    style="color: #409eff"
+                  >重新入库</el-dropdown-item>
+                  <!-- pipeline 后端正在跑（copying / organizing）时禁用 qB 类操作，
+                       不阻断也不报错，但让用户知道现在按了没意义 -->
+                  <el-dropdown-item command="force_start" :disabled="isPipelineBusy(row)">强制启动</el-dropdown-item>
+                  <el-dropdown-item command="recheck" :disabled="isPipelineBusy(row)">重新校验</el-dropdown-item>
+                  <el-dropdown-item command="reannounce" :disabled="isPipelineBusy(row)">重新汇报</el-dropdown-item>
                   <el-dropdown-item divided command="delete">删除任务</el-dropdown-item>
                   <el-dropdown-item command="delete_files" style="color: #f56c6c">删除（含文件）</el-dropdown-item>
                 </el-dropdown-menu>
@@ -389,16 +409,16 @@
 
           <template v-else>
             <el-form-item label="目标库 ID">
-              <el-input v-model="reviewForm.target_library_id" placeholder="Jellyfin library_id (在设置→入库流水线 查)" clearable />
+              <el-input v-model="reviewForm.target_library_id" placeholder="Jellyfin 库 ID（在 设置 → 入库流水线 里找）" clearable />
             </el-form-item>
             <el-form-item label="目标路径">
-              <el-input v-model="reviewForm.target_path" placeholder="后端视角绝对路径（如 /library/videos/movie/Movie (2024)）" clearable />
+              <el-input v-model="reviewForm.target_path" placeholder="完整路径，例如 /library/videos/movie/Movie (2024)" clearable />
             </el-form-item>
           </template>
 
           <el-form-item v-if="reviewAfterCopy">
             <span class="muted" style="font-size: 12px; color: #f59e0b">
-              ⚠ 已进入复制阶段，仅修改 DB 字段；已落地文件需自行迁移
+              ⚠ 文件已经在复制了，改这里不会自动搬已经下载好的文件，需要自己处理
             </span>
           </el-form-item>
         </el-form>
@@ -406,19 +426,28 @@
 
       <template #footer>
         <div class="review-footer">
-          <!-- 拒绝 3 按钮平铺，越往右越激进；仅 needs_review 流程显示 -->
-          <div class="footer-left" v-if="reviewIsConfirm">
-            <el-button title="保留种子和文件" @click="onReviewDismissCmd('dismiss')">
-              拒绝
-            </el-button>
-            <el-button title="不保留种子但保留文件" @click="onReviewDismissCmd('remove_torrent')">
-              移除种子
-            </el-button>
-            <el-button type="danger" plain title="种子和文件都不保留" @click="onReviewDismissCmd('remove_files')">
-              移除文件
-            </el-button>
+          <div class="footer-left">
+            <!-- 重新识别：跑一次完整识别链拿建议回填表单（不写库；用户点保存才落盘） -->
+            <el-button
+              :icon="Refresh"
+              :loading="reviewReidentifying"
+              :disabled="!reviewTarget"
+              title="重新自动识别一次，结果填到表单里"
+              @click="reidentifyInReview"
+            >重新识别</el-button>
+            <!-- 拒绝 3 按钮：仅 needs_review 流程显示 -->
+            <template v-if="reviewIsConfirm">
+              <el-button title="保留种子和文件" @click="onReviewDismissCmd('dismiss')">
+                拒绝
+              </el-button>
+              <el-button title="不保留种子但保留文件" @click="onReviewDismissCmd('remove_torrent')">
+                移除种子
+              </el-button>
+              <el-button type="danger" plain title="种子和文件都不保留" @click="onReviewDismissCmd('remove_files')">
+                移除文件
+              </el-button>
+            </template>
           </div>
-          <div class="footer-left" v-else></div>
           <div class="footer-right">
             <el-button @click="reviewVisible = false">取消</el-button>
             <el-button type="primary" :loading="reviewSaving" @click="submitReview">
@@ -432,7 +461,7 @@
     <!-- copy-phase 冲突审核 modal：目标位置已被另一种子占用，用户决策 -->
     <el-dialog
       v-model="copyConflictVisible"
-      title="跨种子目标冲突：请决策"
+      title="目标位置已有同名文件，请选择处理方式"
       width="640"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
@@ -444,13 +473,13 @@
             <span class="meta-name">{{ copyConflictInfo.my_release_name || copyConflictInfo.title || '-' }}</span>
           </div>
           <div class="meta-line">
-            <span class="meta-label">冲突目标</span>
+            <span class="meta-label">目标位置</span>
             <span class="path-text">{{ copyConflictInfo.dst }}</span>
           </div>
           <div class="meta-line">
             <span class="meta-label">已被</span>
             <span class="meta-name">{{ copyConflictInfo.existing_release_name }}</span>
-            <span class="muted"> · hash {{ (copyConflictInfo.existing_hash || '').slice(0, 16) }}.. · phase {{ copyConflictInfo.existing_phase }}</span>
+            <span class="muted"> · 种子 {{ (copyConflictInfo.existing_hash || '').slice(0, 16) }}.. · 当前 {{ copyConflictInfo.existing_phase }}</span>
           </div>
           <div class="meta-line" v-if="copyConflictInfo.reason">
             <span class="meta-label">原因</span>
@@ -458,7 +487,7 @@
           </div>
         </div>
         <div class="footer-hint muted">
-          覆盖：旧文件入 trash 后用新种子重写；跳过：保留旧版本，本种子结束
+          覆盖：旧文件挪到回收站，再写入新的；跳过：保留旧版本，丢掉新的
         </div>
       </div>
       <template #footer>
@@ -1231,6 +1260,7 @@ watch(activeTab, (v) => {
 const reviewVisible = ref(false)
 const reviewTarget = ref(null)             // 当前正在审核的 torrent row（来自 qbitTorrents 的某条）
 const reviewSaving = ref(false)
+const reviewReidentifying = ref(false)     // "重新识别"按钮的 loading 态
 const reviewForm = reactive({
   media_type: 'movie',
   title: '',
@@ -1310,6 +1340,34 @@ const canEditRow = (row) => {
   return !TERMINAL_PHASES.has(phase)
 }
 
+// 能否"重新入库"：终态任务（已完成 / 已清理 / 已拒绝），以及 duplicate_policy 跳过的
+const canRedispatchRow = (row) => {
+  const phase = row?.dispatch?.phase
+  const status = row?.dispatch?.phase_status
+  if (!phase) return false
+  if (phase === 'all_jobs_done' || phase === 'cleaned' || phase === 'dismissed') return true
+  if (phase === 'copying' && status === 'skipped') return true
+  return false
+}
+
+// 后端正在跑的"忙阶段"：按 qB 类按钮没意义、暂停按钮也停不下来的状态
+// 仅 copying（status=running）算真正阻塞型；organizing 现是 instant noop，列上以防未来扩展
+const BUSY_PHASES = new Set(['copying', 'organizing'])
+const isPipelineBusy = (row) => {
+  const phase = row?.dispatch?.phase
+  const status = row?.dispatch?.phase_status
+  if (!BUSY_PHASES.has(phase)) return false
+  // skipped / failed / succeeded 这些非 running 子状态不算真在忙
+  return status === 'running' || status === 'needs_review'
+}
+
+const busyTooltip = (row) => {
+  const phase = row?.dispatch?.phase
+  if (phase === 'copying') return '正在复制文件到媒体库，请等待完成'
+  if (phase === 'organizing') return '正在整理文件，请稍候'
+  return '任务处理中，暂时无法操作'
+}
+
 // 当前 review modal 是否走"审核确认"流程（vs 普通编辑）：看 phase_status
 const reviewIsConfirm = computed(
   () => reviewTarget.value?.dispatch?.phase_status === 'needs_review'
@@ -1365,7 +1423,7 @@ const submitReview = async () => {
   }
   if (reviewForm._target_mode === 'manual'
       && (!reviewForm.target_library_id || !reviewForm.target_path)) {
-    ElMessage.warning('手动指定目标时，target_library_id 和 target_path 都不能为空')
+    ElMessage.warning('手动指定目标时，"目标库 ID" 和 "目标路径" 都得填')
     return
   }
 
@@ -1405,6 +1463,36 @@ const submitReview = async () => {
     ElMessage.error('保存失败：' + (e.response?.data?.detail || e.message))
   } finally {
     reviewSaving.value = false
+  }
+}
+
+// 重新识别：跑后端识别链拿建议回填表单（不写库；保存才落盘）
+const reidentifyInReview = async () => {
+  if (!reviewTarget.value) return
+  reviewReidentifying.value = true
+  try {
+    const r = await dispatchApi.reidentifyDispatchRow(reviewTarget.value.hash)
+    const ident = r.data?.identified || {}
+    const target = r.data?.target || {}
+    // 回填表单（user 没点保存前不写 DB）
+    if (ident.media_type && ident.media_type !== 'unknown') {
+      reviewForm.media_type = ident.media_type
+    }
+    if (ident.title) reviewForm.title = ident.title
+    if (ident.year) reviewForm.year = ident.year
+    if (ident.series_name) reviewForm.series_name = ident.series_name
+    // 目标：跑出来的库 / 路径回填到 manual 字段，方便用户切到 manual 模式直接用
+    if (target.target_library_id) reviewForm.target_library_id = target.target_library_id
+    if (target.target_path) reviewForm.target_path = target.target_path
+    const conf = ident.confidence
+    ElMessage.success(
+      `识别结果：${ident.media_type || '?'} / ${ident.title || '?'} `
+      + `(${ident.source || '?'}, conf=${conf != null ? conf.toFixed(2) : '?'})`
+    )
+  } catch (e) {
+    ElMessage.error('重新识别失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    reviewReidentifying.value = false
   }
 }
 
@@ -1586,6 +1674,21 @@ const onRowCommand = async (cmd, row) => {
     } else if (cmd === 'edit_dispatch') {
       openEdit(row)
       return    // 弹窗自己 load，不走下面的 await load()
+    } else if (cmd === 'redispatch') {
+      try {
+        await ElMessageBox.confirm(
+          `重新走一遍完整流程：识别 → 拷贝 → 通知 Jellyfin → 字幕/音轨。\n\n`
+          + `已有的文件如果跟新目标一致会跳过；目标变了会重新拷贝到新位置（旧文件保留）。`,
+          `重新入库 ${row.name}`,
+          {
+            type: 'warning',
+            confirmButtonText: '开始',
+            cancelButtonText: '取消',
+          },
+        )
+      } catch { return }   // 用户取消
+      const r = await dispatchApi.redispatchDispatchRow(row.hash)
+      ElMessage.success(`已重新提交，${r.data?.old_phase || ''} → 分析中`)
     } else if (cmd === 'delete' || cmd === 'delete_files') {
       const deleteFiles = cmd === 'delete_files'
       try {
@@ -1762,6 +1865,7 @@ const phaseLabel = (p) => ({
   organizing: '整理中',
   jellyfin_recognizing: '入库识别中',
   jellyfin_recognize_done: '入库已识别',
+  subtitle_aligning: '字幕对齐中',
   subtitle_fetching: '抓字幕中',
   audio_track_order_adjusting: '调音轨中',
   all_jobs_done: '全部完成',
@@ -1773,7 +1877,7 @@ const phaseTagType = (phase, status) => {
   if (status === 'failed') return 'danger'
   if (phase === 'all_jobs_done') return 'success'
   if (['cleaned', 'dismissed'].includes(phase)) return 'info'
-  if (['copying', 'organizing', 'subtitle_fetching', 'audio_track_order_adjusting'].includes(phase)) return 'warning'
+  if (['copying', 'organizing', 'subtitle_aligning', 'subtitle_fetching', 'audio_track_order_adjusting'].includes(phase)) return 'warning'
   if (['analyzing', 'dispatch_queued', 'downloading'].includes(phase)) return 'info'
   if (['jellyfin_recognizing', 'jellyfin_recognize_done', 'download_done'].includes(phase)) return 'warning'
   return ''

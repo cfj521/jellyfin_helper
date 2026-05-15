@@ -1031,11 +1031,10 @@
                   </span>
                 </el-form-item>
 
-                <el-form-item label="优先采用 LLM 识别">
+                <el-form-item label="优先采用 LLM">
                   <el-switch v-model="form.llm.prefer_first" :disabled="!form.llm.enabled" />
                   <span class="form-hint" style="margin-left: 8px">
-                    默认关闭：LLM 作为兜底（番号 → 动漫 → TMDB → LLM）。
-                    开启后 LLM 排在识别链首位，规则/TMDB 作为兜底
+                    开启后优先用 AI 识别媒体类型；默认是规则识别不行时才用 AI
                   </span>
                 </el-form-item>
 
@@ -1132,12 +1131,12 @@
 
                   <el-form-item label="去重策略">
                     <el-select v-model="form.dispatch.rules[mt.key].duplicate_policy" style="width: 100%">
-                      <el-option label="质量更高胜出（旧入 trash 再覆盖）"   value="higher_quality_wins" />
-                      <el-option label="永远跳过新种子（保留旧的）"          value="always_skip" />
-                      <el-option label="永远用新的覆盖（旧入 trash）"        value="always_replace" />
-                      <el-option label="标记待人工决策"                      value="needs_review" />
+                      <el-option label="质量高的留下（旧的进回收站）"    value="higher_quality_wins" />
+                      <el-option label="永远保留旧版本，丢掉新的"        value="always_skip" />
+                      <el-option label="永远用新的覆盖（旧的进回收站）"  value="always_replace" />
+                      <el-option label="先放着等我手动选"                value="needs_review" />
                     </el-select>
-                    <span class="form-hint default-hint">目标位置已被其他种子占用时的处理方式</span>
+                    <span class="form-hint default-hint">下载的影片跟库里已有的重复时怎么办</span>
                   </el-form-item>
                 </el-form>
               </div>
