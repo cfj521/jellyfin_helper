@@ -825,6 +825,25 @@
         <el-empty v-else description="未发现重复文件" />
       </div>
 
+      <!-- 进度卡片：扫描中显示 phase/message/percent + 当前文件 -->
+      <div v-else-if="dupLoading && dupProgress" class="dup-progress">
+        <div class="dup-progress-head">
+          <el-tag size="small" :type="dupPhaseTagType(dupProgress.phase)" effect="dark">
+            {{ dupPhaseLabel(dupProgress.phase) }}
+          </el-tag>
+          <span class="dup-progress-msg">{{ dupProgress.message || '处理中...' }}</span>
+        </div>
+        <el-progress
+          :percentage="dupProgress.percent || 0"
+          :show-text="true"
+          :status="dupProgress.percent >= 100 ? 'success' : ''"
+        />
+        <div v-if="dupProgress.current" class="dup-progress-current" :title="dupProgress.current">
+          <el-icon><Document /></el-icon>
+          {{ dupProgress.current }}
+        </div>
+      </div>
+
       <el-empty v-else-if="!dupLoading" description="点击「开始检测」开始" />
 
       <template #footer>
@@ -878,7 +897,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, Refresh, MagicStick, Loading, Check, Close, Search, Link, Star,
   VideoCamera, VideoPlay, Headset, Folder, Setting, Delete, DocumentCopy,
-  CaretTop, CaretBottom, InfoFilled,
+  CaretTop, CaretBottom, InfoFilled, Document,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { jellyfinApi, mediaApi, taskApi, ratingsApi, metadataApi } from '@/api'
@@ -981,6 +1000,25 @@ const dupTagType = (mt) => ({
   hash: 'success',
   size_only: 'info',
 }[mt] || '')
+
+// SSE 进度卡片：phase → 标签文案 & tag type
+const dupPhaseLabel = (p) => ({
+  starting: '准备',
+  scanning: '扫盘',
+  hashing: '计算 hash',
+  probing: 'ffprobe',
+  fetching: '拉取元数据',
+  grouping: '分组',
+}[p] || p || '处理中')
+
+const dupPhaseTagType = (p) => ({
+  starting: 'info',
+  scanning: 'info',
+  hashing: 'warning',
+  probing: 'warning',
+  fetching: 'info',
+  grouping: 'success',
+}[p] || 'info')
 
 // 内容（无限滚动 + wanted 累加器，对齐 Trending.vue 的双层模型）
 // items     = 后端拉到的"数据池"（一次拿一批，比 wanted 大或一致）
@@ -2257,37 +2295,82 @@ const ratingFor = (row) => {
   return ratingsByKey.value[`${row.tmdb_id}-${mt}`] || null
 }
 
+// 进度状态：组件全局，方便 dialog 模板里实时显示
+// 形如 {phase: 'scanning'|'hashing'|'probing'|'fetching'|'grouping', message, percent, current?}
+const dupProgress = ref(null)
+let _dupEs = null   // 当前 EventSource，关闭对话框时主动断流
+
+// 把一系列 SSE event 累加到一个 merged 结果（hash 模式 __all__ 多 location 时用）
+const _runDupStream = (url) => new Promise((resolve, reject) => {
+  const es = new EventSource(url)
+  _dupEs = es
+  let resolved = false
+  es.onmessage = (e) => {
+    let evt
+    try { evt = JSON.parse(e.data) } catch { return }
+    if (evt.phase === 'done') {
+      resolved = true
+      es.close()
+      _dupEs = null
+      resolve(evt.result || {})
+    } else if (evt.phase === 'error') {
+      resolved = true
+      es.close()
+      _dupEs = null
+      reject(new Error(evt.message || '检测失败'))
+    } else {
+      dupProgress.value = evt
+    }
+  }
+  es.onerror = () => {
+    if (resolved) return    // 服务端推完 done 后浏览器还会触发一次 readyState=CLOSED 的 onerror
+    es.close()
+    _dupEs = null
+    reject(new Error('连接中断'))
+  }
+})
+
 const findDuplicates = async () => {
   dupLoading.value = true
+  dupProgress.value = { phase: 'starting', message: '准备开始...', percent: 0 }
+  dupResult.value = null
   try {
     if (dupMode.value === 'metadata') {
-      // 基于 Jellyfin 元数据（瞬时返回，无需扫盘）
-      const res = await mediaApi.findDuplicatesByMetadata(id.value)
-      dupResult.value = res.data
+      const url = mediaApi.findDuplicatesByMetadataStreamUrl(id.value)
+      dupResult.value = await _runDupStream(url)
     } else {
-      // 旧 hash 模式：仍按 path 扫盘
       if (!library.value?.locations.length) return
       if (dupPath.value === '__all__') {
+        // 多路径：依次跑每个 location 的流，合并结果
         const merged = { total_videos: 0, potential_duplicates: 0, groups: [] }
-        for (const loc of library.value.locations) {
+        const locs = library.value.locations
+        for (let i = 0; i < locs.length; i++) {
+          const loc = locs[i]
+          dupProgress.value = {
+            phase: 'starting',
+            message: `路径 ${i + 1}/${locs.length}：${loc}`,
+            percent: 0,
+          }
           try {
-            const r = await mediaApi.findDuplicates(loc)
-            merged.total_videos += r.data.total_videos || 0
-            merged.potential_duplicates += r.data.potential_duplicates || 0
-            merged.groups.push(...(r.data.groups || []))
-          } catch {}
+            const r = await _runDupStream(mediaApi.findDuplicatesStreamUrl(loc))
+            merged.total_videos += r.total_videos || 0
+            merged.potential_duplicates += r.potential_duplicates || 0
+            merged.groups.push(...(r.groups || []))
+          } catch (e) {
+            console.warn('path 检测失败', loc, e)
+          }
         }
         dupResult.value = merged
       } else {
         const path = dupPath.value || library.value.locations[0]
-        const res = await mediaApi.findDuplicates(path)
-        dupResult.value = res.data
+        dupResult.value = await _runDupStream(mediaApi.findDuplicatesStreamUrl(path))
       }
     }
   } catch (e) {
     ElMessage.error('检测失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     dupLoading.value = false
+    dupProgress.value = null
   }
 }
 
@@ -2297,9 +2380,17 @@ watch(dupMode, () => {
   dupKeepMap.value = {}
 })
 
-// 切回 dialog 关闭时清空选择
+// 切回 dialog 关闭时清空选择 + 断掉正在跑的 SSE 流
 watch(showDupDialog, (v) => {
-  if (!v) dupKeepMap.value = {}
+  if (!v) {
+    dupKeepMap.value = {}
+    if (_dupEs) {
+      try { _dupEs.close() } catch {}
+      _dupEs = null
+    }
+    dupLoading.value = false
+    dupProgress.value = null
+  }
 })
 
 // ============================================================================
@@ -3598,6 +3689,43 @@ body:has(.lib-detail-root) .app-main {
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+// 扫描进度卡片：phase 标签 + message + el-progress + current file
+.dup-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px 20px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+
+  .dup-progress-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .dup-progress-msg {
+    font-size: 13px;
+    color: #475569;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .dup-progress-current {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #94a3b8;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-left: 4px;
+  }
 }
 
 .dup-groups {
