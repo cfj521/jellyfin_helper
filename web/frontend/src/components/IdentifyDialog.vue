@@ -250,7 +250,7 @@ const onClosed = () => {
 <style lang="scss" scoped>
 .identify-dialog {
   .hint {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 12px;
     margin-left: 8px;
   }
@@ -259,13 +259,13 @@ const onClosed = () => {
 .current-info {
   margin-bottom: 14px;
   padding: 10px 12px;
-  background: #f8fafc;
-  border-left: 3px solid #6366f1;
+  background: var(--jt-fill-light);
+  border-left: 3px solid var(--jt-brand);
   border-radius: 4px;
   font-size: 13px;
 
   .info-label {
-    color: #64748b;
+    color: var(--jt-text-secondary);
     margin-bottom: 4px;
     font-size: 12px;
   }
@@ -278,11 +278,11 @@ const onClosed = () => {
 
     .info-name {
       font-weight: 600;
-      color: #0f172a;
+      color: var(--jt-text-primary);
     }
 
     .info-year {
-      color: #64748b;
+      color: var(--jt-text-secondary);
     }
 
     .info-tmdb {
@@ -296,7 +296,7 @@ const onClosed = () => {
   }
 
   .info-path {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 11px;
     margin-top: 4px;
     word-break: break-all;
@@ -308,7 +308,7 @@ const onClosed = () => {
 
   .candidates-header {
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
     margin-bottom: 8px;
   }
 
@@ -324,21 +324,21 @@ const onClosed = () => {
     align-items: flex-start;
     gap: 10px;
     padding: 10px;
-    background: #fff;
-    border: 1px solid #e2e8f0;
+    background: var(--jt-card-bg);
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s;
 
     &:hover {
       border-color: #c7d2fe;
-      background: #f5f3ff;
+      background: var(--jt-brand-light-9);
     }
 
     &.active {
-      border-color: #6366f1;
-      background: #eef2ff;
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+      border-color: var(--jt-brand);
+      background: var(--jt-brand-light-9);
+      box-shadow: 0 0 0 3px rgba(var(--jt-brand-rgb), 0.15);
     }
 
     .candidate-radio {
@@ -352,8 +352,8 @@ const onClosed = () => {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #f1f5f9;
-      color: #94a3b8;
+      background: var(--jt-fill-light);
+      color: var(--jt-text-muted);
       font-size: 11px;
       border-radius: 3px;
       flex-shrink: 0;
@@ -366,11 +366,11 @@ const onClosed = () => {
       .candidate-title {
         font-size: 14px;
         font-weight: 600;
-        color: #0f172a;
+        color: var(--jt-text-primary);
       }
 
       .candidate-year {
-        color: #64748b;
+        color: var(--jt-text-secondary);
         font-weight: 400;
         margin-left: 4px;
       }
@@ -391,13 +391,13 @@ const onClosed = () => {
         }
 
         .provider-tag {
-          color: #94a3b8;
+          color: var(--jt-text-muted);
           font-size: 11px;
         }
       }
 
       .candidate-overview {
-        color: #64748b;
+        color: var(--jt-text-secondary);
         font-size: 12px;
         line-height: 1.5;
         max-height: 4.5em;
@@ -415,7 +415,7 @@ const onClosed = () => {
     align-items: center;
     margin-top: 12px;
     padding: 8px 0;
-    border-top: 1px solid #f1f5f9;
+    border-top: 1px solid var(--jt-fill-light);
   }
 }
 </style>

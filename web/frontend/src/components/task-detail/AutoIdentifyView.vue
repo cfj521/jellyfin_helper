@@ -215,7 +215,7 @@ const activeTab = ref(groups.value.applied.length ? 'applied' : 'no_match')
 
   .cand-text > div { line-height: 1.4; }
 }
-.muted { color: #94a3b8; font-size: 12px; }
+.muted { color: var(--jt-text-muted); font-size: 12px; }
 
 // 健康度小标签：跟在 item_name 后面，明确这行是因为啥被纳入待处理
 .health-tag {
@@ -225,9 +225,9 @@ const activeTab = ref(groups.value.applied.length ? 'applied' : 'no_match')
 
 // 低置信度行整体着浅黄底，扫一眼就能看出哪些要复核
 :deep(.row-low-confidence) {
-  --el-table-tr-bg-color: #fef3c7;
+  --el-table-tr-bg-color: var(--jt-warning-tint);
 }
 :deep(.row-low-confidence:hover > td) {
-  background-color: #fde68a !important;
+  background-color: var(--jt-warning-tint) !important;
 }
 </style>

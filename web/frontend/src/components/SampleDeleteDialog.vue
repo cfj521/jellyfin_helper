@@ -252,7 +252,7 @@ const confirmDelete = async () => {
 .loading-block {
   text-align: center;
   padding: 40px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
 
   .spin {
     animation: spin 1.2s linear infinite;
@@ -265,14 +265,14 @@ const confirmDelete = async () => {
 }
 
 .muted {
-  color: #94a3b8;
+  color: var(--jt-text-muted);
 }
 
 .path-text {
   font-family: ui-monospace, monospace;
   font-size: 12px;
   word-break: break-all;
-  color: #475569;
+  color: var(--jt-text-regular);
 }
 
 
@@ -306,34 +306,34 @@ const confirmDelete = async () => {
   }
 
   &.verdict-sample {
-    background: #fef2f2;
-    border-color: #fecaca;
-    color: #b91c1c;
+    background: var(--jt-danger-tint);
+    border-color: var(--jt-danger-border);
+    color: var(--jt-danger-text);
   }
   &.verdict-sample-likely {
-    background: #fff7ed;
+    background: var(--jt-warning-tint);
     border-color: #fed7aa;
     color: #c2410c;
   }
   &.verdict-unclear {
-    background: #fefce8;
+    background: var(--jt-warning-tint);
     border-color: #fde68a;
-    color: #a16207;
+    color: var(--jt-warning-text);
   }
   &.verdict-main-content {
-    background: #f0fdf4;
+    background: var(--jt-success-tint);
     border-color: #bbf7d0;
-    color: #15803d;
+    color: var(--jt-success-text);
   }
   &.verdict-non-media {
-    background: #faf5ff;
+    background: rgba(var(--jt-brand-rgb), 0.05);
     border-color: #e9d5ff;
     color: #7e22ce;
   }
   &.verdict-unknown {
-    background: #f8fafc;
-    border-color: #e2e8f0;
-    color: #475569;
+    background: var(--jt-fill-light);
+    border-color: var(--jt-card-border);
+    color: var(--jt-text-regular);
   }
 }
 
@@ -346,7 +346,7 @@ const confirmDelete = async () => {
 
   .reason-title {
     font-size: 12px;
-    color: #64748b;
+    color: var(--jt-text-secondary);
     margin-bottom: 4px;
   }
 
@@ -357,11 +357,11 @@ const confirmDelete = async () => {
 
     .reason-line {
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
       line-height: 1.6;
 
       &.strong {
-        color: #b91c1c;
+        color: var(--jt-danger-text);
         font-weight: 500;
       }
     }
@@ -373,7 +373,7 @@ const confirmDelete = async () => {
 
   .siblings-title {
     font-size: 12px;
-    color: #64748b;
+    color: var(--jt-text-secondary);
     margin-bottom: 6px;
   }
 

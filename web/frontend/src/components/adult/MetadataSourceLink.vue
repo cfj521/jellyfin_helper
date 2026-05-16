@@ -43,14 +43,14 @@ const url = computed(() => {
   align-items: center;
   gap: 3px;
   font-size: 12px;
-  color: #6366f1;
+  color: var(--jt-brand);
   text-decoration: none;
   padding: 2px 6px;
   border-radius: 3px;
   transition: background 0.15s;
 
   &:hover {
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(var(--jt-brand-rgb), 0.1);
   }
 
   .ext-icon {

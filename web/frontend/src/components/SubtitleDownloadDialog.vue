@@ -422,15 +422,15 @@ const onClosed = () => {
 .sub-dl-dialog .current-info {
   margin-bottom: 14px;
   padding: 10px 12px;
-  background: #f8fafc;
-  border-left: 3px solid #6366f1;
+  background: var(--jt-fill-light);
+  border-left: 3px solid var(--jt-brand);
   border-radius: 4px;
   font-size: 13px;
 
-  .info-line { color: #0f172a; }
-  .info-year { color: #94a3b8; margin-left: 6px; }
+  .info-line { color: var(--jt-text-primary); }
+  .info-year { color: var(--jt-text-muted); margin-left: 6px; }
   .info-path {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 11px;
     margin-top: 4px;
     font-family: ui-monospace, SFMono-Regular, monospace;
@@ -444,7 +444,7 @@ const onClosed = () => {
     gap: 4px;
     font-size: 12px;
 
-    .info-langs-label { color: #94a3b8; margin-right: 4px; }
+    .info-langs-label { color: var(--jt-text-muted); margin-right: 4px; }
     .have-tag { font-size: 11px; }
   }
 }
@@ -458,7 +458,7 @@ const onClosed = () => {
 
   .search-label {
     flex-shrink: 0;
-    color: #475569;
+    color: var(--jt-text-regular);
     font-size: 14px;
   }
   .search-input {
@@ -479,7 +479,7 @@ const onClosed = () => {
   flex-wrap: wrap;
 
   .src-meta-label {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
   .src-meta-tag {
     text-transform: lowercase;
@@ -489,7 +489,7 @@ const onClosed = () => {
 .sub-results {
   .results-header {
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
     margin-bottom: 8px;
   }
   .result-list {
@@ -505,8 +505,8 @@ const onClosed = () => {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--jt-card-bg);
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
@@ -514,12 +514,12 @@ const onClosed = () => {
 
   &:hover {
     border-color: #c7d2fe;
-    background: #f5f3ff;
+    background: var(--jt-brand-light-9);
   }
   &.active {
-    border-color: #6366f1;
-    background: #eef2ff;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    border-color: var(--jt-brand);
+    background: var(--jt-brand-light-9);
+    box-shadow: 0 0 0 3px rgba(var(--jt-brand-rgb), 0.15);
   }
 
   .result-radio { margin: 0; flex-shrink: 0; }
@@ -543,7 +543,7 @@ const onClosed = () => {
     }
     .result-title {
       font-weight: 500;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       word-break: break-word;
     }
   }
@@ -551,7 +551,7 @@ const onClosed = () => {
   .result-filename {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
-    color: #475569;
+    color: var(--jt-text-regular);
     word-break: break-all;
 
     .filelist-more {
@@ -559,8 +559,8 @@ const onClosed = () => {
       padding: 0 5px;
       font-family: inherit;
       font-size: 10px;
-      color: #6366f1;
-      background: #eef2ff;
+      color: var(--jt-brand);
+      background: var(--jt-brand-light-9);
       border-radius: 8px;
       cursor: help;
     }
@@ -573,7 +573,7 @@ const onClosed = () => {
   }
 }
 
-.muted { color: #94a3b8; }
+.muted { color: var(--jt-text-muted); }
 
 // Bazarr 风格综合匹配分（pill，100 分制）
 .score-pill {

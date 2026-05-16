@@ -39,9 +39,9 @@ const jsonText = computed(() => {
 
 <style lang="scss" scoped>
 .json-block {
-  background: #f8fafc;
+  background: var(--jt-fill-light);
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   overflow: auto;
   max-height: 600px;

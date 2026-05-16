@@ -111,5 +111,5 @@ const activeTab = ref(details.value.length ? 'files' : (dirDetails.value.length 
 
 <style scoped>
 .path { word-break: break-all; font-family: 'Consolas', monospace; font-size: 12px; }
-.muted { color: #94a3b8; font-family: monospace; }
+.muted { color: var(--jt-text-muted); font-family: monospace; }
 </style>

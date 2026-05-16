@@ -186,8 +186,8 @@ const doubanTitle = computed(() => {
     &.trakt { background: #f3eaff; color: #6a4eb1; border-color: #dccdee; }
     &.letterboxd { background: #e6f6f0; color: #00674c; border-color: #b8dccc; }
     &.aggregate { background: #2c3e50; color: #fff; border-color: #1f2d3a; }
-    &.pending { background: #f5f5f5; color: #909399; border-color: #e4e7ed; }
-    &.no-data { background: #f5f5f5; color: #909399; border-color: #e4e7ed; }
+    &.pending { background: var(--jt-fill-light); color: var(--jt-text-muted); border-color: #e4e7ed; }
+    &.no-data { background: var(--jt-fill-light); color: var(--jt-text-muted); border-color: #e4e7ed; }
   }
 
   .pending-dot {

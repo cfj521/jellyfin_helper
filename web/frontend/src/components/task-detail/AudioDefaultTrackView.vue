@@ -125,8 +125,8 @@ const activeTab = ref(apply.value.executed ? 'applied' : 'candidates')
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: #fef9e7;
-  color: #b45309;
+  background: var(--jt-warning-tint);
+  color: var(--jt-warning-text);
   font-size: 12px;
   border-radius: 4px;
   margin-bottom: 12px;

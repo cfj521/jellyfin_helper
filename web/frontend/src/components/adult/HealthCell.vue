@@ -164,18 +164,18 @@ const stateLabel = computed(() => {
   }
 
   &.green    .dot { background: #16a34a; }
-  &.yellow   .dot { background: #f59e0b; }
-  &.gray     .dot { background: #94a3b8; }
-  &.red      .dot { background: #ef4444; }
+  &.yellow   .dot { background: var(--jt-warning); }
+  &.gray     .dot { background: var(--jt-text-muted); }
+  &.red      .dot { background: var(--jt-danger); }
   &.cooldown .dot { background: #8b5cf6; }
-  &.excluded .dot { background: #1e293b; }
+  &.excluded .dot { background: var(--jt-text-primary); }
 
   &.green    .state-text { color: #16a34a; }
   &.yellow   .state-text { color: #d97706; }
-  &.gray     .state-text { color: #64748b; }
+  &.gray     .state-text { color: var(--jt-text-secondary); }
   &.red      .state-text { color: #dc2626; font-weight: 500; }
   &.cooldown .state-text { color: #7c3aed; font-weight: 500; }
-  &.excluded .state-text { color: #475569; font-weight: 500; }
+  &.excluded .state-text { color: var(--jt-text-regular); font-weight: 500; }
 }
 
 .health-actions {

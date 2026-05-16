@@ -205,10 +205,10 @@ const formatTime = (ts) => {
   .title { font-weight: 500; }
 }
 
-.muted { color: #94a3b8; }
-.code { color: #6366f1; font-weight: 600; font-family: monospace; }
+.muted { color: var(--jt-text-muted); }
+.code { color: var(--jt-brand); font-weight: 600; font-family: monospace; }
 .filename { word-break: break-all; }
-.error-msg { color: #ef4444; font-size: 12px; }
+.error-msg { color: var(--jt-danger); font-size: 12px; }
 
 .pagination {
   margin-top: 16px;

@@ -66,7 +66,7 @@ const src = computed(() => {
   aspect-ratio: 16 / 9;
   border-radius: 4px;
   overflow: hidden;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
   text-decoration: none;
   color: inherit;
 
@@ -75,7 +75,7 @@ const src = computed(() => {
     transition: transform 0.15s, box-shadow 0.15s;
     &:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 10px rgba(99, 102, 241, 0.25);
+      box-shadow: 0 4px 10px rgba(var(--jt-brand-rgb), 0.25);
     }
   }
 
@@ -89,16 +89,16 @@ const src = computed(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-    color: #64748b;
+    background: var(--jt-fill-light);
+    color: var(--jt-text-secondary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
     font-weight: 600;
     user-select: none;
 
     &.is-unrecognized {
-      background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
-      color: #b91c1c;
+      background: var(--jt-danger-tint);
+      color: var(--jt-danger-text);
     }
   }
 

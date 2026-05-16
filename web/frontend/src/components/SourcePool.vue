@@ -198,14 +198,14 @@ const onDragEnd = () => {
     align-items: flex-start;
     gap: 12px;
     padding: 12px;
-    background: #f8fafc;
-    border: 1px dashed #cbd5e1;
+    background: var(--jt-fill-light);
+    border: 1px dashed var(--jt-card-border);
     border-radius: 6px;
     margin-bottom: 14px;
 
     .pool-label {
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
       font-weight: 500;
       flex-shrink: 0;
       line-height: 28px;
@@ -232,7 +232,7 @@ const onDragEnd = () => {
 
     &:not(.used):hover {
       transform: translateY(-1px);
-      box-shadow: 0 2px 6px rgba(99, 102, 241, 0.25);
+      box-shadow: 0 2px 6px rgba(var(--jt-brand-rgb), 0.25);
     }
 
     &.used {
@@ -244,9 +244,9 @@ const onDragEnd = () => {
   .empty-tip {
     padding: 16px;
     text-align: center;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 13px;
-    background: #fafafa;
+    background: var(--jt-fill-light);
     border-radius: 6px;
   }
 
@@ -260,7 +260,7 @@ const onDragEnd = () => {
 
       .header-text {
         font-size: 13px;
-        color: #475569;
+        color: var(--jt-text-regular);
         font-weight: 500;
       }
     }
@@ -271,15 +271,15 @@ const onDragEnd = () => {
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
     margin-bottom: 8px;
-    background: #fff;
+    background: var(--jt-card-bg);
     transition: all 0.15s ease;
 
     &:hover {
       border-color: #c7d2fe;
-      box-shadow: 0 1px 3px rgba(99, 102, 241, 0.1);
+      box-shadow: 0 1px 3px rgba(var(--jt-brand-rgb), 0.1);
     }
 
     // 拖动中：原位置半透明
@@ -289,8 +289,8 @@ const onDragEnd = () => {
 
     // 拖动悬停的目标行：高亮上边沿暗示插入点
     &.drag-over {
-      border-color: #6366f1;
-      box-shadow: 0 -2px 0 0 #6366f1;
+      border-color: var(--jt-brand);
+      box-shadow: 0 -2px 0 0 var(--jt-brand);
     }
 
     .drag-handle {
@@ -300,12 +300,12 @@ const onDragEnd = () => {
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       cursor: grab;
       transition: color 0.15s ease;
 
       &:hover {
-        color: #6366f1;
+        color: var(--jt-brand);
       }
 
       &:active {
@@ -318,7 +318,7 @@ const onDragEnd = () => {
       height: 24px;
       flex-shrink: 0;
       border-radius: 50%;
-      background: #6366f1;
+      background: var(--jt-brand);
       color: #fff;
       font-size: 12px;
       font-weight: 600;
@@ -330,7 +330,7 @@ const onDragEnd = () => {
     .row-name {
       min-width: 110px;
       font-size: 13px;
-      color: #334155;
+      color: var(--jt-text-primary);
       font-weight: 500;
     }
 

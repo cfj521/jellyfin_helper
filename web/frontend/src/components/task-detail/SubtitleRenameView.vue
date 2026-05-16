@@ -162,14 +162,14 @@ const langLabel = (code) => LANG_LABEL[code?.toLowerCase()] || code || ''
   justify-content: space-between;
   align-items: baseline;
 }
-.muted { color: #94a3b8; font-size: 12px; }
+.muted { color: var(--jt-text-muted); font-size: 12px; }
 
 .placeholder {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 24px;
-  color: #64748b;
+  color: var(--jt-text-secondary);
   font-size: 13px;
   justify-content: center;
 }
@@ -201,7 +201,7 @@ const langLabel = (code) => LANG_LABEL[code?.toLowerCase()] || code || ''
   word-break: break-all;
 }
 .arrow {
-  color: #10b981;
+  color: var(--jt-success);
   margin-right: 6px;
   font-weight: bold;
 }

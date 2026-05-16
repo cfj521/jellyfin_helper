@@ -107,14 +107,14 @@ onMounted(() => {
   .file-list {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #ebeef5;
+    border: 1px solid var(--jt-card-border);
     border-radius: 4px;
 
     .file-item {
       display: flex;
       align-items: center;
       padding: 10px 16px;
-      border-bottom: 1px solid #ebeef5;
+      border-bottom: 1px solid var(--jt-card-border);
       cursor: pointer;
 
       &:last-child {
@@ -122,7 +122,7 @@ onMounted(() => {
       }
 
       &:hover {
-        background-color: #f5f7fa;
+        background-color: var(--jt-fill-light);
       }
 
       .file-icon {
@@ -135,7 +135,7 @@ onMounted(() => {
       }
 
       .file-size {
-        color: #909399;
+        color: var(--jt-text-muted);
         font-size: 13px;
       }
     }

@@ -75,5 +75,5 @@ const activeTab = ref('moved')
 <style lang="scss" scoped>
 .path { word-break: break-all; font-family: 'Consolas', monospace; font-size: 12px; }
 .from-cell, .to-cell { display: flex; align-items: center; gap: 6px; }
-.arrow { color: #10b981; flex-shrink: 0; }
+.arrow { color: var(--jt-success); flex-shrink: 0; }
 </style>
