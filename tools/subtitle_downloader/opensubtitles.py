@@ -52,7 +52,7 @@ class OpenSubtitlesClient:
         self.headers = {
             'Api-Key': api_key,
             'Content-Type': 'application/json',
-            'User-Agent': 'JellyfinTools v1.0'
+            'User-Agent': 'JellyfinHelper v1.0'
         }
         self.request_delay = max(0.0, float(request_delay))
         self._last_call = 0.0

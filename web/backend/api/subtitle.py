@@ -940,10 +940,11 @@ def _load_recent_scan_report(
             tv = sum(d.get('total_videos', 0) for d in kept)
             tw = sum(d.get('with_subtitles', 0) for d in kept)
             two = sum(d.get('without_subtitles', 0) for d in kept)
+            twr = sum(1 for d in kept for v in d.get('videos') or [] if (v.get('missing_langs') or []))
             tsubs = sum(len((v.get('subtitles') or [])) for d in kept for v in d.get('videos') or [])
             logger.info(
                 f"auto-fix 复用最近扫描结果 task=#{t.id} "
-                f"completed_at={t.completed_at} dirs={len(kept)} videos={tv}"
+                f"completed_at={t.completed_at} dirs={len(kept)} videos={tv} 缺所需={twr}"
             )
             return {
                 'scan_paths': paths,
@@ -952,6 +953,7 @@ def _load_recent_scan_report(
                 'total_videos': tv,
                 'with_subtitles': tw,
                 'without_subtitles': two,
+                'without_required': twr,
                 'total_subtitles': tsubs,
                 'directories': kept,
                 '_reused_from_task': t.id,
@@ -1094,6 +1096,13 @@ def run_subtitle_auto_fix_inline(
         total_with = report_data['with_subtitles']
         total_without = report_data['without_subtitles']
         total_subs = report_data['total_subtitles']
+        # 复用的旧 report 可能没 without_required（旧字段），现场按 missing_langs 重算兜底
+        total_without_required = report_data.get('without_required')
+        if total_without_required is None:
+            total_without_required = sum(
+                1 for d in (report_data.get('directories') or [])
+                for v in (d.get('videos') or []) if (v.get('missing_langs') or [])
+            )
         last_scan_time = report_data.get('scan_time') or ''
         scan_details = _videos_to_details(report_data.get('directories') or [])
         # 复用情况下扫描详情可以一次性 emit（数据已现成，不是真扫）
@@ -1102,6 +1111,7 @@ def run_subtitle_auto_fix_inline(
                 'total_videos': total_videos,
                 'with_subtitles': total_with,
                 'without_subtitles': total_without,
+                'without_required': total_without_required,
                 'total_subtitles': total_subs,
             },
             'scan_details': scan_details,
@@ -1115,6 +1125,7 @@ def run_subtitle_auto_fix_inline(
         total_videos = 0
         total_with = 0
         total_without = 0
+        total_without_required = 0   # 缺 required_langs 任一语言的视频数（用户真正关心的"缺字幕"）
         total_subs = 0
         last_scan_time = ""
 
@@ -1145,10 +1156,12 @@ def run_subtitle_auto_fix_inline(
 
                 with_sub = sum(1 for vd in videos_filtered if vd['subtitles'] or vd['embedded_langs'])
                 without_sub = len(videos_filtered) - with_sub
+                without_required = sum(1 for vd in videos_filtered if vd['missing_langs'])
 
                 total_videos += len(videos_filtered)
                 total_with += with_sub
                 total_without += without_sub
+                total_without_required += without_required
                 total_subs += sum(len(vd['subtitles']) for vd in videos_filtered)
 
                 d_dict = {
@@ -1158,6 +1171,7 @@ def run_subtitle_auto_fix_inline(
                     "total_videos": len(videos_filtered),
                     "with_subtitles": with_sub,
                     "without_subtitles": without_sub,
+                    "without_required": without_required,
                     "videos": videos_filtered,
                 }
                 all_dirs.append(d_dict)
@@ -1170,6 +1184,7 @@ def run_subtitle_auto_fix_inline(
                     'total_videos': total_videos,
                     'with_subtitles': total_with,
                     'without_subtitles': total_without,
+                    'without_required': total_without_required,
                     'total_subtitles': total_subs,
                 },
                 'scan_details': list(scan_details),
@@ -1182,6 +1197,7 @@ def run_subtitle_auto_fix_inline(
             "total_videos": total_videos,
             "with_subtitles": total_with,
             "without_subtitles": total_without,
+            "without_required": total_without_required,
             "total_subtitles": total_subs,
             "directories": all_dirs,
         }
@@ -1257,6 +1273,7 @@ def run_subtitle_auto_fix_inline(
                 "scan": {"total_videos": total_videos,
                          "with_subtitles": total_with,
                          "without_subtitles": total_without,
+                         "without_required": total_without_required,
                          "total_subtitles": total_subs},
                 "download": download_stats,
                 "rename": {"total": 0, "success": 0},
@@ -1326,11 +1343,39 @@ def run_subtitle_auto_fix_inline(
                         logger.warning(f"刷新库 {lid} 失败: {e}")
                 refreshed = True
 
+    # per-video 决策日志：所有调用方共享（dispatch 后处理 / MediaToolbar 用户触发 / run_all 编排）
+    # 把"探到了哪些 / 缺哪些 / 下不下载"打到 server log，避免只看 success=0 无法判断
+    # 是 bug 还是真的不需要下
+    try:
+        logger.info(
+            f"auto-fix 扫描汇总: videos={total_videos} 已有字幕={total_with} "
+            f"完全无字幕={total_without} 缺所需语言={total_without_required} "
+            f"required={required_langs} downloading={downloading_langs}"
+        )
+        report_for_log = report_data or {}
+        for d_log in (report_for_log.get('directories') or []):
+            for v_log in (d_log.get('videos') or []):
+                name = v_log.get('name') or Path(v_log.get('path', '')).name
+                embed = v_log.get('embedded_langs') or []
+                subs = [s.get('lang') for s in (v_log.get('subtitles') or [])]
+                miss = v_log.get('missing_langs') or []
+                if not miss:
+                    logger.info(
+                        f"  ✓ {name}  内嵌={embed} 外挂={subs} → 已覆盖 {required_langs}，跳过下载"
+                    )
+                else:
+                    logger.info(
+                        f"  ↓ {name}  内嵌={embed} 外挂={subs} → 缺 {miss}，启动下载"
+                    )
+    except Exception:
+        logger.exception("auto-fix per-video 决策日志输出失败（不影响主流程）")
+
     return {
         "scan": {
             "total_videos": total_videos,
             "with_subtitles": total_with,
             "without_subtitles": total_without,
+            "without_required": total_without_required,
             "total_subtitles": total_subs,
         },
         "download": download_stats,

@@ -12,18 +12,35 @@ server:
 database:
   host: "127.0.0.1"
   port: 5432
-  name: "jellyfin_tools"
-  user: "jellyfin_tools"
+  name: "jellyfin_helper"
+  user: "jellyfin_helper"
   password: "CHANGE_ME"
 
 # Jellyfin 配置
 jellyfin:
   host: "http://127.0.0.1:8096"
   api_key: "your_jellyfin_api_key"
+  # 可选：jellyfin SQLite 数据库本地可达路径（path → item 反查直读，绕开 REST API）
+  # 同机部署典型路径：/var/lib/jellyfin/data/jellyfin.db
+  # 跨主机走 SMB 挂载时填挂载点：W:/jellyfin/jellyfin.db
+  # 留空 → 全走 REST API（自动 fallback）
+  db_path: ""
 
 # TMDB 配置（在 https://www.themoviedb.org/settings/api 申请）
 tmdb:
   api_key: "your_tmdb_api_key"
+  request_delay: 1.0        # 官方限 50 req/s；1.0 足够保守
+  language: "zh-CN"         # 元数据语言（影响 title / overview 等）
+
+# 路径映射（跨主机部署必备）
+# Jellyfin 在 Linux 上看到的路径 vs 后端在 Windows 上挂载的路径，二者需要互转。
+# 后端遍历规则按顺序匹配第一个命中即返回。
+# 留空 → 不做翻译，path 原样使用（同机部署不需要配）
+path_mappings:
+  enabled: false
+  rules:
+    # - { from: "/library/videos", to: "Z:/videos" }
+    # - { from: "/library/adult",  to: "Z:/adult" }
 
 # 缓存 TTL
 # 除了路径索引（30 秒，固定）外，所有可配缓存都在这里。
@@ -40,7 +57,7 @@ cache:
 # 否则可能被 403。建议带上你的联系方式或仓库 URL。
 wikidata:
   enabled: true
-  user_agent: "JellyfinTools/1.0 (cfj521@gmail.com)"
+  user_agent: "JellyfinHelper/1.0 (cfj521@gmail.com)"
   # 搜索语言顺序：按列表依次尝试，命中第一个就停。中文名优先 zh，欧美名优先 en
   language_order: ["zh", "en"]
   # 两次请求之间的最小间隔（秒）。Wikidata 没死硬限速，1s 比较稳
@@ -65,6 +82,18 @@ douban:
   cache_ttl_days: 30
   # User-Agent，模拟真实浏览器；过期换一下即可
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  # 后台异步评分 worker 行为
+  worker_delay: 30.0                # 单条评分查询之间的间隔（秒），保守
+  worker_max_failures: 5            # 连续 N 次失败触发熔断
+  worker_cooldown_seconds: 3600     # 熔断后冷却时长（秒），到时间自动恢复
+
+# 元数据存储行为（media_metadata 实体表）
+metadata:
+  store_douban_full: true           # 豆瓣完整字段（简介/演员/标签）落库
+  lru_keep_days: 365                # 长期未访问条目的 LRU 保留期
+  refresh_ttl_days: 30              # 刷新阈值（同条记录 N 天内不重新拉远端）
+  scrape_language: "en"             # 刮削语言（en 命中率更高，避免 zh-CN 漏数据）
+  display_language: "en"            # 前端默认显示语言
 
 # 字幕设置
 subtitle:
@@ -104,11 +133,21 @@ subtitle:
     - { name: shooter,       enabled: true }
     - { name: assrt,         enabled: true }
     - { name: opensubtitles, enabled: true }
+  # 字幕格式偏好（评分排序用：靠前权重高）
+  preferred_formats: ["srt", "ass", "ssa", "sub", "vtt"]
+
+# 音轨设置
+audio:
+  # MKV 默认音轨偏好（按列表顺序匹配；当前默认是 chs 时会跳过避免误改）
+  preferred_langs: ["chs", "eng"]
 
 # Jackett 配置（种子搜索聚合）
 jackett:
   host: "http://127.0.0.1:9117"
   api_key: "your_jackett_api_key"
+  # 默认搜索关键词（前端搜索页 placeholder + 一键搜索的预设列表）
+  search_keywords: []
+  default_keywords: ""
 
 # qBittorrent 配置（下载管理）
 qbittorrent:
@@ -240,6 +279,14 @@ adult:
   enabled: false
   media_path: ""
   scraper_delay: 3.0
+  # 限定哪些 Jellyfin 库 ID 视为成人库（留空 → 走自动检测）
+  library_ids: []
+  # 额外的成人库本地路径（不在 jellyfin 库列表中的目录）
+  extra_paths: []
+  # 自动检测：通过 jellyfin 库名 / 路径关键字识别成人库
+  auto_detect: true
+  # 自动刮削：新 item 入库后自动跑番号识别 + 元数据填充
+  auto_scrape: false
   # 刮削源（按顺序回退，第一个命中即返回）。可关闭某些源。
   #   avbase  - 商业番号兜底（DMM 图床高清封面）
   #   missav  - 最终兜底：覆盖广（含 FC2）+ 中文化标题，但需 curl_cffi 绕 Cloudflare 较慢

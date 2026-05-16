@@ -259,10 +259,13 @@ class ActressBuilder:
                 return
 
             # 检查是否已存在同 javdb_id 的另一条（说明 query 是别名）
-            existing = (db.query(AdultActress)
-                          .filter(AdultActress.javdb_id == result.javdb_id,
-                                  AdultActress.id != row_id)
-                          .first())
+            # Minnano-AV 源 javdb_id 为 None，跳过这段去重（避免误命中所有 NULL 行）
+            existing = None
+            if result.javdb_id:
+                existing = (db.query(AdultActress)
+                              .filter(AdultActress.javdb_id == result.javdb_id,
+                                      AdultActress.id != row_id)
+                              .first())
 
             if existing:
                 # 合并：query 进 existing.aliases，删占位
@@ -307,15 +310,18 @@ class ActressBuilder:
                         aliases.append(n)
                         changed = True
                 # 如果 same_jp 没 javdb_id（之前 pending 时建的），趁机回填
-                if not same_jp.javdb_id:
+                # Minnano-AV 源 result.javdb_id 为 None，回填时也要兼容
+                if not same_jp.javdb_id and result.javdb_id:
                     same_jp.javdb_id = result.javdb_id
+                if same_jp.source in (None, 'pending', 'not_found'):
+                    # 该行还没被任何源认领过，本次结果可以覆盖填字段
                     if not same_jp.zh_name and result.zh_name:
                         same_jp.zh_name = result.zh_name
                     if not same_jp.en_name and result.en_name:
                         same_jp.en_name = result.en_name
                     if not same_jp.avatar_url and result.avatar_url:
                         same_jp.avatar_url = result.avatar_url
-                    same_jp.source = 'javdb'
+                    same_jp.source = result.source
                     changed = True
                 if changed and aliases:
                     same_jp.aliases = json.dumps(aliases, ensure_ascii=False)
@@ -331,7 +337,7 @@ class ActressBuilder:
             row.en_name = result.en_name
             row.avatar_url = result.avatar_url
             row.javdb_id = result.javdb_id
-            row.source = 'javdb'
+            row.source = result.source
             aliases_list = list(result.aliases or [])
             canonical = {result.jp_name, result.zh_name, result.en_name} - {None}
             if query not in canonical and query not in aliases_list:
@@ -340,7 +346,11 @@ class ActressBuilder:
                 row.aliases = json.dumps(aliases_list, ensure_ascii=False)
             db.commit()
             self._inc('resolved_in_run')
-            logger.info(f"[{query}] resolved → {result.jp_name} / {result.zh_name} (javdb_id={result.javdb_id})")
+            logger.info(
+                f"[{query}] resolved via {result.source} → "
+                f"{result.jp_name} / {result.zh_name} "
+                f"(javdb_id={result.javdb_id}, aliases={aliases_list})"
+            )
 
     # ============ 状态辅助 ============
 

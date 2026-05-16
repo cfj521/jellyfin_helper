@@ -80,13 +80,15 @@ def _classify_chinese_variant(title: str) -> str:
 def normalize_lang(language: Optional[str], title: Optional[str] = None) -> Optional[str]:
     """
     把 ffprobe 报告的 language + title 归一化到内部 lang code。
-    返回值与 preferred_langs / preferred_audio_langs 配置中使用的代码一致：
+    返回值与 required_langs / preferred_audio_langs 配置中使用的代码一致：
       - chs / cht：简/繁中
       - yue：粤语
       - eng：英文
       - jpn：日文
       - kor：韩文
-    无法识别的返回 None。
+    其它已知 ISO 语言（如 fra / deu / spa / ind / vie 等）**原样返回小写 ISO 码**，
+    便于 scanner 在 required_langs 里直接匹配；只有 ffprobe 完全没给 language 标签
+    且 title 也反推不出时才返回 None。
     """
     if not language:
         # 无 language 标签：尝试从 title 反推（少见但偶尔发生）
@@ -104,9 +106,13 @@ def normalize_lang(language: Optional[str], title: Optional[str] = None) -> Opti
                 return 'kor'
         return None
 
-    base = _LANG_NORMALIZE.get(language.lower())
+    lang_lower = language.lower()
+    base = _LANG_NORMALIZE.get(lang_lower)
     if base is None:
-        return None
+        # 未在归一化表里的语言：直接保留原始 ISO 码（fra/deu/spa/ind/vie/...）
+        # 这样 scanner.check_missing_langs 仍能按 required_langs 精确匹配，
+        # 也避免"探到了但 None 被丢弃"导致的信息丢失。
+        return lang_lower
     if base == 'yue':
         return 'yue'
     if base == 'zh':

@@ -17,6 +17,19 @@ DEFAULT_SLOW_MS = 500
 HTTP_SLOW_MS = 1000           # 外部 HTTP 调用阈值（Jellyfin / scraper / 等）
 POOL_HOLD_SLOW_MS = 500       # DB 连接持有时长阈值
 
+# 高频轮询端点：默认级别下静音常规请求行，仅在 SLOW 时打 WARNING。
+# 命中规则：path 前缀匹配（含查询参数前的纯 path）。改 -> 重启后端生效。
+_SILENT_POLL_PATHS = (
+    '/api/downloadpipeline/downloads',
+    '/api/downloadpipeline/transfer-info',
+    '/api/dispatch/quota',
+    '/api/adult/actresses/build/status',
+)
+
+
+def _is_silent_poll_path(path: str) -> bool:
+    return any(path.startswith(p) for p in _SILENT_POLL_PATHS)
+
 
 @contextmanager
 def timed(label: str, slow_ms: int = DEFAULT_SLOW_MS, extra: Optional[dict] = None):
@@ -150,6 +163,9 @@ class TimingMiddleware:
                 logger.warning(
                     f'[diag] HTTP SLOW {method} {path} → {status_code} = {elapsed:.0f}ms'
                 )
+            elif _is_silent_poll_path(path):
+                # 高频轮询端点：正常情况下不打，避免日志被淹没
+                pass
             else:
                 logger.info(
                     f'[diag] HTTP {method} {path} → {status_code} = {elapsed:.0f}ms'

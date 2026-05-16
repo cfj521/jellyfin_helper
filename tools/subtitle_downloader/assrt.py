@@ -134,7 +134,7 @@ class AssrtClient:
         self.request_delay = max(0.0, float(request_delay))
         self.base_url = (base_url or self.BASE_URL).rstrip('/')
         self.session = requests.Session()
-        self.session.headers['User-Agent'] = 'JellyfinTools/1.0'
+        self.session.headers['User-Agent'] = 'JellyfinHelper/1.0'
 
     # ---- 内部 ----
 

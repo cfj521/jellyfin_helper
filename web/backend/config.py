@@ -18,7 +18,7 @@ def load_yaml_config() -> dict:
     config_paths = [
         ROOT_DIR / "config.yaml",
         ROOT_DIR / "config.yml",
-        Path.home() / ".jellyfin-tools" / "config.yaml"
+        Path.home() / ".jellyfin-helper" / "config.yaml"
     ]
 
     for path in config_paths:
@@ -64,8 +64,8 @@ class Settings(BaseSettings):
     # 数据库 (PostgreSQL)
     db_host: str = _yaml_config.get('database', {}).get('host', '192.168.89.11')
     db_port: int = _yaml_config.get('database', {}).get('port', 5432)
-    db_name: str = _yaml_config.get('database', {}).get('name', 'jellyfin_tools')
-    db_user: str = _yaml_config.get('database', {}).get('user', 'jellyfin_tools')
+    db_name: str = _yaml_config.get('database', {}).get('name', 'jellyfin_helper')
+    db_user: str = _yaml_config.get('database', {}).get('user', 'jellyfin_helper')
     db_password: str = _yaml_config.get('database', {}).get('password', 'JfTools@2026')
 
     @property
@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     # Jellyfin 配置
     jellyfin_host: str = _yaml_config.get('jellyfin', {}).get('host', 'http://localhost:8096')
     jellyfin_api_key: str = _yaml_config.get('jellyfin', {}).get('api_key', '')
+    # jellyfin SQLite 数据库文件本地可达路径（Ubuntu 部署默认 /var/lib/jellyfin/data/jellyfin.db）。
+    # 跨主机部署时填 SMB 挂载的本地路径（如 W:/jellyfin/jellyfin.db）。
+    # 留空则禁用 DB 直读，所有反查走 REST。
+    jellyfin_db_path: str = _yaml_config.get('jellyfin', {}).get('db_path', '')
 
     # 路径映射：把 Jellyfin 报上来的路径转换为本后端可访问的路径
     # 例：Jellyfin 在 Linux 上看到 /library/videos/...，本工具在 Windows 上挂载为 Z:/videos/...
@@ -113,7 +117,7 @@ class Settings(BaseSettings):
     # Wikidata 配置（演员图兜底来源；公共知识库无需 API Key，但要求礼貌的 User-Agent）
     wikidata_enabled: bool = _yaml_config.get('wikidata', {}).get('enabled', True)
     wikidata_user_agent: str = _yaml_config.get('wikidata', {}).get(
-        'user_agent', 'JellyfinTools/1.0 (cfj521@gmail.com)'
+        'user_agent', 'JellyfinHelper/1.0 (cfj521@gmail.com)'
     )
     # 搜索语言顺序：按列表顺序依次尝试，命中第一个就停
     wikidata_language_order: List[str] = _yaml_config.get('wikidata', {}).get(
@@ -324,6 +328,7 @@ class Settings(BaseSettings):
             "jellyfin": {
                 "host": self.jellyfin_host,
                 "api_key": self.jellyfin_api_key,
+                "db_path": self.jellyfin_db_path,
             },
             "tmdb": {
                 "api_key": self.tmdb_api_key,

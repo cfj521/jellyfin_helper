@@ -1,17 +1,15 @@
 """
-女优姓名归一化解析器（javdb 主源）。
+女优姓名归一化解析器（多源 chain：javdb 主 → Minnano-AV 兜底）。
 
 输入：任意已知名字（可能是日文 / 中文译名 / 英文罗马字）。
 策略：
-  1. /search?q=<name>&f=actor —— 找出第一张女优卡，拿 javdb_id + 头像缩略图 URL
-  2. /actors/<javdb_id> —— 取详情页 h1 ("中文, 日文N movie(s)" 这种格式)
-  3. 拆 h1 文本 → jp_name / zh_name / en_name / aliases
+  1. javdb /search?q=<name>&f=actor → /actors/<id> 详情页（拿 jp/zh/en/aliases）
+  2. javdb miss 时 fallback Minnano-AV（日本本土站，jp/kana/romaji 全；无中文）
+  3. 返回 ResolvedActress.source ∈ {'javdb', 'minnano_av'}，由调用方写回 DB
 
-返回 {javdb_id, jp_name, zh_name, en_name, aliases, avatar_url}（None 表示没找到）。
-
-输出的 jp_name 是站点的"日文名"权威字段，跟输入的 query 不一定相等
-（比如 query="葵司" → 返回 jp_name="葵つかさ", zh_name="葵司"）。
-调用方应当用返回的 javdb_id 做去重 / 合并锚。
+输出的 jp_name 是该源的"日文名"权威字段，跟输入的 query 不一定相等
+（比如 query="葵司" → javdb 返回 jp_name="葵つかさ", zh_name="葵司"）。
+调用方应当用返回的 javdb_id（或 minnano_av source + jp_name）做去重 / 合并锚。
 """
 import logging
 import re
@@ -36,7 +34,12 @@ _RE_ACTOR_HREF = re.compile(r'^/actors/([a-zA-Z0-9_-]+)/?$')
 
 @dataclass
 class ResolvedActress:
-    javdb_id: str
+    # source 标记数据来源：'javdb' / 'minnano_av' / 未来扩源时新增
+    # 写到 AdultActress.source 列，方便统计哪个源命中率高、出问题时定位
+    source: str
+    # javdb_id 仅 javdb 源有值，Minnano-AV 等其它源为 None；
+    # 调用方做去重合并时：有 javdb_id 优先按它去重，否则按 jp_name 去重
+    javdb_id: Optional[str]
     jp_name: str
     zh_name: Optional[str] = None
     en_name: Optional[str] = None
@@ -105,12 +108,25 @@ class ActressResolver:
     # ---- 业务逻辑 ----
 
     def resolve(self, query: str) -> Optional[ResolvedActress]:
-        """主入口：给一个名字，返回归一化结果（含 javdb_id）。"""
+        """主入口：给一个名字，按 chain 顺序查 → javdb 命中即返；miss 时 fallback Minnano-AV。"""
         if not query or not query.strip():
             return None
         query = query.strip()
 
-        # Step 1: search → 拿 actor href + thumbnail
+        # ---- Source 1: javdb ----
+        r1 = self._resolve_via_javdb(query)
+        if r1:
+            return r1
+
+        # ---- Source 2: Minnano-AV（日本本土，jp/kana/romaji；无中文）----
+        r2 = self._resolve_via_minnano_av(query)
+        if r2:
+            return r2
+
+        return None
+
+    def _resolve_via_javdb(self, query: str) -> Optional[ResolvedActress]:
+        """javdb 源：/search?q=...&f=actor → /actors/<id>。"""
         search_url = f'{self.BASE}/search?q={urllib.parse.quote(query)}&f=actor'
         r = self._get(search_url)
         if not r:
@@ -124,7 +140,9 @@ class ActressResolver:
         r = self._get(detail_url)
         if not r:
             # 详情挂了仍可保底返回 search 的简短结果
-            return ResolvedActress(javdb_id=javdb_id, jp_name=query, avatar_url=thumb)
+            return ResolvedActress(
+                source='javdb', javdb_id=javdb_id, jp_name=query, avatar_url=thumb
+            )
 
         jp, zh, en, aliases = self._parse_h1(r.text)
         # 详情页 h1 拿不到名字时（极少见）—— 至少把 query 当 jp_name 兜底
@@ -132,12 +150,141 @@ class ActressResolver:
             jp = query
 
         return ResolvedActress(
+            source='javdb',
             javdb_id=javdb_id,
             jp_name=jp or query,
             zh_name=zh,
             en_name=en,
             aliases=aliases,
             avatar_url=thumb,
+        )
+
+    def _resolve_via_minnano_av(self, query: str) -> Optional[ResolvedActress]:
+        """Minnano-AV 源（日本本土站，零反爬）。
+
+        搜索行为：
+          - 单命中 → 自动跳转到详情页（HTML 是详情结构）
+          - "0 名" → 没结果（HTML 含「のAV女優検索結果 0 名」）
+          - 多命中 → 列表页（少数情况）
+
+        详情页 H1 模式：`<jp_name> <kana 读音> / <Romaji>`，一行拿三种名字。
+        无中译名（Minnano-AV 是日文站）。
+        """
+        url = (
+            'https://www.minnano-av.com/search_result.php'
+            '?search_scope=actress&search_word=' + urllib.parse.quote(query)
+        )
+        r = self._get_minnano_av(url)
+        if not r:
+            return None
+
+        html = r.text
+        # 结果列表（多命中）→ 取第一个 actress_id 再 GET 详情
+        if 'のAV女優検索結果' in html and '0 名' not in html:
+            soup = BeautifulSoup(html, 'lxml')
+            first = soup.find('a', href=re.compile(r'actress\.php\?actress_id=\d+'))
+            if not first:
+                return None
+            href = first.get('href') or ''
+            if href.startswith('/'):
+                href = 'https://www.minnano-av.com' + href
+            r2 = self._get_minnano_av(href)
+            if not r2:
+                return None
+            html = r2.text
+        elif 'のAV女優検索結果' in html and '0 名' in html:
+            return None
+
+        return self._parse_minnano_av_detail(html, fallback_query=query)
+
+    def _get_minnano_av(self, url: str):
+        """Minnano-AV 专用 GET：复用 session + 限流，但跳过 javdb 版权页判定。"""
+        self._wait()
+        try:
+            r = self.session.get(url, timeout=self.timeout)
+        except Exception as e:
+            logger.warning(f"[actress.minnano_av] 请求异常 {url} - {e}")
+            return None
+        if getattr(r, 'status_code', 0) >= 400:
+            logger.info(f"[actress.minnano_av] HTTP {r.status_code} {url}")
+            return None
+        return r
+
+    @staticmethod
+    def _parse_minnano_av_detail(html: str, fallback_query: str) -> Optional[ResolvedActress]:
+        """从 Minnano-AV 详情页 HTML 抽 ResolvedActress。"""
+        soup = BeautifulSoup(html, 'lxml')
+
+        # H1 形如：'葵つかさ あおいつかさ / Aoi Tsukasa'
+        h1 = soup.find('h1')
+        if not h1:
+            return None
+        h1_text = h1.get_text(' ', strip=True)
+        # 排除"0 名"列表的 H1（已被外层挡掉，但加双保险）
+        if '検索結果' in h1_text:
+            return None
+
+        jp_name: Optional[str] = None
+        kana: Optional[str] = None
+        romaji: Optional[str] = None
+        # 格式：<jp> <kana> / <romaji>  或  <jp> / <romaji>  或  <jp>
+        if '/' in h1_text:
+            left, right = h1_text.rsplit('/', 1)
+            romaji = right.strip() or None
+            parts = left.strip().split()
+            if parts:
+                jp_name = parts[0]
+                if len(parts) >= 2:
+                    kana = ' '.join(parts[1:])
+        else:
+            parts = h1_text.split()
+            jp_name = parts[0] if parts else fallback_query
+
+        if not jp_name:
+            return None
+
+        # actress_id：从 canonical / 内部分页 link 抠
+        actress_id: Optional[str] = None
+        link = soup.find('link', rel='canonical')
+        canon = link.get('href') if link else ''
+        m = re.search(r'actress[._]?id=(\d+)|actress(\d+)\.html', canon or '')
+        if m:
+            actress_id = m.group(1) or m.group(2)
+        else:
+            for a in soup.find_all('a', href=re.compile(r'actress\.php\?actress_id=\d+')):
+                mm = re.search(r'actress_id=(\d+)', a.get('href') or '')
+                if mm:
+                    actress_id = mm.group(1)
+                    break
+
+        # 头像：找 src 含 actress 的图（非 gif 占位）
+        avatar_url: Optional[str] = None
+        for img in soup.find_all('img'):
+            src = img.get('src') or ''
+            if 'actress' in src and not src.lower().endswith('.gif'):
+                if src.startswith('http'):
+                    avatar_url = src
+                elif src.startswith('/'):
+                    avatar_url = 'https://www.minnano-av.com' + src
+                else:
+                    avatar_url = 'https://www.minnano-av.com/' + src
+                break
+
+        # aliases：kana 读音 + actress_id 形成的 deep link 标识，都塞 aliases 方便后续匹配
+        aliases: List[str] = []
+        if kana and kana != jp_name:
+            aliases.append(kana)
+        # 不主动抓"別名/旧芸名"——Minnano-AV 这块多数页面是空的 / UI 添加按钮
+        # （实测会误抓"を追加"等按钮文本）；保守留空，未来确认有数据再加
+
+        return ResolvedActress(
+            source='minnano_av',
+            javdb_id=None,                # Minnano-AV 不是 javdb，无 javdb_id
+            jp_name=jp_name,
+            zh_name=None,                 # 该源无中译名
+            en_name=romaji,               # romaji 当 en_name
+            aliases=aliases,
+            avatar_url=avatar_url,
         )
 
     # ---- 解析辅助 ----

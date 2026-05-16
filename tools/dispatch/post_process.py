@@ -130,6 +130,9 @@ def post_process_subtitle(
         if result.get('error'):
             logger.warning(f"post_process_subtitle: error={result['error']}")
             return ('warned', {'error': result['error']})
+
+        # per-video 决策日志由 run_subtitle_auto_fix_inline 统一输出（所有调用方共享），
+        # 这里只看汇总结果，避免重复刷屏
         dl_stats = result.get('download') or {}
         success = dl_stats.get('success', 0)
         failed = dl_stats.get('failed', 0)

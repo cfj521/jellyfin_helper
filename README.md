@@ -1,115 +1,136 @@
-# Jellyfin Tools
+# Jellyfin Helper
 
-Jellyfin 媒体服务器管理工具集 —— 提供 Web 管理界面，用于批量处理元数据、字幕、媒体库维护、内容刮削等常见任务。
+围绕 Jellyfin 的自动化辅助工具集 —— 把"找资源 → 下载 → 入库 → 元数据 / 字幕 / 音轨修复"整条链路用一个 Web 后台串起来。
 
-## 功能概览
+不是 Sonarr/Radarr/Bazarr 的替代品，而是把它们 + 国内场景常见的工具（豆瓣评分、JavBus/JavDB、ASSRT 字幕、Jackett）按个人偏好揉成一套。
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Jellyfin Tools                              │
-├─────────────┬─────────────┬─────────────┬──────────────────────────┤
-│   元数据    │    字幕     │   媒体库    │       其他工具            │
-├─────────────┼─────────────┼─────────────┼──────────────────────────┤
-│ 演员照片修复│ 扫描与报告  │ 重复检测    │ MKV 默认音轨设置         │
-│ 海报下载    │ 自动重命名  │ 存储分析    │ Jackett / qBittorrent    │
-│ NFO 修复    │ 自动下载    │ 文件浏览    │ 成人内容刮削（可选）     │
-└─────────────┴─────────────┴─────────────┴──────────────────────────┘
-```
+> ⚠️ 个人项目，仍在密集迭代。schema 变更时通常**直接清表重扫**而不是写迁移脚本，部署到生产请自行评估。
 
-### 已完成
+---
 
-- **演员照片修复** — 从 TMDB 获取演员图片并上传到 Jellyfin
-- **海报下载** — 从 TMDB 获取电影/剧集海报并上传到 Jellyfin
-- **字幕扫描** — 扫描媒体目录，生成 HTML/JSON 匹配报告
-- **字幕重命名** — 自动将字幕文件名与视频文件名对齐（支持 SxxExx / Exx / 第xx话 互通匹配）
-- **字幕下载** — 通过 OpenSubtitles.com 下载缺失字幕
-- **MKV 音轨设置** — 按语言偏好设置 MKV 文件的默认音轨
-- **重复检测** — 文件大小 + 首尾 hash 双层去重，区分"完全相同"和"仅大小相同"
-- **存储分析** — 按扩展名 / 目录统计占用
-- **TMDB 热门推荐** — 按日/周聚合电影、剧集、综合榜单
-- **Jackett 搜索** — 跨 indexer 聚合搜索种子
-- **qBittorrent 集成** — Web 一键推送下载，监控进度，暂停 / 恢复 / 删除
-- **成人内容管理（可选）** — 番号识别、JavBus + JavDB 双源刮削、自动写 NFO + 封面下载
-- **Web 设置编辑** — 浏览器内编辑 config.yaml，自动备份原文件
-- **Web 任务管理** — 所有后台任务实时进度、明细、历史
+## 主要能力
 
-### 计划中
+| 领域 | 核心能力 |
+|---|---|
+| **媒体库浏览** | 多库列表 + 详情页 + 海报视图，调 jellyfin REST 拿一手数据；支持本地 SQLite 直读加速 `path → item` 反查（同机部署可选） |
+| **下载入库自动化** | Jackett 搜种 → qBittorrent 推送 → 流水线 confidence-driven 识别（regex / TMDB / LLM 兜底）→ 按模板 + duplicate_policy 整理到媒体库 → 自动通知 jellyfin 刷新 |
+| **字幕全链路** | 多源下载（OpenSubtitles / ASSRT / Shooter）→ 评分融合 + 分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测 |
+| **元数据修复** | 演员照片（TMDB + Wikidata 兜底）、海报、NFO；jellyfin 演员库归一化 |
+| **音轨管理** | MKV 默认音轨按语种偏好批量设置；汉语/未识别轨例外保护 |
+| **评分聚合** | MDBList + 豆瓣双源，DB 缓存 + 异步 worker 后台补齐；前端融合显示 |
+| **发现 / 推荐** | TMDB / Trakt / AniList / 豆瓣榜单聚合，无限滚动 + 预取 |
+| **资源搜索** | Jackett 跨 indexer 聚合，结果分类 + 大小 / Seeders 排序 |
+| **成人内容（可选）** | 番号识别、JavBus + JavDB 双源刮削、女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护 |
+| **任务系统** | 后台任务 + SSE 实时进度 + 取消 + shutdown 联动；前端任务详情页可展开各步明细 |
+| **维护工具** | 配置 Web 编辑（保存自动备份）、Sample 清理、强制重扫、日志查看、统计 |
 
-- 海报背景图（fanart）下载
-- NFO 元数据修复（普通电影/剧集，区别于成人内容）
-- 字幕下载多源（Subliminal 集成）
-- 下载完成后自动搬回媒体库
-- 订阅式自动追剧（按规则监视 + 自动下载）
+---
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 后端 | Python 3.11+ / FastAPI / SQLAlchemy |
-| 数据库 | PostgreSQL 12+ |
-| 前端 | Vue.js 3 / Element Plus / Vite |
+| 层 | 选型 |
+|---|---|
+| 后端 | Python 3.12 / FastAPI / SQLAlchemy / uvicorn |
+| 前端 | Vue 3 (Composition API) / Element Plus / Vite |
+| 数据库 | PostgreSQL 12+（业务库） |
+| 任务推送 | SSE（不用 WebSocket）|
+| 反爬 | curl-cffi（TLS impersonation 过 Cloudflare 弱反爬） |
+| LLM | 任何 OpenAI 兼容 endpoint（DeepSeek / 阿里通义 / OpenAI 本身） |
 
-### 外部服务依赖
-
-| 服务 | 用途 |
-|------|------|
-| [Jellyfin](https://jellyfin.org/) | 媒体服务器（必须） |
-| [TMDB](https://www.themoviedb.org/) | 演员/影视元数据（必须） |
-| [PostgreSQL](https://www.postgresql.org/) | 数据库（必须） |
-| [OpenSubtitles](https://www.opensubtitles.com/) | 字幕下载（可选） |
-| [Jackett](https://github.com/Jackett/Jackett) | 种子搜索聚合（可选） |
-| [qBittorrent](https://www.qbittorrent.org/) | 下载管理（可选） |
-| [MKVToolNix](https://mkvtoolnix.download/) | MKV 音轨编辑（音轨设置功能需要） |
+---
 
 ## 项目结构
 
 ```
-jellyfin-tools/
-├── config.yaml              # 主配置文件（含 API Key，勿提交到公开仓库）
-├── requirements.txt         # Python 依赖（后端 + tools 模块）
+jellyfin-helper/
+├── config.yaml                    # 主配置（含 API Key，git 不提交）
+├── config.yaml.example            # 配置模板
+├── common/                        # 第三方服务客户端 + 工具
+│   ├── jellyfin_client.py         #   jellyfin REST
+│   ├── jellyfin_db.py             #   jellyfin SQLite 直读（path→item 反查加速，可选）
+│   ├── tmdb_client.py
+│   ├── trakt_client.py            #   Trakt 趋势 / 评分
+│   ├── anilist_client.py          #   动漫元数据
+│   ├── mdblist_client.py          #   评分聚合
+│   ├── douban_client.py           #   中文评分（带熔断）
+│   ├── wikidata_client.py         #   演员照片兜底
+│   ├── jackett_client.py
+│   ├── qbittorrent_client.py
+│   ├── llm_client.py              #   LLM 媒体识别兜底
+│   ├── lang_utils.py              #   字幕语言代码归一化（含 zh / chs / cht / BCP 47）
+│   └── label_cleaner.py
 │
-├── common/                  # 公共客户端
-│   ├── config.py            #   配置加载
-│   ├── jellyfin_client.py   #   Jellyfin API 客户端
-│   ├── tmdb_client.py       #   TMDB API 客户端
-│   ├── jackett_client.py    #   Jackett 客户端
-│   └── qbittorrent_client.py
+├── tools/                         # 业务模块（被后端 import）
+│   ├── subtitle_manager/          #   扫描 / 重命名 / 内嵌探测
+│   ├── subtitle_downloader/       #   多源下载 + 评分融合
+│   ├── audio_manager/             #   MKV 音轨调整
+│   ├── actor_fix/                 #   演员照片
+│   ├── adult_manager/             #   番号刮削 + 女优档案
+│   └── dispatch/                  #   下载入库自动化流水线
+│       ├── pipeline_worker.py     #     状态机推进
+│       ├── analyzer.py            #     identify confidence-driven
+│       ├── organizer.py           #     按模板复制 + duplicate_policy
+│       ├── adopt.py               #     qB 外部加种发现
+│       ├── post_process.py        #     字幕 / 音轨后处理编排
+│       └── ...
 │
-├── tools/                   # 业务模块（被 Web 后端 import）
-│   ├── actor_fix/           #   演员照片修复
-│   ├── subtitle_manager/    #   字幕扫描 / 重命名
-│   ├── subtitle_downloader/ #   字幕下载
-│   ├── audio_manager/       #   MKV 音轨设置
-│   └── adult_manager/       #   成人内容刮削
-│
-├── web/                     # Web 应用
-│   ├── backend/             #   FastAPI 后端
-│   │   ├── main.py          #     应用入口
-│   │   ├── run.py           #     启动器（读 config / 环境变量决定端口）
-│   │   ├── config.py        #     配置管理
-│   │   ├── database.py      #     数据库模型
-│   │   ├── api/             #     REST API 路由
-│   │   ├── services/        #     后台服务（Jellyfin WS 监听等）
-│   │   └── scrapers/        #     刮削器
-│   └── frontend/            #   Vue.js 前端
+├── web/
+│   ├── backend/                   # FastAPI 后端
+│   │   ├── main.py                #   应用入口 + lifespan + shutdown
+│   │   ├── run.py                 #   uvicorn 启动器
+│   │   ├── config.py              #   配置 + pydantic settings
+│   │   ├── database.py            #   SQLAlchemy models
+│   │   ├── diagnostics.py         #   性能 + DB 池监控 + access log 过滤
+│   │   ├── api/                   #   18 个 router（按功能切片，见下）
+│   │   ├── services/              #   后台服务（jellyfin WS 监听等）
+│   │   └── scrapers/              #   旧字幕抓取（保留兼容）
+│   │
+│   └── frontend/                  # Vue SPA
 │       ├── package.json
+│       ├── vite.config.js
 │       └── src/
-│           ├── views/       #     页面组件
-│           └── components/  #     通用组件
+│           ├── views/             #   页面（含 medialibraries / downloadpipeline / settings 等）
+│           ├── components/        #   通用组件（含 task-detail 系列）
+│           └── api/               #   axios 封装
 │
 └── docs/
-    ├── DEVELOPMENT.md       # 开发文档
-    └── IMPLEMENTATION_PLAN.md
+    ├── DEVELOPMENT.md             # 开发指南
+    ├── external-services.md       # 第三方服务清单 + 代理建议
+    └── archive/                   # 已实现 PRD / 历史决策归档
 ```
+
+### Backend API 路由
+
+| 前缀 | 文件 | 主要职责 |
+|---|---|---|
+| `/api/medialibraries` | `medialibraries.py` | 库列表 / 详情 / item 反查（DB 直读 + REST 兜底）|
+| `/api/media` | `media.py` | 文件浏览、重复检测、存储分析 |
+| `/api/subtitle` | `subtitle.py` | 扫描 / 重命名 / 自动下载 / 字幕语言探测 |
+| `/api/metadata` | `metadata.py` | 演员照片、海报、NFO 修复 |
+| `/api/audio` | `audio.py` | MKV 默认音轨 |
+| `/api/adult` | `adult.py` | 番号刮削、女优档案 |
+| `/api/ratings` | `ratings.py` | MDBList + 豆瓣评分聚合 |
+| `/api/discover` | `discover.py` | TMDB / Trakt / AniList / 豆瓣榜单 |
+| `/api/resourcesearch` | `resourcesearch.py` | Jackett 聚合搜索 |
+| `/api/downloadpipeline` | `downloadpipeline.py` | qB 状态监控 + 推种入口 |
+| `/api/dispatch` | `dispatch.py` | 流水线 needs_review / quota / dispatch_map |
+| `/api/maintenance` | `maintenance.py` | Sample 清理、强制重扫、自动修复编排 |
+| `/api/tasks` | `tasks.py` | 任务列表 / 详情 / 取消 / SSE 推送 |
+| `/api/stats` | `stats.py` | 总览统计 |
+| `/api/config` | `config_api.py` | 读写 config.yaml + 自动备份 |
+| `/api/logs` | `logs.py` | 后端日志查看 |
+| `/api/img_proxy` | `img_proxy.py` | 第三方图片代理（绕跨域 + CDN） |
+
+---
 
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.11+
+- Python 3.12（推荐用 conda 隔离环境）
 - Node.js 20+
-- PostgreSQL 12+（需先建好库和用户）
-- 一个运行中的 Jellyfin 服务器 + API Key
+- PostgreSQL 12+（先建库和用户）
+- 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
 
 ### 1. 配置
 
@@ -117,41 +138,35 @@ jellyfin-tools/
 cp config.yaml.example config.yaml
 ```
 
-填入你自己的服务地址和 API Key：
+至少填这几项（其它都可选）：
 
 ```yaml
-# config.yaml
-server:
-  backend_port: 8000
-  frontend_port: 5173
+database:
+  host: "127.0.0.1"
+  name: "jellyfin_helper"
+  user: "jellyfin_helper"
+  password: "your_password"
 
 jellyfin:
-  host: "http://your-jellyfin-server:8096"
-  api_key: "your_jellyfin_api_key"
+  host: "http://your-jellyfin:8096"
+  api_key: "your_jellyfin_admin_api_key"
+  # 可选：jellyfin DB 直读加速 path→item 反查（同机或 SMB 挂载时填）
+  # db_path: "/var/lib/jellyfin/data/jellyfin.db"
 
 tmdb:
   api_key: "your_tmdb_api_key"
-
-database:
-  host: "127.0.0.1"
-  port: 5432
-  name: "jellyfin_tools"
-  user: "jellyfin_tools"
-  password: "your_password"
 ```
 
-> 也可以先用默认配置启动，再到 Web 界面 `/settings` 页面里编辑（保存时会自动备份原文件）。
+完整字段见 [config.yaml.example](config.yaml.example)；也可先空跑，再到前端 `/settings` 编辑（保存自动备份）。
 
-完整配置项参考 [config.yaml.example](config.yaml.example)。
-
-### 2. 启动后端
+### 2. 后端
 
 ```bash
 pip install -r requirements.txt
 python -m web.backend.run
 ```
 
-启动器会按以下优先级决定后端端口：环境变量 `BACKEND_PORT` > `config.yaml` 的 `server.backend_port` > 默认 `8000`。
+端口优先级：环境变量 `BACKEND_PORT` > `config.yaml: server.backend_port` > 默认 8000。
 
 开发热重载：
 
@@ -163,9 +178,9 @@ BACKEND_RELOAD=1 python -m web.backend.run
 $env:BACKEND_RELOAD='1'; python -m web.backend.run
 ```
 
-### 3. 启动前端
+### 3. 前端
 
-新开一个终端：
+新开终端：
 
 ```bash
 cd web/frontend
@@ -173,59 +188,35 @@ npm install
 npm run dev
 ```
 
-vite 会自动读 `config.yaml` 中的 `server.frontend_port`。
+vite 自动读 `config.yaml` 的 `server.frontend_port`。
 
 ### 4. 访问
 
 - 前端：http://localhost:5173
 - API 文档（Swagger）：http://localhost:8000/docs
 
-## 数据库
+---
 
-Web 应用使用 PostgreSQL 存储任务记录、扫描报告、演员缓存等数据。表会在首次启动时自动创建。
+## 外部服务
 
-| 表 | 说明 |
-|------|------|
-| `tasks` | 后台任务记录 |
-| `scan_reports` | 扫描报告存档 |
-| `actors` | 演员信息缓存 |
-| `media_items` | 媒体文件元数据 |
-| `download_tasks` | 下载任务队列 |
-| `adult_items` | 成人内容元数据（可选） |
+详见 [docs/external-services.md](docs/external-services.md)。摘要：
 
-## API
+- **必需**：Jellyfin、TMDB、PostgreSQL
+- **强烈推荐**：Jackett + qBittorrent（启用下载入库流水线）
+- **字幕**：OpenSubtitles + ASSRT 任选其一即可，配齐两个最佳
+- **评分**：MDBList（可选）+ 豆瓣（无需 key）
+- **LLM**：任意 OpenAI 兼容服务（识别兜底，可选）
+- **成人内容**：JavBus / JavDB / AVBase / MissAV（带地理屏蔽与代理建议）
 
-Web 后端提供 RESTful API，启动后访问 `/docs` 查看完整文档。
+---
 
-| 模块 | 端点前缀 | 功能 |
-|------|----------|------|
-| 字幕 | `/api/subtitle` | 扫描、重命名、下载 |
-| 元数据 | `/api/metadata` | 演员照片、海报修复 |
-| 媒体库 | `/api/media` | 浏览、重复检测、存储分析 |
-| 音轨 | `/api/audio` | MKV 默认音轨设置 |
-| 发现 | `/api/discover` | TMDB 热门、Jackett 搜索、qBit 下载 |
-| 成人 | `/api/adult` | 番号识别、JavBus/JavDB 刮削（需开启） |
-| 任务 | `/api/tasks` | 后台任务查看与取消 |
-| 统计 | `/api/stats` | 总览与历史数据 |
-| 配置 | `/api/config` | 读写 config.yaml |
+## 文档
 
-## 常见问题
+- 开发者向：[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) —— 模块组织、添加新 router 的流程、调试技巧
+- 第三方服务：[docs/external-services.md](docs/external-services.md) —— 调用频率、地理屏蔽、OpenClash 分流示例
+- 历史 PRD / 决策记录：[docs/archive/](docs/archive/) —— 已实现功能的设计文档归档
 
-**后端启动报数据库连接错误**
-检查 PostgreSQL 是否可达，确认 `config.yaml` 中的连接信息，确认数据库和用户已创建。
-
-**前端请求 API 返回 CORS 错误**
-确认后端已在 `config.yaml` 中配置的端口启动；检查 `web/frontend/vite.config.js` 中的代理配置。
-
-**演员照片修复没有匹配到 TMDB 结果**
-部分演员（尤其中文圈）在 TMDB 上没有收录或被标记为无图片，这种情况脚本会跳过。可尝试手动在 TMDB 上添加后再重试。
-
-**MKV 音轨修改提示找不到 mkvmerge**
-安装 [MKVToolNix](https://mkvtoolnix.download/)，确保其加入了系统 PATH，或在 `config.yaml` 里配置安装路径。
-
-## 开发文档
-
-详细的架构设计、功能规划和开发指南请参阅 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 与 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)。
+---
 
 ## License
 

@@ -2131,21 +2131,76 @@ def _build_path_index() -> Dict[str, Dict]:
     return index
 
 
+def _lookup_via_db(file_path: str) -> Optional[Dict]:
+    """尝试用 jellyfin SQLite 直读反查。配置未启用或失败时返回 None（不抛）。
+
+    jellyfin DB 里 Path 存的是容器视角（如 /library/videos/...），所以本机
+    路径要先 reverse_translate 一次再查；反斜杠也试一遍（Windows 路径正反斜杠混用）。
+    """
+    try:
+        from common.jellyfin_db import get_jellyfin_db, JellyfinDBError
+    except Exception:
+        return None
+    db = get_jellyfin_db()
+    if not db.is_available():
+        return None
+
+    # 反向翻译：把本机路径（Z:/...）转回 jellyfin 视角（/library/...）；
+    # 如果传入的本就是 jellyfin 视角，translator 返回原值
+    from web.backend.path_translator import reverse_translate_path_with_settings
+    candidates = []
+    seen = set()
+    for p in (file_path, reverse_translate_path_with_settings(file_path)):
+        if not p:
+            continue
+        for variant in (p, p.replace('\\', '/'), p.replace('/', '\\')):
+            if variant and variant not in seen:
+                seen.add(variant)
+                candidates.append(variant)
+
+    try:
+        for c in candidates:
+            info = db.find_by_path(c)
+            if info:
+                return info
+        return None
+    except JellyfinDBError:
+        # DB 查询路径有问题（连接断了 / schema 临时不可读）；fallback REST
+        return None
+
+
 def lookup_jellyfin_item(file_path: str) -> Optional[Dict]:
     """
     根据本地文件路径反查 Jellyfin Item。
-    匹配策略：精确路径，否则匹配父目录（适合"一个文件夹一部电影"）。
+
+    路径：
+      1. 优先走 JellyfinDB 直读（settings.jellyfin_db_path 配置了才会启用），
+         3-10ms 量级，命中即返回，info['_via']='db'
+      2. fallback 走 REST API 路径索引（30s 缓存的全量），首次构建 1.5s 量级，
+         之后 30s 内复用，info 没有 _via 字段或为 'rest'
+
+    匹配策略：精确路径，否则父目录（适合"一个文件夹一部电影"）。
     """
     if not file_path:
         return None
-    index = _build_path_index()
-    if file_path in index:
-        return index[file_path]
-    # 退化：检查父目录
+
+    # ① DB 直读
+    info = _lookup_via_db(file_path)
+    if info:
+        return info
+    # 父目录也试一次（适合"一个文件夹一部电影"），DB 直读也走一次
     from pathlib import Path as _P
     parent = str(_P(file_path).parent)
+    info = _lookup_via_db(parent)
+    if info:
+        return info
+
+    # ② REST 兜底（一次性全量索引）
+    index = _build_path_index()
+    if file_path in index:
+        rec = dict(index[file_path]); rec['_via'] = 'rest'; return rec
     if parent in index:
-        return index[parent]
+        rec = dict(index[parent]); rec['_via'] = 'rest'; return rec
     return None
 
 
@@ -2159,6 +2214,81 @@ def jellyfin_web_url(item_id: str) -> Optional[str]:
 def invalidate_path_index():
     """让缓存失效（删除/同步操作后调用）"""
     _PATH_INDEX_CACHE['ts'] = 0.0
+
+
+@router.post("/_bench/path-lookup")
+def benchmark_path_lookup(paths: List[str]):
+    """benchmark: 给一批 path，对比 JellyfinDB 直读 vs REST 索引兜底的性能。
+
+    用法（curl）:
+        curl -X POST http://localhost:8000/api/medialibraries/_bench/path-lookup \\
+             -H 'content-type: application/json' \\
+             -d '["/library/videos/movie/The Martian (2015)/The Martian (2015).mkv", ...]'
+
+    返回每条 path 在两种路径下的耗时和命中结果，便于直观对比。
+    """
+    import time as _t
+    from common.jellyfin_db import get_jellyfin_db, JellyfinDBError
+
+    db = get_jellyfin_db()
+    db_available = db.is_available()
+
+    # 强制 REST 走完整全量索引（清缓存）；只第一次会重建，后续 N 个查询都用缓存
+    invalidate_path_index()
+
+    results = []
+    for p in paths:
+        # ---- DB ----
+        db_ms = None
+        db_hit = False
+        db_info = None
+        db_err = None
+        if db_available:
+            t0 = _t.perf_counter()
+            try:
+                info = db.find_by_path(p)
+                db_ms = (_t.perf_counter() - t0) * 1000
+                if info:
+                    db_hit = True
+                    db_info = {k: info[k] for k in ('id', 'name', 'type', 'year') if info.get(k) is not None}
+            except JellyfinDBError as e:
+                db_ms = (_t.perf_counter() - t0) * 1000
+                db_err = str(e)
+
+        # ---- REST（全量索引）----
+        t0 = _t.perf_counter()
+        idx = _build_path_index()
+        idx_build_ms = (_t.perf_counter() - t0) * 1000
+        t0 = _t.perf_counter()
+        rest_info = idx.get(p)
+        rest_lookup_ms = (_t.perf_counter() - t0) * 1000
+
+        results.append({
+            'path': p,
+            'db': {
+                'available': db_available,
+                'ms': round(db_ms, 2) if db_ms is not None else None,
+                'hit': db_hit,
+                'info': db_info,
+                'error': db_err,
+            },
+            'rest': {
+                # 注意：index_build_ms 是构建一次性开销；只有第一行非零，后续行 ~0
+                'index_build_ms': round(idx_build_ms, 2),
+                'lookup_ms': round(rest_lookup_ms, 4),
+                'hit': rest_info is not None,
+                'info': (
+                    {k: rest_info[k] for k in ('id', 'name', 'type', 'year') if rest_info.get(k) is not None}
+                    if rest_info else None
+                ),
+            },
+        })
+
+    return {
+        'db_path_configured': bool(settings.jellyfin_db_path),
+        'db_available': db_available,
+        'results': results,
+    }
 
 
 @router.get("/items/by-path")

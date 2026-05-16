@@ -101,7 +101,7 @@ npm run dev
 如需手动连接数据库：
 
 ```bash
-psql -h <host> -U jellyfin_tools -d jellyfin_tools
+psql -h <host> -U jellyfin_helper -d jellyfin_helper
 ```
 
 ## API 文档
@@ -130,7 +130,7 @@ psql -h <host> -U jellyfin_tools -d jellyfin_tools
 
 ```bash
 # 测试连接
-psql -h <host> -p 5432 -U jellyfin_tools -d jellyfin_tools
+psql -h <host> -p 5432 -U jellyfin_helper -d jellyfin_helper
 ```
 
 如果连不上，依次排查：网络、防火墙、`pg_hba.conf` 是否允许该 IP、用户密码、数据库是否存在。

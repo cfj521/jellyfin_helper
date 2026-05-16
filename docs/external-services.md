@@ -11,6 +11,7 @@
 | 服务 | 默认地址 | 用途 | 配置项 | 备注 |
 |---|---|---|---|---|
 | **Jellyfin** | `http://localhost:8096` | 媒体库管理（库列表/扫描刷新/元数据/演员图片） | `jellyfin_host` + `jellyfin_api_key` | API key 必须管理员级，`/Library/Media/Updated` 等端点要求 elevation |
+| **Jellyfin SQLite**（可选） | `/var/lib/jellyfin/data/jellyfin.db` | path → item 反查直读加速 | `jellyfin_db_path` | 10.9+ `BaseItems`；只读 + immutable + nolock 模式跨 SMB 安全；schema 不兼容 / 权限不通自动 fallback REST |
 | **qBittorrent** | `http://localhost:8080` | 种子下载（加种/暂停/恢复/删除/RSS 订阅与规则） | `qbittorrent_host` + `username` + `password` | 需 4.6+ 支持 `stop_condition='MetadataReceived'` |
 | **Jackett** | `http://localhost:9117` | 搜索 PT/公开站索引器（包装成 Torznab/RSS） | `jackett_host` + `jackett_api_key` | RSS feed URL 可直接给 qB 订阅自动下载 |
 
@@ -23,9 +24,11 @@
 | **TMDB** | `https://api.themoviedb.org` | 影视元数据主源（电影/剧集/演员/海报/热门/趋势） | `tmdb_api_key` | 必需，免费注册申请；图片走 `https://image.tmdb.org` |
 | **TMDB Web** | `https://www.themoviedb.org` | 用户跳转链接 | — | 前端 item 链接 |
 | **IMDB** | `https://www.imdb.com` | 跳转链接（imdb_id 已记录在 db） | — | 不调 API，仅生成跳转 URL |
-| **MDBList** | `https://api.mdblist.com` | 第三方榜单聚合（Top / Trending） | `mdblist_api_key` | 可选；TMDB 之外的另一份热门数据源 |
+| **Trakt** | `https://api.trakt.tv` | 趋势 / 评分 / 收藏列表 | `trakt_client_id` (+ 可选 `trakt_access_token`) | 推荐流补 TMDB 之外的英文圈数据 |
+| **AniList** | `https://graphql.anilist.co` | 动漫元数据（GraphQL） | — | 公开 GraphQL，无 key；推荐流的动漫维度 |
+| **MDBList** | `https://api.mdblist.com` | 第三方榜单聚合（Top / Trending）+ 多源评分 | `mdblist_api_key` | 可选；TMDB 之外的另一份热门 + 多源评分聚合 |
 | **MDBList Web** | `https://mdblist.com` | 跳转链接 | — | |
-| **豆瓣** | `https://www.douban.com` `https://movie.douban.com` `https://search.douban.com` | 中文影视评分/简介补充 | — | 网页爬取，无 API key；有节流限制 |
+| **豆瓣** | `https://www.douban.com` `https://movie.douban.com` `https://search.douban.com` | 中文影视评分/简介补充 | — | 网页爬取，无 API key；带 5 次失败熔断（3600s 冷却）|
 
 ---
 
@@ -58,11 +61,16 @@
 
 | 服务 | URL | 用途 | 当前状态 | 备注 |
 |---|---|---|---|---|
-| **JavDB** | `https://javdb.com` | 番号刮削 + 女优归一化（jp/zh/en/aliases） | ⚠️ **地理屏蔽常见** | 主刮削源；resolver 用它做女优档案库 |
+| **JavDB** | `https://javdb.com` | 番号刮削 + 女优档案主源（jp/zh/en/aliases） | ⚠️ **地理屏蔽常见** | 主刮削源；女优 resolver 链路第一站 |
 | **JavBus** | `https://www.javbus.com` | 番号刮削备选 | 通常可用 | 备用源 |
-| **JavLibrary** | `https://www.javlibrary.com` | 番号刮削备选 | 通常可用 | 备用源 |
+| **JavLibrary** | `https://www.javlibrary.com` | 番号刮削备选 | ⚠️ CF Turnstile（已无法用 curl_cffi 直爬） | 已无活跃使用；保留配置 |
 | **AVBase** | `https://www.avbase.net` | 番号刮削 + 大量元数据 | 通常可用 | 较新的源 |
+| **Minnano-AV（みんなのAV）** | `https://www.minnano-av.com` | 女优档案兜底（javdb 漏的老 / 引退 / 冷门女优） | ✅ 零反爬 | 日本本土站；jp 主名 + kana 读音 + romaji；**无中译名** |
 | **MissAV** | `https://missav.ai` | 在线观影/封面 | — | 最近域名 .ai；遇 .ws/.com 等需切 |
+
+**女优 resolver chain**（见 `tools/adult_manager/actress_resolver.py`）：
+1. **JavDB** → 命中即返回（含中文译名）
+2. **Minnano-AV** → 兜底（覆盖 javdb 漏的，但缺中译名）
 
 scraper 优先级在 `tools/adult_manager/scrapers/manager.py` 配置。
 
@@ -70,15 +78,16 @@ scraper 优先级在 `tools/adult_manager/scrapers/manager.py` 配置。
 
 ## 🤖 LLM（媒体识别兜底）
 
-跑本地启发式 + TMDB 都识别不出时，调 LLM 兜底分类（`tools/dispatch/identify.py`）。
+本地启发式 + TMDB 识别不出时，调 LLM 兜底分类（`tools/dispatch/identify.py`）。
+也用于：番号文件名识别、ambiguous 标题归一化。
 
 | 服务 | URL | 用途 | 配置 / Key | 备注 |
 |---|---|---|---|---|
-| **DeepSeek** | `https://api.deepseek.com` | 主推 LLM 提供商（性价比高） | `llm.api_key` + `llm.base_url` | OpenAI 兼容 API |
+| **阿里云 DashScope（通义千问）** | `https://dashscope.aliyuncs.com/compatible-mode/v1` | LLM 提供商（当前主用 qwen-plus） | `llm.api_key` + `llm.base_url` + `llm.model` | OpenAI 兼容 API；国内访问稳定 |
+| **DeepSeek** | `https://api.deepseek.com` | LLM 提供商（性价比高） | 同上 | OpenAI 兼容 API |
 | **OpenAI** | `https://api.openai.com` | LLM 提供商 | 同上 | OpenAI 兼容 API |
-| **阿里云 DashScope（通义）** | `https://dashscope.aliyuncs.com` | LLM 提供商（千问） | 同上 | OpenAI 兼容 API |
 
-任何 OpenAI 兼容的 endpoint 都能用——配 base_url + api_key 即可。
+任何 OpenAI 兼容的 endpoint 都能用——配 `base_url + api_key + model` 即可。结果走 `llm_classify_cache` 表缓存。
 
 ---
 

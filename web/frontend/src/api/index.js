@@ -2,9 +2,13 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
 // 创建 axios 实例
+// paramsSerializer.indexes=null：把数组序列化为 `?key=a&key=b` 而不是 `?key[]=a&key[]=b`，
+// 跟 FastAPI 的 Query(List[str]) 接收格式对齐。带 [] 后缀会让 FastAPI 收不到该参数
+// （历史 bug：女优过滤、字幕语言多选等 list query 全部静默失效）
 export const api = axios.create({
   baseURL: '',
-  timeout: 30000
+  timeout: 30000,
+  paramsSerializer: { indexes: null },
 })
 
 // 请求拦截器

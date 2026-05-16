@@ -29,6 +29,9 @@ class DownloadRequest(BaseModel):
     title: str
     magnet: Optional[str] = None
     torrent_url: Optional[str] = None
+    # 上传本地 .torrent 文件内容（base64 编码的 raw bytes）
+    # magnet / torrent_url / torrent_file_b64 三者必须三选一
+    torrent_file_b64: Optional[str] = None
     save_path: Optional[str] = None
     category: Optional[str] = None
     source: str = "jackett"
@@ -93,7 +96,7 @@ def push_download(
 
     分析由 scheduler 的 analyzer 后台跑：高置信自动入流水线，低置信落 needs_review。
     """
-    src_hint = (request.magnet or request.torrent_url or '')[:120]
+    src_hint = (request.magnet or request.torrent_url or ('torrent_file' if request.torrent_file_b64 else ''))[:120]
     # 用户 form 显式选 > Jackett 分类兜底；最终落到 dispatch_map.media_type
     effective_hint = (
         request.user_hint_media_type
@@ -106,8 +109,20 @@ def push_download(
     )
     if not settings.qbittorrent_host or not settings.qbittorrent_username:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
-    if not request.magnet and not request.torrent_url:
-        raise HTTPException(status_code=400, detail="必须提供 magnet 或 torrent_url")
+    if not (request.magnet or request.torrent_url or request.torrent_file_b64):
+        raise HTTPException(status_code=400, detail="必须提供 magnet / torrent_url / torrent_file_b64 之一")
+
+    # 上传的 .torrent 文件：解 base64 → bytes
+    torrent_file_bytes: Optional[bytes] = None
+    if request.torrent_file_b64:
+        import base64
+        try:
+            torrent_file_bytes = base64.b64decode(request.torrent_file_b64, validate=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"torrent_file_b64 解码失败: {e}")
+        if len(torrent_file_bytes) < 20 or not torrent_file_bytes.startswith(b'd'):
+            # .torrent 是 bencode dict，必然以 'd' 开头。不是的话基本是坏文件
+            raise HTTPException(status_code=400, detail="不是有效的 .torrent 文件（bencode 头校验失败）")
 
     from common.qbittorrent_client import QBittorrentClient
     from web.backend.database import DownloadDispatchMap
@@ -126,9 +141,24 @@ def push_download(
         reverse_translate_path_with_settings(request.save_path)
         if request.save_path else request.save_path
     )
+
+    # 上传文件场景：add_torrent 前先快照 qB 已有 hash 集合，添加后 diff 出新增的，
+    # 因为 qB add API 不返回 hash，文件场景也没 magnet 可抠。
+    hashes_before: set = set()
+    if torrent_file_bytes is not None:
+        try:
+            hashes_before = {
+                (t.get('hash') or '').lower()
+                for t in (client.list_torrents() or [])
+                if t.get('hash')
+            }
+        except Exception:
+            pass
+
     ok = client.add_torrent(
         magnet=request.magnet,
         torrent_url=request.torrent_url,
+        torrent_file=torrent_file_bytes,
         save_path=save_path,
         category=request.category,
         stop_condition='MetadataReceived',
@@ -146,6 +176,24 @@ def push_download(
                     break
         except Exception:
             pass
+    if not info_hash and torrent_file_bytes is not None:
+        # 文件上传场景：snapshot diff 拿新增的 hash（qB 添加是异步的，给点重试时间）
+        import time as _t
+        deadline = _t.time() + 3.0
+        while _t.time() < deadline:
+            try:
+                current = {
+                    (t.get('hash') or '').lower()
+                    for t in (client.list_torrents() or [])
+                    if t.get('hash')
+                }
+                new_hashes = current - hashes_before
+                if new_hashes:
+                    info_hash = next(iter(new_hashes))
+                    break
+            except Exception:
+                pass
+            _t.sleep(0.2)
 
     # 写 dispatch_map(phase=analyzing) + 触发 analyzer 立刻处理
     if info_hash:
