@@ -247,19 +247,19 @@ const { themes, current: currentTheme, setTheme } = useTheme()
   border-radius: 50%;
   background: var(--dot-color);
   cursor: pointer;
-  border: 2px solid transparent;
+  border: 2px solid rgba(255, 255, 255, 0.2);
   transition: all 0.2s ease;
   position: relative;
 
   &:hover {
     transform: scale(1.2);
-    border-color: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.5);
   }
 
   &.active {
-    border-color: #fff;
-    box-shadow: 0 0 0 3px var(--dot-color);
-    transform: scale(1.1);
+    border-color: rgba(255, 255, 255, 0.7);
+    box-shadow: 0 0 0 3px var(--dot-color), 0 0 8px var(--dot-color);
+    transform: scale(1.15);
   }
 }
 

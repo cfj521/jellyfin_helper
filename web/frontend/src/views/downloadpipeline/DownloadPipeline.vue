@@ -2407,8 +2407,8 @@ onUnmounted(() => {
   gap: 6px;
   padding: 10px 12px;
   margin-bottom: 14px;
-  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
-  border: 1px solid #ddd6fe;
+  background: linear-gradient(135deg, rgba(var(--jt-brand-rgb), 0.06) 0%, rgba(var(--jt-brand-rgb), 0.12) 100%);
+  border: 1px solid rgba(var(--jt-brand-rgb), 0.2);
   border-radius: 6px;
 }
 .el-dialog .llm-helper-row {
@@ -2424,7 +2424,7 @@ onUnmounted(() => {
   align-items: flex-start;
   gap: 6px;
   font-size: 12px;
-  color: #6b21a8;
+  color: var(--jt-brand);
   line-height: 1.45;
 
   .el-icon {
