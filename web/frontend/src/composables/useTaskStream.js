@@ -10,6 +10,14 @@
  */
 import { onUnmounted, ref, watch, isRef } from 'vue'
 
+/** 给 SSE URL 拼上 token 查询参数（EventSource 不支持自定义 header） */
+function withToken(url) {
+  const token = localStorage.getItem('token')
+  if (!token) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
+}
+
 /**
  * 订阅单任务进度流。
  *
@@ -53,7 +61,7 @@ export function useTaskStream(taskIdSource) {
     task.value = null
     error.value = null
 
-    es = new EventSource(`/api/tasks/${id}/stream`)
+    es = new EventSource(withToken(`/api/tasks/${id}/stream`))
 
     es.onopen = () => {
       connected.value = true
@@ -151,7 +159,7 @@ export function useTasksStream(onChange, { throttleMs = 1000 } = {}) {
     // 已经有 trailingTimer 在排队 → 后续 ping 合并掉，不开新定时器
   }
 
-  es = new EventSource('/api/tasks/stream')
+  es = new EventSource(withToken('/api/tasks/stream'))
   es.onopen = () => { connected.value = true }
   es.addEventListener('ping', fire)
   es.onmessage = fire

@@ -2338,8 +2338,14 @@ const dupProgress = ref(null)
 let _dupEs = null   // 当前 EventSource，关闭对话框时主动断流
 
 // 把一系列 SSE event 累加到一个 merged 结果（hash 模式 __all__ 多 location 时用）
+const _withToken = (url) => {
+  const token = localStorage.getItem('token')
+  if (!token) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
+}
 const _runDupStream = (url) => new Promise((resolve, reject) => {
-  const es = new EventSource(url)
+  const es = new EventSource(_withToken(url))
   _dupEs = es
   let resolved = false
   es.onmessage = (e) => {
