@@ -311,9 +311,10 @@ export const adultApi = {
   listLibraryActors: (libraryId) =>
     api.get('/api/adult/library-actors', { params: libraryId ? { library_id: libraryId } : {} }),
 
-  // 清空 + 重扫 + 刮削（同一 task 内顺序执行）
-  resetAndRescan: (libraryId) =>
-    api.post('/api/adult/reset-and-rescan', null, { params: { library_id: libraryId } }),
+  // 清空 + 重扫 + 刮削（同一 task 内顺序执行）；dry_run=true 仅统计待删条数
+  resetAndRescan: (libraryId, { dryRun = false } = {}) =>
+    api.post('/api/adult/reset-and-rescan', null,
+             { params: { library_id: libraryId, dry_run: dryRun } }),
 
   // 库统计（成人库详情页的 stats 卡用）
   stats: (libraryId) =>
@@ -335,11 +336,13 @@ export const adultApi = {
     api.post(`/api/adult/items/${id}/identify-search`, { code }),
   identifyApply: (id, payload) =>
     api.post(`/api/adult/items/${id}/identify-apply`, payload),
-  // 批量修复
-  repairCovers: (libraryId) =>
-    api.post('/api/adult/repair/covers', null, { params: libraryId ? { library_id: libraryId } : {} }),
-  repairMetadata: (libraryId) =>
-    api.post('/api/adult/repair/metadata', null, { params: libraryId ? { library_id: libraryId } : {} }),
+  // 批量修复；dry_run=true 仅返回待修复条数，不创建任务、不执行
+  repairCovers: (libraryId, { dryRun = false } = {}) =>
+    api.post('/api/adult/repair/covers', null,
+             { params: { library_id: libraryId || undefined, dry_run: dryRun } }),
+  repairMetadata: (libraryId, { dryRun = false } = {}) =>
+    api.post('/api/adult/repair/metadata', null,
+             { params: { library_id: libraryId || undefined, dry_run: dryRun } }),
   // watcher 触发本地扫描
   watcherRunNow: (libraryId) =>
     api.post('/api/adult/watcher/run-now', null, { params: libraryId ? { library_id: libraryId } : {} }),

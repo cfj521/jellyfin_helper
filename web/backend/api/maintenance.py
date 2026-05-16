@@ -21,13 +21,17 @@ sys.path.insert(0, str(ROOT_DIR))
 from web.backend.api._sample_evidence import gather_sample_evidence
 from web.backend.api._item_health import (
     _looks_like_release_dir, _looks_like_file, _basename,
+    _normalize_tokens, _similarity,
     compute_health, extract_suggested_title_year,
 )
 from web.backend.api._media_exts import (
     VIDEO_EXTS as _VIDEO_EXTS,
     has_primary_media,
 )
-from web.backend.api.tasks import create_task, update_task_progress, complete_task
+from web.backend.api.tasks import (
+    create_task, update_task_progress, complete_task,
+    cancellable_task, TaskCancelledError, mark_task_cancelled,
+)
 from web.backend.config import settings
 from web.backend.database import get_db
 from web.backend.path_translator import translate_path_with_settings
@@ -357,6 +361,7 @@ def _try_cleanup_empty_dir(
     return item
 
 
+@cancellable_task
 def run_cleanup_samples(
     task_id: int,
     paths: List[str],
@@ -564,12 +569,60 @@ def auto_identify(
                              message=f"自动识别任务已启动（{mode_label}）")
 
 
+def _confidence_score(
+    extracted_title: Optional[str],
+    extracted_year: Optional[int],
+    candidate: Dict,
+) -> float:
+    """
+    给"自动识别"找到的候选打置信度（0-1，越高越可靠）。
+
+    score = 0.7 * title_sim + 0.3 * year_score
+      - title_sim: extracted_title 跟 candidate.Name token 相似度（复用 _item_health._similarity）
+      - year_score:
+          缺值 → 0.5 中性
+          完全匹配 → 1.0
+          ±1 年 → 0.7
+          否则 → 0.0
+    """
+    if not candidate:
+        return 0.0
+    cand_name = candidate.get('Name') or ''
+    cand_year = candidate.get('ProductionYear')
+
+    title_tokens = _normalize_tokens(extracted_title or '')
+    cand_tokens  = _normalize_tokens(cand_name)
+    title_sim = _similarity(title_tokens, cand_tokens) if (title_tokens and cand_tokens) else 0.0
+
+    if not extracted_year or not cand_year:
+        year_score = 0.5
+    else:
+        diff = abs(int(extracted_year) - int(cand_year))
+        if diff == 0:
+            year_score = 1.0
+        elif diff <= 1:
+            year_score = 0.7
+        else:
+            year_score = 0.0
+
+    return round(title_sim * 0.7 + year_score * 0.3, 3)
+
+
+# 置信度低于此阈值的会在 UI 上以警告色标出（仍 apply，但用户应复核）
+# 0.75 阈值刚好捕获"标题对但年份大幅错配"（标题 1.0 × 0.7 + 年份 0.0 × 0.3 = 0.70）
+_CONFIDENCE_WARN_THRESHOLD = 0.75
+
+# auto_identify 处理的 health code：unrecognized + 两类匹配错误
+_AUTO_FIX_HEALTH_CODES = {'unrecognized', 'name_mismatch', 'year_mismatch'}
+
+
+@cancellable_task
 def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: bool = False):
     """
     后台任务：
       Step 1: 枚举 scope 内所有 Jellyfin items
-      Step 2: compute_health 过滤 unrecognized
-      Step 3: 对每个 → extract_suggested_title_year → remote_search → apply first
+      Step 2: compute_health 过滤 **3 种 error**（unrecognized / name_mismatch / year_mismatch）
+      Step 3: 对每个 → extract_suggested_title_year → remote_search → apply first（带置信度）
       Step 4: 刷新受影响库
 
     DB 只用于进度/完成回写，不持有连接跨 Jellyfin / TMDB HTTP。
@@ -585,17 +638,22 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
         client = _client()
 
         all_items = _enumerate_items_in_scope(target)
-        _progress(10, f"共 {len(all_items)} 个条目，正在筛选未识别项...")
+        _progress(10, f"共 {len(all_items)} 个条目，正在筛选健康度异常项...")
 
-        # 过滤未识别
+        # 过滤 3 种 error：unrecognized + name_mismatch + year_mismatch
+        # health_issue_map：item_id → 命中的 error code 列表（写入 details 供前端展示）
         unrecognized_raw = []
+        health_issue_map: Dict[str, List[str]] = {}
         for it in all_items:
             health = compute_health(it)
-            if any(iss['code'] == 'unrecognized' for iss in health.get('issues', [])):
+            hit_codes = [iss['code'] for iss in health.get('issues', [])
+                         if iss['code'] in _AUTO_FIX_HEALTH_CODES]
+            if hit_codes:
                 unrecognized_raw.append(it)
+                health_issue_map[it.get('Id') or ''] = hit_codes
 
         raw_total = len(unrecognized_raw)
-        _progress(12, f"找到 {raw_total} 个未识别条目，正在过滤无主体文件目录...")
+        _progress(12, f"找到 {raw_total} 个待处理条目（未识别 / 名称错配 / 年份错配），正在过滤无主体文件目录...")
 
         # 二次过滤：剔除"目录里完全没有该库类型期望的主体文件"的空壳目录
         # （如：电影库里只有字幕包/缩略图缓存/被误移走视频的孤儿 NFO 目录）
@@ -684,9 +742,12 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                 'item_name': item_name,
                 'item_type': item_type,
                 'path': translate_path_with_settings(it.get('Path')) if it.get('Path') else None,
+                'health_issues': health_issue_map.get(item_id or '', []),  # 命中的 error code 列表
                 'extracted_title': None,
                 'extracted_year': None,
                 'first_candidate': None,
+                'confidence': None,                 # 候选置信度 0-1
+                'low_confidence': False,            # 是否低于警告阈值（前端着色用）
                 'applied': False,
                 'error': None,
             }
@@ -730,6 +791,11 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                 'overview': (first.get('Overview') or '')[:200],
                 'image_url': first.get('ImageUrl'),
             }
+
+            # 置信度：title 相似度 + 年份匹配；低于阈值在 UI 上以警告色标出（仍 apply）
+            confidence = _confidence_score(title, year, first)
+            entry['confidence'] = confidence
+            entry['low_confidence'] = confidence < _CONFIDENCE_WARN_THRESHOLD
 
             if dry_run:
                 entry['error'] = '(预览模式)'
@@ -801,6 +867,7 @@ def normalize_paths(
                              message=f"规范路径任务已启动（{mode_label}）")
 
 
+@cancellable_task
 def run_normalize_paths(
     task_id: int,
     paths: List[str],
@@ -1065,6 +1132,7 @@ def _summarize_step_result(step_name: str, result: Optional[dict]) -> dict:
     return summary
 
 
+@cancellable_task
 def run_all_orchestrator(
     parent_task_id: int,
     item_paths: Optional[List[str]],
@@ -1131,7 +1199,9 @@ def run_all_orchestrator(
                 logger.warning(f"音轨 scope 解析失败（将跳过音轨步骤）: {e}")
                 audio_target = None
 
-        expected_langs = _settings.preferred_langs
+        # 扫描走 required_langs（判定缺否），下载走 downloading_langs（优先级排序池）
+        required_langs = _settings.required_langs
+        downloading_langs = _settings.downloading_langs
 
         # run_all 模式下：
         #   - 所有 step 跳过单独刷新（skip_refresh=True / 空 refresh_library_ids）
@@ -1173,28 +1243,33 @@ def run_all_orchestrator(
             },
         ]
         if sub_paths:
+            # 顺序：对齐 → 扫描 → 下载；对齐先做，把已有但文件名没标 lang 的字幕认回来，
+            # 避免接下来"扫描字幕缺失"把它们误判为缺，导致重复下载
             steps.extend([
-                {
-                    'name': 'subtitle_scan',
-                    'label': '扫描字幕缺失',
-                    # subtitle_scan 本身只读，dry_run 不影响
-                    'runner': lambda tid: run_subtitle_scan(tid, sub_paths, sub_recursive, expected_langs),
-                },
-                {
-                    'name': 'subtitle_auto_fix',
-                    'label': '自动下载字幕',
-                    # 字幕外挂文件即时发现 → 单独跑也不刷，run_all 更不刷
-                    'runner': lambda tid: run_subtitle_auto_fix(
-                        tid, sub_paths, sub_recursive, expected_langs,
-                        dry_run, True, [], None,
-                    ),
-                },
                 {
                     'name': 'subtitle_rename',
                     'label': '字幕文件名对齐',
                     # rename 的 execute 与 dry_run 取反
                     'runner': lambda tid: run_subtitle_rename(
                         tid, sub_paths, sub_recursive, not dry_run, None, [],
+                    ),
+                },
+                {
+                    'name': 'subtitle_scan',
+                    'label': '扫描字幕缺失',
+                    # subtitle_scan 本身只读，dry_run 不影响；走 required_langs 判缺
+                    'runner': lambda tid: run_subtitle_scan(tid, sub_paths, sub_recursive, required_langs),
+                },
+                {
+                    'name': 'subtitle_auto_fix',
+                    'label': '自动下载字幕',
+                    # 字幕外挂文件即时发现 → 单独跑也不刷，run_all 更不刷
+                    # required_langs 决定哪些视频要补，downloading_langs 决定补什么、什么优先级
+                    # do_rename=False：上一步 subtitle_rename 已经对齐过；下载本身也用 BCP 47 命名
+                    # reuse_recent_scan=True：上一步 subtitle_scan 刚跑完，可直接复用结果跳过 Step 1
+                    'runner': lambda tid: run_subtitle_auto_fix(
+                        tid, sub_paths, sub_recursive, required_langs, downloading_langs,
+                        dry_run, False, [], None, True,
                     ),
                 },
             ])

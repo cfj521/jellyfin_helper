@@ -111,9 +111,10 @@ const SUMMARY_FIELD_LABELS = {
   unrecognized_count: '未识别',
   fixed_count: '已修复',
   no_match_count: '未匹配',
-  total_videos: '视频数',
-  with_subtitles: '有字幕',
-  without_subtitles: '缺字幕',
+  total_videos: '视频总数',
+  with_subtitles: '有任意字幕',     // 至少有 1 条字幕（不区分语言；可能仍缺所需语言）
+  without_subtitles: '完全无字幕',   // 一条字幕都没有（既无外挂也无内嵌）
+  without_required: '缺所需语言',    // required_langs 任一缺失（更严格指标）
   download_success: '下载成功',
   download_total: '下载总数',
   rename_success: '改名成功',

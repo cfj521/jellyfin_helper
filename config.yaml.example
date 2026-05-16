@@ -68,7 +68,17 @@ douban:
 
 # 字幕设置
 subtitle:
-  preferred_langs: ["chs", "chs.eng", "eng"]
+  # ── 字幕语言：两套配置，职责分明 ──
+  #
+  # required_langs：判定"缺字幕"用的原子单语言列表。任一缺即视为缺字幕。
+  #   UI 上是 checkbox。值域 chs / cht / eng / jpn / kor。
+  #   特殊：通用中文 'zh'（未指定简繁）在判定时同时覆盖 chs 和 cht，不会让用户既缺简又缺繁。
+  required_langs: ["chs", "eng"]
+  #
+  # downloading_langs：自动下载字幕时的优先级排序池（前优先），支持双语复合 chs.eng / cht.eng。
+  #   UI 上是可拖动排序池。例：抓双语包失败再退化到单简体 / 单英文。
+  downloading_langs: ["chs.eng", "chs", "eng"]
+  #
   # OpenSubtitles.com（不是 .org，新版 REST API）
   # 在 https://www.opensubtitles.com/consumers 申请 API Consumer
   opensubtitles_api_key: ""
@@ -79,9 +89,10 @@ subtitle:
   opensubtitles_request_delay: 2.0
   # 射手字幕 assrt.net（中文字幕主力源）
   # 注册账号后在 https://secure.assrt.net/usercp.php 拿到 API Token
-  # 限频 20 次/分钟（按 token + IP 共享计数），request_delay 建议 ≥3s
+  # 限频 20 次/分钟（按 token + IP 共享计数）
+  # request_delay 建议 ≥4s：3s 正好踩边，被并发的"前端手动搜字幕"/配额查询击穿后会撞 30900
   assrt_api_token: ""
-  assrt_request_delay: 3.0
+  assrt_request_delay: 4.0
   # Shooter（射手网 subapi.php）—— 中文电影 hash 命中率高，无需 API Key
   shooter_request_delay: 2.0
   # 字幕下载源优先级（按顺序尝试，第一个命中即返回）
@@ -238,3 +249,10 @@ adult:
     - { name: javlibrary, enabled: false }
     - { name: avbase,     enabled: true }
     - { name: missav,     enabled: true }
+
+
+# 调试 / 开发用开关
+# show_dry_run_in_toolbar：在媒体库 / 成人库的操作按钮 confirm 弹窗里显示"测试模式"勾选
+#   生产环境通常不需要展示；开发或验收时打开方便预演影响范围
+debug:
+  show_dry_run_in_toolbar: false

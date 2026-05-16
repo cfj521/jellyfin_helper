@@ -9,7 +9,8 @@
     <div class="dialog-body">
       <p class="lead">
         将通知 Jellyfin 重新扫描
-        <span v-if="libraryName" class="lib-name-inline">{{ libraryName }}</span>
+        <span v-if="selectedCount > 0" class="lib-name-inline">选中的 {{ selectedCount }} 项</span>
+        <span v-else-if="libraryName" class="lib-name-inline">{{ libraryName }}</span>
         ，请选择刷新模式：
       </p>
 
@@ -64,6 +65,8 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   title: { type: String, default: '通知 Jellyfin 重新扫描' },
   libraryName: { type: String, default: '' },
+  // 选中条目数 > 0 时，对话框作用范围按"选中项"显示，否则按整库
+  selectedCount: { type: Number, default: 0 },
   loading: { type: Boolean, default: false },
 })
 

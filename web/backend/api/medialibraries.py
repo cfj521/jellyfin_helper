@@ -159,6 +159,8 @@ def get_library_items(
     exclude_item_types: Optional[str] = None,  # 例 'Folder' 排除未识别孤儿目录
     has_health_issue: bool = False,     # 只看健康有问题的条目（compute_health.level != 'ok'）
     missing_tmdb: bool = False,         # 只看缺 TMDB ID 的条目
+    missing_subtitle: bool = False,     # 只看缺字幕的条目（依据最近一次 subtitle_scan）
+    db: Session = Depends(get_db),
 ):
     """
     列出某个库的条目（分页）。
@@ -201,12 +203,26 @@ def get_library_items(
 
     host = (settings.jellyfin_host or "").rstrip('/')
 
-    # ── 分支 A：派生字段过滤（health_issue / missing_tmdb）→ 后端全量拉 + 内存过滤 + 分页切片 ──
-    # 这两个字段 jellyfin 不知道，没法下推；用 5min 缓存避免重复拉整库
-    if has_health_issue or missing_tmdb:
+    # ── 分支 A：派生字段过滤（health_issue / missing_tmdb / missing_subtitle）→ 后端全量拉 + 内存过滤 + 分页切片 ──
+    # 这几个字段 jellyfin 不知道，没法下推；用 5min 缓存避免重复拉整库
+    if has_health_issue or missing_tmdb or missing_subtitle:
+        # 缺字幕过滤：用最近一次 subtitle_scan 的目录结果作为依据（与统计同源）
+        missing_dirs: Optional[set] = None
+        if missing_subtitle:
+            missing_dirs = _load_missing_subtitle_dirs(db)
+            if missing_dirs is None:
+                # 没有可用的扫描结果 → 直接告诉前端
+                return {
+                    "count": 0,
+                    "total": 0,
+                    "start_index": start_index,
+                    "limit": limit,
+                    "items": [],
+                    "missing_subtitle_unavailable": True,
+                }
         cache_key = (
             f"{library_id}|{item_type or ''}|{exclude_item_types or ''}|"
-            f"{int(has_health_issue)}{int(missing_tmdb)}|"
+            f"{int(has_health_issue)}{int(missing_tmdb)}{int(missing_subtitle)}|"
             f"{sort_by or 'SortName'}|{sort_order or 'Ascending'}|"
             f"{years or ''}|{genres or ''}|{search or ''}"
         )
@@ -253,12 +269,14 @@ def get_library_items(
                     return False
                 if missing_tmdb and it.get('tmdb_id'):
                     return False
+                if missing_subtitle and not _item_missing_subtitle(it, missing_dirs):
+                    return False
                 return True
             all_items = [it for it in built if _keep(it)]
             _kv_set(_LIB_FILTERED_SCOPE, cache_key, {'all_items': all_items})
             logger.info(
                 f"派生字段过滤拉全库: lib={library_id} 原 {len(built)} 条 → 过滤后 {len(all_items)} 条"
-                f"（has_health_issue={has_health_issue}, missing_tmdb={missing_tmdb}）"
+                f"（has_health_issue={has_health_issue}, missing_tmdb={missing_tmdb}, missing_subtitle={missing_subtitle}）"
             )
 
         total = len(all_items)
@@ -442,6 +460,46 @@ _CHT_HINTS = (
 _GENERIC_CHINESE_HINTS = ('chinese', '中文', 'mandarin')
 
 
+_SUBTITLE_SNIFF_SCOPE = 'subtitle_lang_sniff'
+_SUBTITLE_SNIFF_TTL = 7 * 86400  # 7 天：字幕内容基本不会变；被改了由 mtime+size 自动 invalidate
+
+
+def _sniff_subtitle_lang_cached(jf_path: str) -> Optional[str]:
+    """对**外挂字幕文件**做内容嗅探，结果带 7 天缓存。
+
+    场景：jellyfin 对裸名字幕（如 Movie.ass，无 lang token）会返回 Language=''/'und'，
+    UI 上就显示成"未知"。这里走我们自己的 detect_subtitle_language 兜底，
+    让用户在没跑"字幕文件名对齐"前也能在列表里看到正确语言。
+
+    缓存 key = 文件路径 + mtime + size，文件被改/换会自动 invalidate。
+    .sup（蓝光图形字幕）跳过——位图没法读字符。
+
+    返回内部 code（chs/cht/zh/eng/jpn/kor）或 None（嗅探失败 / 文件不可访问）。
+    """
+    if not jf_path:
+        return None
+    try:
+        from web.backend.path_translator import translate_path_with_settings
+        local = translate_path_with_settings(jf_path) or jf_path
+        p = Path(local)
+        if not p.is_file():
+            return None
+        if p.suffix.lower() == '.sup':
+            return None
+        st = p.stat()
+        key = f"{str(p).replace(chr(92), '/').lower()}|{int(st.st_mtime)}|{st.st_size}"
+        cached = _kv_get(_SUBTITLE_SNIFF_SCOPE, key, ttl_seconds=_SUBTITLE_SNIFF_TTL)
+        if isinstance(cached, dict) and 'lang' in cached:
+            return cached['lang'] or None
+        from tools.subtitle_manager.lang_detect import detect_subtitle_language
+        lang = detect_subtitle_language(p)
+        _kv_set(_SUBTITLE_SNIFF_SCOPE, key, {'lang': lang})
+        return lang
+    except Exception as e:
+        logger.debug(f"内容嗅探字幕语言失败 {jf_path}: {e}")
+        return None
+
+
 def _extract_subtitle_langs(i: Dict) -> List[str]:
     """
     从 jellyfin Item 的 MediaStreams / MediaSources 中提取字幕语言代码列表。
@@ -499,18 +557,28 @@ def _extract_subtitle_langs(i: Dict) -> List[str]:
                 _push(mapped)
                 continue
 
-        # 3. 通用中文（"Chinese" / "中文" 不分简繁）→ 兜底 chs
+        # 3. 通用中文（"Chinese" / "中文" 不分简繁）→ 通用中文 zh（在缺判定里同时覆盖 chs+cht）
         if any(h in haystack for h in _GENERIC_CHINESE_HINTS):
-            _push('chs')
+            _push('zh')
             continue
 
-        # 4. 兜底：原 Language 截断（保留小众语言）
+        # 4. 外挂字幕兜底：jellyfin 给不出 Language（裸名 .ass / .srt 等），
+        #    走我们自己的内容嗅探（带 7 天缓存，文件 mtime/size 变了自动失效）。
+        #    这一步让"还没跑过字幕文件名对齐"的库也能在 UI 上看到正确语言。
+        #    IsExternal 守卫：嵌入式流的 Path 字段是视频路径，嗅探会乱读，跳过。
+        if s.get('IsExternal'):
+            sub_path = s.get('Path') or ''
+            sniffed = _sniff_subtitle_lang_cached(sub_path) if sub_path else None
+            if sniffed:
+                _push(sniffed)
+                continue
+
+        # 5. 仍识别不到：原 Language 截断（保留小众语言）或 'und'
         if raw_lang:
             _push(raw_lang[:5])
         else:
-            # jellyfin 确认这是 Subtitle 流但 Language/Title/Path 全无线索
-            # （典型：外挂 .ass 没标 metadata，DisplayTitle="未定义 - ASS - 外部"）
-            # 至少标记一个"未知"，让用户知道"有字幕只是不确定语言"——比啥都不显示好
+            # jellyfin 确认是 Subtitle 流但 Language/Title/Path 全无线索 + 嗅探也失败
+            # （典型：嵌入式 PGS 流没标 metadata，或不可访问的字幕文件）
             _push('und')
     return out
 
@@ -708,6 +776,68 @@ def _compute_series_aggregate(series_id: str, client) -> Dict:
         'episode_count': episode_count,
         'total_runtime_min': total_runtime_min,
     }
+
+
+def _load_missing_subtitle_dirs(db: Session) -> Optional[set]:
+    """从最近一次 completed subtitle_scan 任务收集所有 without_required>0 的目录路径。
+
+    返回 None 表示找不到可用扫描结果（前端据此显示"先扫描一次再过滤"）。
+    返回 set[str]：归一化的目录路径（lower + 正斜杠 + 末尾去 /）。
+    """
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        task = (
+            db.query(Task)
+            .filter(
+                Task.task_type == 'subtitle_scan',
+                Task.status == 'completed',
+                Task.completed_at >= cutoff,
+            )
+            .order_by(Task.completed_at.desc())
+            .first()
+        )
+        if not task or not task.result:
+            return None
+        result = json.loads(task.result)
+        dirs = result.get('directories') or []
+        if not dirs:
+            return set()
+        missing = set()
+        for d in dirs:
+            if int(d.get('without_required') or 0) <= 0:
+                continue
+            p = (d.get('path') or '').replace('\\', '/').rstrip('/').lower()
+            if p:
+                missing.add(p)
+        return missing
+    except Exception as e:
+        logger.warning(f"加载缺字幕目录失败: {e}")
+        return None
+
+
+def _item_missing_subtitle(it: Dict, missing_dirs: set) -> bool:
+    """判定单个 item 是否"缺字幕"（依据 missing_dirs 集合）。
+
+    - Movie/Episode：自身文件所在目录在 missing_dirs 中 → 缺
+    - Series：missing_dirs 中存在以 series.path 为前缀的目录 → 缺
+    - 其他类型：不参与（返回 False）
+    """
+    if not missing_dirs:
+        return False
+    p = (it.get('path') or '').replace('\\', '/').rstrip('/').lower()
+    if not p:
+        return False
+    t = it.get('type')
+    if t in ('Movie', 'Episode'):
+        # 文件路径 → 取父目录
+        from pathlib import PurePosixPath as _Pp
+        parent = str(_Pp(p).parent).rstrip('/').lower()
+        return parent in missing_dirs
+    if t == 'Series':
+        # 任何 missing_dir 在该剧目录树下
+        prefix = p + '/'
+        return any(d == p or d.startswith(prefix) for d in missing_dirs)
+    return False
 
 
 def _compute_series_subtitle_coverage(series_path: str, db: Session) -> Optional[Dict]:
@@ -1744,7 +1874,7 @@ def library_subtitle_stats(
         raise HTTPException(status_code=400, detail=f"库 {target['name']} 没有配置任何路径")
 
     paths, _, label, refresh_ids = _resolve_scope(library_id=library_id)
-    expected_langs = settings.preferred_langs
+    required_langs = settings.required_langs
     # auto_triggered 标记：这是 LibraryDetail 页面打开时静默触发的字幕扫描，
     # 默认不显示在 /tasks 列表里（用户没主动发起）
     task = create_task(
@@ -1753,7 +1883,7 @@ def library_subtitle_stats(
             "auto_triggered": True,
             "paths": paths,
             "recursive": True,
-            "expected_langs": expected_langs,
+            "required_langs": required_langs,
             "library_ids": list(refresh_ids or []),
         },
     )
@@ -1762,7 +1892,7 @@ def library_subtitle_stats(
         task.id,
         paths,
         True,  # recursive
-        expected_langs,
+        required_langs,
         list(refresh_ids or []),
     )
     return {

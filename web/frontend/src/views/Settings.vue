@@ -103,6 +103,25 @@
             </el-form-item>
           </el-form>
 
+          <!-- 开发 / 调试开关 -->
+          <el-divider content-position="left">
+            <span class="sub-section-title">
+              调试开关
+              <el-tag size="small" type="info" effect="plain" style="margin-left: 6px">调试用</el-tag>
+            </span>
+          </el-divider>
+
+          <div class="debug-block">
+            <div class="debug-row">
+              <span class="switch-label">操作按钮显示"测试模式"</span>
+              <el-switch v-model="form.debug.show_dry_run_in_toolbar" size="small" />
+              <span class="form-hint">
+                媒体库 / 成人库工具栏按钮的 confirm 弹窗里展示 <strong>dry-run 复选框</strong>；
+                平时关掉避免干扰，调试或验收影响范围时打开
+              </span>
+            </div>
+          </div>
+
           <!-- 路径映射（嵌入 Jellyfin 服务器 section） -->
           <el-divider content-position="left">
             <span class="sub-section-title">
@@ -651,30 +670,52 @@
           </div>
         </template>
 
-        <!-- 语言偏好 -->
+        <!-- 字幕语言需求 -->
         <el-card shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
               <span class="badge subtitle-common">字幕</span>
-              <span>语言偏好</span>
+              <span>字幕语言需求</span>
             </div>
           </template>
           <el-form :model="form.subtitle" label-width="160px">
             <el-form-item label-width="0" class="lang-stacked">
-              <el-checkbox-group v-model="form.subtitle.preferred_langs" class="lang-line">
-                <el-checkbox label="chs.eng">简英双语</el-checkbox>
+              <el-checkbox-group
+                v-model="form.subtitle.required_langs"
+                class="lang-line"
+                @change="onRequiredLangsChange"
+              >
                 <el-checkbox label="chs">简体中文</el-checkbox>
-                <el-checkbox label="cht.eng">繁英双语</el-checkbox>
                 <el-checkbox label="cht">繁体中文</el-checkbox>
                 <el-checkbox label="eng">英语</el-checkbox>
                 <el-checkbox label="jpn">日语</el-checkbox>
                 <el-checkbox label="kor">韩语</el-checkbox>
               </el-checkbox-group>
               <div class="form-hint">
-                字幕扫描判定"是否缺字幕"的依据；下载时也按此顺序挑最匹配的字幕。<strong>简英双语</strong>对应 <code>.chs.eng.srt</code> / <code>chs&amp;eng</code> 等双语字幕，命中优先级最高。
+                作为缺字幕统计的判断，可以多选；自动下载字幕时会补齐缺少的语言字幕。
+                <strong>未指定简繁的中文字幕</strong>（如 <code>.chinese.srt</code> / <code>.中文.srt</code>，或内容嗅探不出简繁的）<strong>同时算覆盖简体和繁体</strong>，不会让你既缺简又缺繁。
               </div>
             </el-form-item>
           </el-form>
+        </el-card>
+
+        <!-- 自动下载语言优先级 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge subtitle-common">字幕</span>
+              <span>自动下载语言优先级</span>
+            </div>
+          </template>
+          <p class="form-hint" style="margin-bottom: 12px">
+            自动下载字幕时按下方顺序匹配，前优先。支持双语复合 <strong>简英双语 / 繁英双语</strong>（对应字幕组的 <code>.chs.eng.srt</code> 这种格式，命中优先级最高）。
+          </p>
+          <SourcePool
+            v-model="form.subtitle.downloading_langs"
+            :all-keys="allDownloadingLangKeys"
+            :labels="downloadingLangLabels"
+            :min-items="1"
+          />
         </el-card>
 
         <!-- 字幕格式偏好（紧跟语言偏好，跟"想要什么字幕"语义聚合） -->
@@ -693,6 +734,7 @@
             v-model="form.subtitle.preferred_formats"
             :all-keys="allSubtitleFormatKeys"
             :labels="subtitleFormatLabels"
+            :min-items="1"
           />
         </el-card>
 
@@ -712,6 +754,7 @@
             v-model="form.subtitle.sources"
             :all-keys="allSubtitleSourceKeys"
             :labels="subtitleSourceLabels"
+            :min-items="1"
           />
         </el-card>
 
@@ -838,6 +881,7 @@
             :all-keys="allSourceKeys"
             :labels="sourceLabels"
             :default-base-urls="defaultBaseUrls"
+            :min-items="1"
             allow-base-url
           />
         </el-card>
@@ -1315,6 +1359,32 @@ const subtitleFormatLabels = {
 }
 const allSubtitleFormatKeys = Object.keys(subtitleFormatLabels)
 
+// 字幕自动下载 - 语言优先级（SourcePool；含双语复合）
+// 跟"缺字幕判定"分开：缺判只看原子 chs/cht/eng/jpn/kor；下载用这个排序池决定抓什么、什么优先
+const downloadingLangLabels = {
+  'chs.eng': '简英双语',
+  'cht.eng': '繁英双语',
+  'chs':     '简体中文',
+  'cht':     '繁体中文',
+  'eng':     '英语',
+  'jpn':     '日语',
+  'kor':     '韩语',
+}
+const allDownloadingLangKeys = Object.keys(downloadingLangLabels)
+
+// 字幕语言需求 checkbox：禁止全部取消（缺字幕统计依赖至少 1 个）
+// 用户点最后一个想取消时，立即回填 + 警告
+let _lastRequiredLangs = ['chs', 'eng']
+const onRequiredLangsChange = (val) => {
+  if (!Array.isArray(val) || val.length === 0) {
+    ElMessage.warning('字幕语言需求至少选择 1 个')
+    // 回填到上一次的非空状态
+    form.subtitle.required_langs = [..._lastRequiredLangs]
+    return
+  }
+  _lastRequiredLangs = [...val]
+}
+
 // 入库流水线 - 各 media_type 的规则卡片元数据（标签 + 图标）
 // 各 media_type 卡片元数据。纪录片不独立成 media_type，按 TMDB 设计走 movie/tv + genre 99
 const dispatchMediaTypes = [
@@ -1349,7 +1419,12 @@ const blank = () => ({
     opensubtitles_username: '',
     opensubtitles_password: '',
     opensubtitles_request_delay: 2.0,
-    preferred_langs: ['chs', 'eng'],
+    // 缺字幕判定（原子单语言 checkbox；任一缺即视为缺字幕）
+    required_langs: ['chs', 'eng'],
+    // 自动下载语言优先级（SourcePool 排序池；可含双语复合 chs.eng / cht.eng）
+    downloading_langs: [
+      { name: 'chs.eng' }, { name: 'chs' }, { name: 'eng' },
+    ],
     assrt_api_token: '',
     assrt_request_delay: 3.0,
     sources: [
@@ -1400,6 +1475,7 @@ const blank = () => ({
   },
   database: { host: '', port: 5432, name: '', user: '', password: '' },
   path_mappings: { enabled: false, rules: [] },
+  debug: { show_dry_run_in_toolbar: false },
   cache: {
     tmdb_minutes: 120,
     library_days: 7,
@@ -1503,6 +1579,22 @@ const mergeIntoForm = (cfg) => {
       { name: 'ass' }, { name: 'srt' }, { name: 'sup' },
     ]
   }
+  // 后端 downloading_langs 也是 string[]，前端 SourcePool 同样要 [{name}]
+  const rawDLangs = form.subtitle.downloading_langs
+  if (Array.isArray(rawDLangs) && rawDLangs.length && typeof rawDLangs[0] === 'string') {
+    form.subtitle.downloading_langs = rawDLangs.map(s => ({ name: s }))
+  } else if (!Array.isArray(rawDLangs) || !rawDLangs.length) {
+    form.subtitle.downloading_langs = [
+      { name: 'chs.eng' }, { name: 'chs' }, { name: 'eng' },
+    ]
+  }
+  // required_langs 是 string[]，UI 上是 checkbox-group，类型本来就匹配
+  // 空数组 / 非数组都兜底成 ['chs', 'eng']（缺字幕统计依赖至少 1 个）
+  if (!Array.isArray(form.subtitle.required_langs) || form.subtitle.required_langs.length === 0) {
+    form.subtitle.required_langs = ['chs', 'eng']
+  }
+  // 同步"上一次合法值"快照，给 onRequiredLangsChange 做回填用
+  _lastRequiredLangs = [...form.subtitle.required_langs]
   if (!Array.isArray(form.subtitle.sources)) {
     // 旧 config 没 sources 字段时给个默认值，保证页面有内容
     form.subtitle.sources = [
@@ -1598,6 +1690,29 @@ const confirmSave = async () => {
     return
   }
 
+  // 校验：以下列表都必须至少 1 项，空集合会让对应功能完全失能
+  const _len = (v) => Array.isArray(v) ? v.length : 0
+  if (_len(form.subtitle.required_langs) === 0) {
+    ElMessage.warning('字幕语言需求至少选择 1 个')
+    return
+  }
+  if (_len(form.subtitle.downloading_langs) === 0) {
+    ElMessage.warning('字幕自动下载语言优先级至少保留 1 个')
+    return
+  }
+  if (_len(form.subtitle.preferred_formats) === 0) {
+    ElMessage.warning('字幕格式偏好至少保留 1 个')
+    return
+  }
+  if (_len(form.subtitle.sources) === 0) {
+    ElMessage.warning('字幕下载源至少保留 1 个')
+    return
+  }
+  if (_len(form.adult.sources) === 0) {
+    ElMessage.warning('成人内容源至少保留 1 个')
+    return
+  }
+
   // 仅当改了关键连接（Jellyfin / 数据库）时才需要二次确认
   const dbChanged = sectionChanged('database')
   const jellyfinChanged = sectionChanged('jellyfin')
@@ -1643,7 +1758,7 @@ const confirmSave = async () => {
       default_keywords: (form.jackett.default_keywords || '').trim(),
     }
     // 清理 subtitle.sources：只保留 name + enabled，过滤无 name 项
-    // 清理 subtitle.preferred_formats：UI 用 [{name}] 形式，submit 时拍平为 ['ass','srt',...]
+    // preferred_formats / downloading_langs：UI 用 [{name}] 形式，submit 时拍平为 string[]
     const cleanedSubtitle = {
       ...form.subtitle,
       sources: (form.subtitle.sources || [])
@@ -1652,6 +1767,10 @@ const confirmSave = async () => {
       preferred_formats: (form.subtitle.preferred_formats || [])
         .map(f => (typeof f === 'string' ? f : f?.name))
         .filter(Boolean),
+      downloading_langs: (form.subtitle.downloading_langs || [])
+        .map(s => (typeof s === 'string' ? s : s?.name))
+        .filter(Boolean),
+      // required_langs 在 UI 上已经是 string[]（checkbox-group 直接绑），无需转换
     }
     const payload = { ...form, adult: cleanedAdult, jackett: cleanedJackett, subtitle: cleanedSubtitle }
     await configApi.saveFull(payload)
@@ -2200,11 +2319,39 @@ onBeforeRouteLeave(async () => {
     gap: 16px;
     margin-bottom: 4px;
   }
+
+  // 覆盖全局的 inline hint 规则（column flex 下 align-self:center 会变成水平居中）
+  :deep(.el-form-item__content) > .form-hint {
+    margin-left: 0;
+    align-self: stretch;
+    text-align: left;
+  }
 }
 
 .sub-section-title {
   font-weight: 500;
   color: #475569;
+}
+
+// 调试开关 block：跟路径映射同款风格，避免在视觉上跳跃
+.debug-block {
+  .debug-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+
+    .switch-label {
+      font-size: 13px;
+      color: #475569;
+      font-weight: 500;
+    }
+    .form-hint {
+      margin-top: 0;
+      flex: 1;
+    }
+  }
 }
 
 // 路径映射 block

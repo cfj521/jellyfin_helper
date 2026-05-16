@@ -101,7 +101,7 @@ class SubtitleCandidate:
     source: str                                       # provider 名 (opensubtitles/assrt/shooter)
     raw: Dict[str, Any]                               # 原始 sub meta，下载时复用
     download_fn: Optional[Callable[[], Any]] = None   # 延迟下载（return 视情况）
-    language: str = ''                                # 字幕语言代码（chs/eng/...）
+    language: str = ''                                # 字幕语言代码（chs/eng/...）；双语用 dot-separated 'chs.eng'
     release_name: str = ''                            # 字幕侧的 release 文件名（用来比 release group / resolution）
     hash_match: bool = False                          # 字幕侧声明此候选是文件 hash 匹配（最强信号）
     imdb_id: str = ''
@@ -112,6 +112,11 @@ class SubtitleCandidate:
     vote: float = 0.0                                 # 0-10 标准化（vote_score / download_count rank 等）
     score: int = 0
     score_breakdown: Dict[str, int] = field(default_factory=dict)
+    # 语言 tier：preferred 列表里首次被覆盖的下标（0=preferred[0] 命中，越大越差）
+    # 排序时是**首要键** —— 保证用户偏好的语言（双语包 / 单语）严格分层，
+    # release 信息（group/res/source/year）只能在同 tier 内做 tiebreak。
+    # 99 = 完全没沾到 preferred 的任何项。
+    lang_rank: int = 99
 
 
 # ============================================================================
@@ -188,12 +193,18 @@ def score_candidate(
     #     cand.language='eng'     → first_hit=2 → +30
     #     cand.language='cht.eng' → first_hit=2（仅命中 eng）→ +30
     #     cand.language='cht'     → 不沾边 → +0（不加分，让排序自然沉底）
+    #
+    # 同时把 first_hit 写到 cand.lang_rank —— 那才是 pick_best 真正用的排序首键，
+    # 这里的 breakdown['lang'] 数值留着只为前端展示 / debug，不再决定排名。
     if preferred_langs and cand.language:
         from common.lang_utils import lang_match_score as _lang_score
         neg_cov, first_hit = _lang_score(cand.language, preferred_langs)
         if neg_cov < 0:  # 至少覆盖了一项 preferred
+            cand.lang_rank = first_hit
             score = max(SCORE_LANG_PRIMARY - first_hit * SCORE_LANG_STEP, SCORE_LANG_FALLBACK)
             breakdown['lang'] = score
+        else:
+            cand.lang_rank = 99  # 完全没覆盖：沉底
 
     # ---- 7. vote ----
     if cand.vote:
@@ -211,10 +222,20 @@ def pick_best(
     video: VideoInfo,
     preferred_langs: Optional[List[str]] = None,
 ) -> Optional[SubtitleCandidate]:
-    """对全部候选打分，返回最高分（同分时第一个）。空列表返回 None。"""
+    """对全部候选打分，挑出"语言 tier 最优 + 同 tier 内分数最高"的那一条。
+
+    分层排序键：(lang_rank, -score, source)
+      - lang_rank：preferred 序列里首次被覆盖的下标（0=preferred[0] 命中）。
+        这是首要键 —— 严格分层，preferred[0] 永远在 preferred[1+] 之前，
+        保证用户偏好的"双语包"不会被一份 release 信息齐全的单语字幕掀翻。
+      - 同 tier 内 -score（Bazarr 风格 release 信息和分）做 tiebreak。
+      - 最后按 source 稳定排序。
+
+    空列表返回 None。
+    """
     if not candidates:
         return None
     for c in candidates:
         score_candidate(c, video, preferred_langs)
-    candidates.sort(key=lambda c: (-c.score, c.source))
+    candidates.sort(key=lambda c: (c.lang_rank, -c.score, c.source))
     return candidates[0]

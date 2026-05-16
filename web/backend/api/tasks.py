@@ -29,6 +29,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class TaskCancelledError(Exception):
+    """协作式取消信号。
+
+    update_task_progress 检测到以下任一情况就抛出：
+      - DB 里 task.status == 'cancelled'（用户在前端点了取消）
+      - is_shutting_down() 返回 True（进程收到 SIGTERM/SIGINT/Ctrl+C）
+
+    长任务的最外层 try/except 应捕获这个异常，把状态写成 'cancelled' 并返回，
+    避免被普通 Exception 分支误写成 'failed'。
+
+    最简易的做法：用 @cancellable_task 装饰器自动处理，省去每个 wrapper 手写。
+    """
+    def __init__(self, task_id: int, reason: str = 'cancelled'):
+        super().__init__(f"task #{task_id} cancelled ({reason})")
+        self.task_id = task_id
+        self.reason = reason   # 'cancelled' (用户取消) / 'shutdown' (进程关闭)
+
+
+def cancellable_task(fn):
+    """装饰任意 `def run_xxx(task_id, ...)` 形态的后台任务 wrapper。
+
+    捕获 TaskCancelledError → 把 DB 状态写成 cancelled（而不是 failed），
+    保留运行中累积的 partial result。其它异常原样抛给 wrapper 内部处理。
+
+    用法：
+        @cancellable_task
+        def run_subtitle_scan(task_id, paths, recursive, ...):
+            ...
+    """
+    import functools
+    @functools.wraps(fn)
+    def wrapper(task_id, *args, **kwargs):
+        try:
+            return fn(task_id, *args, **kwargs)
+        except TaskCancelledError as ce:
+            from web.backend.database import SessionLocal
+            with SessionLocal() as db:
+                mark_task_cancelled(db, task_id, reason=ce.reason)
+            return None
+    return wrapper
+
+
 class TaskResponse(BaseModel):
     id: int
     task_type: str
@@ -376,6 +418,17 @@ def update_task_progress(
 
     task = db.query(Task).filter(Task.id == task_id).first()
     if task:
+        # 协作式取消检查：这是几乎所有长任务循环里都会调到的"枢纽"，
+        # 在这里抛 TaskCancelledError 能让任务在下一次 emit progress 时干净退出。
+        # 顺序：先看 DB（用户取消优先级最高），再看进程级 shutdown。
+        if task.status == 'cancelled':
+            logger.info(f"task #{task_id} detected cancelled status, raising TaskCancelledError")
+            raise TaskCancelledError(task_id, 'cancelled')
+        from web.backend.shutdown import is_shutting_down
+        if is_shutting_down():
+            logger.info(f"task #{task_id} detected shutdown signal, raising TaskCancelledError")
+            raise TaskCancelledError(task_id, 'shutdown')
+
         task.progress = progress
         if message:
             task.message = message
@@ -479,6 +532,65 @@ def complete_task(
             task.message = f"失败: {result['error']}"
 
         # commit 前抓 snapshot，commit 后推 + 关 SSE 流
+        snapshot = _build_task_snapshot(task)
+        db.commit()
+        _publish_task_update(snapshot, terminal=True)
+    _log_detach()
+
+
+def mark_task_cancelled(
+    db: Session,
+    task_id: int,
+    reason: str = 'cancelled',
+    partial_result: dict = None,
+):
+    """把任务标为 cancelled 状态。任务体捕获 TaskCancelledError 后调用。
+
+    跟 complete_task(success=False) 的区别：
+      - status='cancelled' 而不是 'failed'
+      - message 自动写"用户取消" / "进程关闭中止"
+      - 保留 update_task_progress 期间累积的 partial result（不强行覆盖）
+    """
+    from web.backend.task_log_capture import drain as _log_drain, detach as _log_detach
+    captured = _log_drain(task_id)
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if task:
+        elapsed_str = ''
+        if task.started_at:
+            elapsed = (datetime.utcnow() - task.started_at).total_seconds()
+            elapsed_str = f" elapsed={elapsed:.1f}s"
+        logger.info(
+            f"task cancelled: id={task_id} type={task.task_type!r} reason={reason}{elapsed_str}"
+        )
+
+        task.status = "cancelled"
+        task.completed_at = datetime.utcnow()
+        # cancel 时 progress 保留当时值，不强写 100；前端能看出"中断在某个进度"
+        task.message = "用户取消" if reason == 'cancelled' else "进程关闭中止"
+
+        # 合并已有 result + partial（保留运行中的 details 给用户看）
+        merged: dict = {}
+        if task.result:
+            try:
+                existing = json.loads(task.result)
+                if isinstance(existing, dict):
+                    merged.update(existing)
+            except Exception:
+                pass
+        if partial_result:
+            merged.update(partial_result)
+        merged['cancel_reason'] = reason
+        if captured:
+            existing_warns = merged.get('warnings') or []
+            seen = {(w.get('ts'), w.get('msg')) for w in existing_warns}
+            for w in captured:
+                if (w.get('ts'), w.get('msg')) not in seen:
+                    existing_warns.append(w)
+            merged['warnings'] = existing_warns
+        if merged:
+            task.result = json.dumps(merged, ensure_ascii=False)
+
         snapshot = _build_task_snapshot(task)
         db.commit()
         _publish_task_update(snapshot, terminal=True)

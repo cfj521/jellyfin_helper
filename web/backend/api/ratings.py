@@ -411,8 +411,9 @@ class _DoubanWorker:
         # 不写 douban_fetched_at，让下次访问能再试。否则 30 天 TTL 把空记录锁死。
         got_anything = bool(douban_id) or (dr is not None and dr.rating is not None)
         if not got_anything:
+            # 日志带 imdb_id 才能定位是"真没命中"还是"根本没传 imdb_id"
             logger.info(
-                f"豆瓣未命中，跳过缓存写入 tmdb={tmdb_id} ({media_type}) title={title!r}"
+                f"豆瓣未命中，跳过缓存写入 imdb={imdb_id or '无'} ({media_type}) title={title!r}"
             )
             return
 

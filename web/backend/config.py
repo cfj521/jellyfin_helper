@@ -162,11 +162,28 @@ class Settings(BaseSettings):
     opensubtitles_username: Optional[str] = _yaml_config.get('subtitle', {}).get('opensubtitles_username')
     opensubtitles_password: Optional[str] = _yaml_config.get('subtitle', {}).get('opensubtitles_password')
     opensubtitles_request_delay: float = _yaml_config.get('subtitle', {}).get('opensubtitles_request_delay', 2.0)
-    preferred_langs: List[str] = _yaml_config.get('subtitle', {}).get('preferred_langs', ['chs', 'eng'])
+    # ── 字幕语言：两套配置，职责分明 ──
+    #
+    # required_langs：**缺字幕判定**的依据。原子单语言，任一缺即视为缺字幕。
+    #   UI 上以 checkbox 形式勾选。值域：chs / cht / eng / jpn / kor。
+    #   例：['chs', 'eng'] = "必须同时有简体中文 AND 英文，缺哪个都报警"。
+    #   特殊：通用中文 'zh'（未指定简繁的字幕）在判定时同时覆盖 chs 和 cht。
+    required_langs: List[str] = _yaml_config.get('subtitle', {}).get(
+        'required_langs', ['chs', 'eng']
+    )
+    #
+    # downloading_langs：**自动下载字幕**时的语言优先级（排序池，前优先）。
+    #   UI 上以可拖动排序池形式调整。支持双语复合（chs.eng / cht.eng）。
+    #   例：['chs.eng', 'chs', 'eng'] = "优先抓简英双语包，没有就单简，再没有就单英"。
+    downloading_langs: List[str] = _yaml_config.get('subtitle', {}).get(
+        'downloading_langs', ['chs.eng', 'chs', 'eng']
+    )
 
     # 射手字幕 assrt.net（中文字幕主力源；API 限频 20/min）
     assrt_api_token: str = _yaml_config.get('subtitle', {}).get('assrt_api_token', '')
-    assrt_request_delay: float = _yaml_config.get('subtitle', {}).get('assrt_request_delay', 3.0)
+    # default 4.0：assrt 服务端硬限 20 req/min。3.0s 间隔正好踩边，常被
+    # 并发的"前端手动搜字幕"/配额查询击穿。4.0s 留 33% buffer 给其它并发。
+    assrt_request_delay: float = _yaml_config.get('subtitle', {}).get('assrt_request_delay', 4.0)
 
     # 字幕格式偏好（按顺序优先；同一语言下只下载排名最高的那一种）
     # 'ass' / 'ssa' 视为同一类（ASS 是 SSA v4+），'srt' 是兜底通用格式，'sup' 是蓝光图形字幕
@@ -201,6 +218,13 @@ class Settings(BaseSettings):
     ]
     # 默认搜索附加字符串：进入搜索页面时自动拼到 query 后面（可空）
     jackett_default_keywords: str = _yaml_config.get('jackett', {}).get('default_keywords', '') or ''
+
+    # ── debug 段：开发/调试用的开关 ──
+    # show_dry_run_in_toolbar：在媒体库 / 成人库的操作按钮 confirm 弹窗里显示"测试模式"勾选
+    # 默认 False —— 生产环境用户不需要看到这个；开发时勾上方便预演影响范围
+    debug_show_dry_run_in_toolbar: bool = _yaml_config.get('debug', {}).get(
+        'show_dry_run_in_toolbar', False
+    )
 
     # qBittorrent 配置
     qbittorrent_host: str = _yaml_config.get('qbittorrent', {}).get('host', 'http://192.168.89.6')
@@ -333,7 +357,8 @@ class Settings(BaseSettings):
                 "opensubtitles_username": self.opensubtitles_username,
                 "opensubtitles_password": self.opensubtitles_password,
                 "opensubtitles_request_delay": self.opensubtitles_request_delay,
-                "preferred_langs": self.preferred_langs,
+                "required_langs": self.required_langs,         # 缺字幕判定
+                "downloading_langs": self.downloading_langs,   # 下载优先级（排序池）
                 "preferred_formats": self.preferred_subtitle_formats,
                 "assrt_api_token": self.assrt_api_token,
                 "assrt_request_delay": self.assrt_request_delay,
@@ -367,6 +392,9 @@ class Settings(BaseSettings):
                 "auto_scrape": self.adult_auto_scrape,
                 "scraper_delay": self.adult_scraper_delay,
                 "sources": self.adult_sources,
+            },
+            "debug": {
+                "show_dry_run_in_toolbar": self.debug_show_dry_run_in_toolbar,
             },
         }
 

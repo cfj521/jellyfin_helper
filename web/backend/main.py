@@ -206,6 +206,22 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # 4. 强退兜底（治"Ctrl+C 关不掉"）
+    # 大多数长任务调 update_task_progress 时会抓到 shutdown 信号自行退出，
+    # 但有些任务卡在没法响应 cancel 的同步调用里（远端 HTTP 长 timeout、ffprobe 等），
+    # uvicorn graceful shutdown 会一直等。给 15s 缓冲后强 exit，OS 直接清线程。
+    #
+    # 注意：os._exit() 不跑 atexit / 不 flush stdio，是极端但有效的"立刻死"。
+    # 跨平台一致：Linux/macOS/Windows 都不再等线程清理。
+    import threading
+    import os as _os
+    def _force_exit_watchdog():
+        import time
+        time.sleep(15)
+        logger.error("[shutdown] graceful exit 超时 15s，强制 os._exit(0)")
+        _os._exit(0)
+    threading.Thread(target=_force_exit_watchdog, daemon=True).start()
+
 
 app = FastAPI(
     title="Jellyfin Tools",

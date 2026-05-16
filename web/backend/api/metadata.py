@@ -17,7 +17,10 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.database import get_db, Task, ActorInfo, MediaItem
 from web.backend.config import settings
-from web.backend.api.tasks import create_task, update_task_progress, complete_task
+from web.backend.api.tasks import (
+    create_task, update_task_progress, complete_task,
+    cancellable_task, TaskCancelledError, mark_task_cancelled,
+)
 from web.backend.task_restart import register_resumable
 
 logger = logging.getLogger(__name__)
@@ -119,6 +122,7 @@ def scan_actors(
 
 
 @register_resumable("actor_scan", [])
+@cancellable_task
 def run_actor_scan(task_id: int):
     """执行演员扫描（后台任务）"""
     from web.backend.database import SessionLocal
@@ -245,6 +249,7 @@ def delete_cjk_named_actors(
     return {"task_id": task.id, "status": "started", "message": f"{mode}任务已启动"}
 
 
+@cancellable_task
 def run_delete_cjk_actors(task_id: int, dry_run: bool):
     """后台任务：扫 → 筛 CJK + no tmdb → 删 Jellyfin Person + 本地 DB。"""
     from web.backend.database import SessionLocal
@@ -423,6 +428,7 @@ def fix_actor_images(
     "actor_fix",
     ["scan_only", "limit", "skip_existing", "library_id", "library_ids", "skip_refresh"],
 )
+@cancellable_task
 def run_actor_fix(
     task_id: int,
     scan_only: bool,
@@ -667,6 +673,7 @@ def fix_single_actor(
     return {"task_id": task.id, "status": "started"}
 
 
+@cancellable_task
 def run_single_actor_fix(task_id: int, actor_id: int):
     """修复单个演员（TMDB 主源 + Wikidata 兜底）。HTTP 期间不持 db。"""
     from web.backend.database import SessionLocal
@@ -902,6 +909,7 @@ def scan_posters(
 
 
 @register_resumable("poster_scan", [])
+@cancellable_task
 def run_poster_scan(task_id: int):
     """扫描媒体条目并入库（后台任务）。Jellyfin HTTP 期间不持 db。"""
     from web.backend.database import SessionLocal
@@ -1231,6 +1239,7 @@ def _filter_items_by_scope(
         "library_id", "library_ids", "item_paths", "skip_refresh",
     ],
 )
+@cancellable_task
 def run_poster_fix(
     task_id: int,
     scan_only: bool,
@@ -1376,6 +1385,7 @@ def fix_single_poster(
     return {"task_id": task.id, "status": "started"}
 
 
+@cancellable_task
 def run_single_poster_fix(task_id: int, item_id: int):
     """单个条目海报修复。HTTP 期间不持 db。"""
     from web.backend.database import SessionLocal
@@ -1544,6 +1554,7 @@ def fix_episode_stills(
     "episode_still_fix",
     ["scan_only", "limit", "skip_existing", "library_id", "library_ids", "episode_ids"],
 )
+@cancellable_task
 def run_episode_still_fix(
     task_id: int,
     scan_only: bool,

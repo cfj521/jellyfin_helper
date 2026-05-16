@@ -8,9 +8,19 @@
   'chs.eng'   ← 'chs.eng' / 'chs&eng' / 'chs_eng' / 'chs-eng'
   'chs.eng'   ← '简&英' / '简体&英文' / '简英' / '简体英文'
   'chs.eng'   ← 'movie.简体.英文.srt'
-  'chs'       ← '简体' / '简' / 'GB' / 'GBK' / '.chs.'
-  'cht'       ← '繁体' / '繁' / 'BIG5' / '.cht.'
+  'chs.eng'   ← 'movie.zh-Hans.eng.srt'   ← 新落盘格式
+  'chs'       ← '简体' / '简' / 'GB' / 'GBK' / '.chs.' / '.zh-Hans.'
+  'cht'       ← '繁体' / '繁' / 'BIG5' / '.cht.' / '.zh-Hant.'
   'eng'       ← 'English' / '英文' / '英' / '.eng.' / '.en.'
+
+落盘 vs 内部编码：
+  - **内部代码** 始终是 chs/cht/eng/jpn/kor —— 配置项、preferred_langs、API
+    参数等都用这一套。
+  - **落盘文件名** 中文统一用 BCP 47：chs → zh-Hans / cht → zh-Hant，
+    Jellyfin 才能正确识别并显示成"简体中文 / 繁体中文"。其它语言 (eng/jpn/kor)
+    保持 ISO 639-2/B 三字母，Jellyfin 也认。
+  - 旧落盘的 .chs.srt / .cht.srt 仍能被回读识别为 chs / cht（向后兼容）。
+  - 写盘时用 `internal_to_filename_token()` 做映射；读盘走 `detect_lang_combo()`。
 
 设计要点：
   - 用 token 边界（前后是分隔符或字符串边界）判定，避免 'punches' 误中 'chs'、
@@ -23,18 +33,57 @@ import re
 from typing import List, Optional
 
 # 项目内部代码 → 这是其他模块的"标准代码"
-_INTERNAL_CODES = ('chs', 'cht', 'eng', 'jpn', 'kor')
+# 'zh' = 通用中文（未指定简繁）—— 在缺字幕判定里同时覆盖 chs + cht 需求
+_INTERNAL_CODES = ('chs', 'cht', 'zh', 'eng', 'jpn', 'kor')
 
 # 显式 lang code 别名 → 内部代码
+# BCP 47 (zh-Hans/zh-Hant) 是落盘 canonical，必须能被反向识别
+# 'zh' 单独存在（无 region / script）→ 通用中文 'zh'，**不再默认归 chs**
+#   - 历史代码：'zh': 'chs'（强行当简体）
+#   - 现在：'zh': 'zh'，让缺字幕判定可以"未指定简繁也算两边都命中"
 _CODE_ALIAS = {
     'chs': 'chs', 'gb': 'chs', 'gbk': 'chs', 'gb2312': 'chs', 'gb18030': 'chs',
-    'simplified': 'chs', 'sc': 'chs', 'zh': 'chs', 'zh-cn': 'chs', 'zh_cn': 'chs', 'cn': 'chs',
+    'simplified': 'chs', 'sc': 'chs',
+    'zh-cn': 'chs', 'zh_cn': 'chs', 'cn': 'chs',     # 大陆地区 → 简体（约定）
+    'zh-hans': 'chs', 'zh_hans': 'chs',              # BCP 47 显式简体
     'cht': 'cht', 'big5': 'cht', 'tc': 'cht', 'traditional': 'cht',
     'zh-tw': 'cht', 'zh_tw': 'cht', 'tw': 'cht', 'zh-hk': 'cht', 'zh_hk': 'cht', 'hk': 'cht',
+    'zh-hant': 'cht', 'zh_hant': 'cht',              # BCP 47 显式繁体
+    'zh': 'zh', 'zho': 'zh', 'chi': 'zh',            # 通用中文（未指定简繁）
+    'chinese': 'zh', 'cmn': 'zh', 'mandarin': 'zh',
     'eng': 'eng', 'en': 'eng', 'english': 'eng',
     'jpn': 'jpn', 'jap': 'jpn', 'ja': 'jpn', 'japanese': 'jpn',
     'kor': 'kor', 'ko': 'kor', 'korean': 'kor',
 }
+
+# 内部代码 → 落盘文件名 token（写盘 canonical）
+# Jellyfin 用 .NET CultureInfo 解析字幕文件名后缀；chs/cht 不在它的识别表里，
+# 用 BCP 47 才能让 jellyfin 显示成 "简体中文 / 繁体中文 / 中文"。
+# 其它语言保持原代码（eng/jpn/kor 都是 ISO 639-2/B，jellyfin 认识）。
+_INTERNAL_TO_FILENAME = {
+    'chs': 'zh-Hans',
+    'cht': 'zh-Hant',
+    'zh':  'zh',          # 通用中文：写盘也用 BCP 47 'zh'，jellyfin 显示"中文"
+    'eng': 'eng',
+    'jpn': 'jpn',
+    'kor': 'kor',
+}
+
+
+def internal_to_filename_token(code: str) -> str:
+    """
+    把内部 lang code 映射为落盘文件名用的 token。
+
+    单语：'chs' → 'zh-Hans', 'cht' → 'zh-Hant', 'eng' → 'eng', ...
+    多语（dot 复合）：'chs.eng' → 'zh-Hans.eng', 'cht.eng' → 'zh-Hant.eng'
+
+    未识别的 code 原样返回（兜底，避免误改外来代码）。
+    """
+    if not code:
+        return code
+    parts = str(code).split('.')
+    mapped = [_INTERNAL_TO_FILENAME.get(p.lower(), p) for p in parts]
+    return '.'.join(mapped)
 
 # 双字关键字（按"中文区块顺序"扫文件名，多语字幕的命名顺序通常是 简-繁-英-日-韩）
 _DOUBLE_KEYWORDS = (
@@ -126,6 +175,18 @@ def detect_lang_combo(name: str) -> Optional[str]:
     return '.'.join(found) if found else None
 
 
+def expand_zh_coverage(parts: set) -> set:
+    """
+    扩展"通用中文 zh"的覆盖语义：file 标了 'zh' 就同时算覆盖了 'chs' 和 'cht'。
+    场景：字幕只写"中文"没分简繁 / 内容嗅探嗅不出简繁 → 不该让用户既缺简又缺繁。
+
+    返回新 set，不动入参。
+    """
+    if 'zh' in parts:
+        return parts | {'chs', 'cht'}
+    return parts
+
+
 def lang_covers(file_lang: Optional[str], required_lang: str) -> bool:
     """
     判断 file_lang 是否"覆盖"了 required_lang。
@@ -136,10 +197,11 @@ def lang_covers(file_lang: Optional[str], required_lang: str) -> bool:
       - 'chs.eng' 覆盖 'chs.eng'（完全相等）✓
       - 'chs'     覆盖 'chs.eng' ✗（单语不能满足双语需求）
       - 'cht.eng' 覆盖 'chs' ✗
+      - 'zh'      覆盖 'chs' / 'cht'（通用中文，未指定简繁 → 两边都算）✓
     """
     if not file_lang or not required_lang:
         return False
-    file_parts = set(file_lang.split('.'))
+    file_parts = expand_zh_coverage(set(file_lang.split('.')))
     req_parts = set(required_lang.split('.'))
     return req_parts.issubset(file_parts)
 
@@ -167,6 +229,8 @@ def filter_missing_langs(
     for fl in file_langs or []:
         if fl:
             covered_tokens.update(fl.split('.'))
+    # 通用中文 'zh' 同时覆盖 'chs' 和 'cht'（未指定简繁也算两边都命中）
+    covered_tokens = expand_zh_coverage(covered_tokens)
     missing: List[str] = []
     for req in required_langs:
         req_tokens = set(req.split('.'))

@@ -249,14 +249,20 @@ const missingTotal = computed(() => {
   return missingVideosCount.value
 })
 
-const cards = computed(() => [
-  { label: '视频总数',  value: r.value.total_videos ?? 0, color: '#6366f1' },
-  { label: '有字幕',    value: r.value.with_subtitles ?? 0, color: '#10b981',
-    tip: '至少有一种字幕的视频（不区分语言）' },
-  { label: '缺字幕',    value: missingTotal.value, color: '#f59e0b',
-    tip: '缺所需语言（含外挂/内嵌/硬字幕标注后仍缺的视频）' },
-  { label: '扫描路径',  value: r.value.paths_scanned ?? 0, color: '#94a3b8' },
-])
+const cards = computed(() => {
+  const total = r.value.total_videos ?? 0
+  const missing = missingTotal.value
+  // 字幕完整 = 总数 - 缺字幕；与"缺字幕"互补，两卡相加 = 总数，关系直观
+  const complete = Math.max(0, total - missing)
+  return [
+    { label: '视频总数',  value: total, color: '#6366f1' },
+    { label: '字幕完整',  value: complete, color: '#10b981',
+      tip: '所需语言全部到位（required_langs 都覆盖了）' },
+    { label: '缺字幕',    value: missing, color: '#f59e0b',
+      tip: '缺所需语言（含完全没字幕的 + 有字幕但缺特定语言的）' },
+    { label: '扫描路径',  value: r.value.paths_scanned ?? 0, color: '#94a3b8' },
+  ]
+})
 
 const expandedDirs = ref([])
 watch(visibleDirs, (newDirs) => {

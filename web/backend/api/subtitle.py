@@ -17,11 +17,15 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.database import get_db, Task, ScanReport, VideoAnnotation
 from web.backend.config import settings
-from web.backend.api.tasks import create_task, update_task_progress, complete_task
+from web.backend.api.tasks import (
+    create_task, update_task_progress, complete_task,
+    cancellable_task, TaskCancelledError, mark_task_cancelled,
+)
 from web.backend.task_restart import register_resumable
 from tools.subtitle_manager.scanner import SubtitleScanner
 from tools.subtitle_manager.renamer import SubtitleRenamer
 from tools.subtitle_downloader.main import SubtitleDownloader
+from common.lang_utils import internal_to_filename_token
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ class ScanRequest(BaseModel):
     library_ids: Optional[List[str]] = None  # 多库
     item_paths: Optional[List[str]] = None   # 选中具体条目（视频文件路径）
     recursive: bool = True
-    expected_langs: Optional[List[str]] = None  # None → 用 settings.preferred_langs
+    required_langs: Optional[List[str]] = None  # 扫描判定缺否的语言列表；None → settings.required_langs
 
 
 class RenameRequest(BaseModel):
@@ -58,15 +62,21 @@ class DownloadRequest(BaseModel):
 
 
 class AutoFixRequest(BaseModel):
-    """一条龙：扫描 → 下载缺失字幕 → 重命名对齐 → （可选）刷新 Jellyfin。"""
+    """一条龙：（可选复用最近）扫描 → 下载缺失字幕 → （可选）刷新 Jellyfin。
+
+    重命名对齐已**默认关闭**：下载器现在用 BCP 47 落盘命名（zh-Hans / zh-Hant），
+    刚下完的字幕一定带正确 lang 后缀；目录里"用户手放的裸名字幕"由独立的
+    「字幕文件名对齐」按钮处理。"""
     path: Optional[str] = None
     library_id: Optional[str] = None
     library_ids: Optional[List[str]] = None
     item_paths: Optional[List[str]] = None
     recursive: bool = True
-    expected_langs: Optional[List[str]] = None  # None → 用 settings.preferred_langs
+    required_langs: Optional[List[str]] = None       # 扫描判定缺否；None → settings.required_langs
+    downloading_langs: Optional[List[str]] = None    # 下载优先级（排序池）；None → settings.downloading_langs
     dry_run: bool = True            # True=预览，不下载也不改名
-    rename: bool = True             # 下载完后是否对齐裸名字幕
+    rename: bool = False            # 顺手跑一遍对齐；默认关，下载已带正确命名
+    reuse_recent_scan: bool = True  # 默认复用最近 10 min 内的 subtitle_scan 任务结果，跳过 Step 1 重扫
     refresh_jellyfin: bool = True
     limit: Optional[int] = None     # 调试用
 
@@ -230,12 +240,12 @@ def scan_subtitles(
         item_paths=request.item_paths,
     )
     recursive = recursive_override if recursive_override is not None else request.recursive
-    expected_langs = request.expected_langs or settings.preferred_langs
+    required_langs = request.required_langs or settings.required_langs
 
     library_ids_list = list(scope_lib_ids or [])
     logger.info(
         f"/subtitle/scan: scope={label!r} paths={len(paths)} recursive={recursive} "
-        f"expected_langs={expected_langs} library_ids={library_ids_list}"
+        f"required_langs={required_langs} library_ids={library_ids_list}"
     )
     task = create_task(
         db,
@@ -244,7 +254,7 @@ def scan_subtitles(
         params={
             "paths": paths,
             "recursive": recursive,
-            "expected_langs": expected_langs,
+            "required_langs": required_langs,
             "library_ids": library_ids_list,
         },
     )
@@ -256,7 +266,7 @@ def scan_subtitles(
         task.id,
         paths,
         recursive,
-        expected_langs,
+        required_langs,
         library_ids_list,
     )
 
@@ -267,7 +277,7 @@ def scan_subtitles(
     )
 
 
-def _dir_to_dict(d, format_episode, annotations_map: dict, expected_langs: List[str]):
+def _dir_to_dict(d, format_episode, annotations_map: dict, required_langs: List[str]):
     """
     ScanResult.directories 的单个 DirectoryInfo → 可 JSON 序列化的 dict。
 
@@ -325,12 +335,13 @@ def _load_annotations_map(db) -> dict:
     return out
 
 
-@register_resumable("subtitle_scan", ["paths", "recursive", "expected_langs", "library_ids"])
+@register_resumable("subtitle_scan", ["paths", "recursive", "required_langs", "library_ids"])
+@cancellable_task
 def run_subtitle_scan(
     task_id: int,
     paths: List[str],
     recursive: bool,
-    expected_langs: List[str],
+    required_langs: List[str],
     library_ids: Optional[List[str]] = None,
 ):
     """
@@ -353,10 +364,10 @@ def run_subtitle_scan(
     t0 = time.time()
     logger.info(
         f"run_subtitle_scan 开始: task={task_id} paths={len(paths)} "
-        f"recursive={recursive} expected_langs={expected_langs}"
+        f"recursive={recursive} required_langs={required_langs}"
     )
     try:
-        scanner = SubtitleScanner(preferred_langs=expected_langs)
+        scanner = SubtitleScanner(required_langs=required_langs)
         # 短事务读取硬字幕标注
         with SessionLocal() as db:
             annotations_map = _load_annotations_map(db)
@@ -397,7 +408,7 @@ def run_subtitle_scan(
                 # 当前进度快照
                 current_dirs = list(all_dirs)
                 for d in partial_result.directories:
-                    current_dirs.append(_dir_to_dict(d, format_episode, annotations_map, expected_langs))
+                    current_dirs.append(_dir_to_dict(d, format_episode, annotations_map, required_langs))
                 _progress(
                     _pct,
                     f"[{_idx+1}/{len(paths)}] 已扫 {dirs_done} 个目录 · 最近: {last_dir_name}",
@@ -418,7 +429,7 @@ def run_subtitle_scan(
             total_without += result.total_without_sub
             total_subs += result.total_subtitles
             for d in result.directories:
-                all_dirs.append(_dir_to_dict(d, format_episode, annotations_map, expected_langs))
+                all_dirs.append(_dir_to_dict(d, format_episode, annotations_map, required_langs))
 
         # 应用了硬字幕标注的最终统计：从 all_dirs 里聚合
         total_without_required = _aggregate_without_required(all_dirs)
@@ -527,6 +538,7 @@ def rename_subtitles(
     )
 
 
+@cancellable_task
 def run_subtitle_rename(
     task_id: int,
     paths: List[str],
@@ -718,6 +730,7 @@ def download_subtitles(
 
 
 @register_resumable("subtitle_download", ["report_id", "languages", "dry_run", "limit"])
+@cancellable_task
 def run_subtitle_download(
     task_id: int,
     report_id: int,
@@ -825,14 +838,16 @@ def auto_fix_subtitles(
         item_paths=request.item_paths,
     )
     recursive = recursive_override if recursive_override is not None else request.recursive
-    expected_langs = request.expected_langs or settings.preferred_langs
+    # 扫描走 required_langs（判定缺否），下载走 downloading_langs（优先级排序池）
+    required_langs = request.required_langs or settings.required_langs
+    downloading_langs = request.downloading_langs or settings.downloading_langs
 
     mode = "预览" if request.dry_run else "执行"
     logger.info(
         f"/subtitle/auto-fix: scope={label!r} paths={len(paths)} "
-        f"dry_run={request.dry_run} rename={request.rename} "
-        f"expected_langs={expected_langs} refresh_jellyfin={request.refresh_jellyfin} "
-        f"limit={request.limit}"
+        f"dry_run={request.dry_run} rename={request.rename} reuse_recent_scan={request.reuse_recent_scan} "
+        f"required_langs={required_langs} downloading_langs={downloading_langs} "
+        f"refresh_jellyfin={request.refresh_jellyfin} limit={request.limit}"
     )
     task = create_task(db, "subtitle_auto_fix", f"{mode}自动修复: {label}（{len(paths)} 路径）")
 
@@ -841,11 +856,13 @@ def auto_fix_subtitles(
         task.id,
         paths,
         recursive,
-        expected_langs,
+        required_langs,
+        downloading_langs,
         request.dry_run,
         request.rename,
         refresh_ids if request.refresh_jellyfin else [],
         request.limit,
+        request.reuse_recent_scan,
     )
 
     return TaskStartResponse(
@@ -855,15 +872,112 @@ def auto_fix_subtitles(
     )
 
 
+def _load_recent_scan_report(
+    paths: List[str],
+    required_langs: List[str],
+    max_age_minutes: int = 10,
+) -> Optional[Dict]:
+    """尝试复用最近一次 subtitle_scan 任务的结果，跳过 Step 1 重扫。
+
+    复用条件（全部满足才返回）：
+      - 任务 status=completed，且 completed_at 在 max_age_minutes 内
+      - 任务 params.required_langs 跟当前请求**完全一致**（顺序不计）
+      - 任务 params.paths 是当前 paths 的**超集**（任务范围更大也行，按 paths 过滤目录）
+
+    返回结构跟 inline 自己 Step 1 算出的 report_data 一致，可直接用于 Step 2 下载。
+    返回 None 表示没有可复用的扫描，调用方走重扫。
+    """
+    if not paths:
+        return None
+    try:
+        from web.backend.database import SessionLocal, Task as _Task
+        from datetime import datetime as _dt, timedelta as _td
+        cutoff = _dt.utcnow() - _td(minutes=max_age_minutes)
+        cur_paths_set = {_norm_path(p) for p in paths if p}
+        if not cur_paths_set:
+            return None
+        cur_langs_set = set(required_langs or [])
+        with SessionLocal() as db:
+            tasks = (
+                db.query(_Task)
+                .filter(
+                    _Task.task_type == 'subtitle_scan',
+                    _Task.status == 'completed',
+                    _Task.completed_at >= cutoff,
+                )
+                .order_by(_Task.completed_at.desc())
+                .limit(20)        # 最多看最近 20 个，性能保护
+                .all()
+            )
+        for t in tasks:
+            try:
+                params = json.loads(t.params) if isinstance(t.params, str) else (t.params or {})
+            except Exception:
+                continue
+            task_langs = set(params.get('required_langs') or [])
+            if task_langs != cur_langs_set:
+                continue
+            task_paths = {_norm_path(p) for p in (params.get('paths') or []) if p}
+            if not cur_paths_set.issubset(task_paths):
+                continue
+            try:
+                result = json.loads(t.result) if isinstance(t.result, str) else (t.result or {})
+            except Exception:
+                continue
+            dirs = result.get('directories') or []
+            if not dirs:
+                continue
+            # 过滤目录：只保留 path 落在当前 paths 范围内的
+            kept = []
+            for d in dirs:
+                dpath = _norm_path(d.get('path') or '')
+                if not dpath:
+                    continue
+                if any(dpath == cp or dpath.startswith(cp + '/') for cp in cur_paths_set):
+                    kept.append(d)
+            if not kept:
+                continue
+            tv = sum(d.get('total_videos', 0) for d in kept)
+            tw = sum(d.get('with_subtitles', 0) for d in kept)
+            two = sum(d.get('without_subtitles', 0) for d in kept)
+            tsubs = sum(len((v.get('subtitles') or [])) for d in kept for v in d.get('videos') or [])
+            logger.info(
+                f"auto-fix 复用最近扫描结果 task=#{t.id} "
+                f"completed_at={t.completed_at} dirs={len(kept)} videos={tv}"
+            )
+            return {
+                'scan_paths': paths,
+                'scan_time': result.get('scan_time') or '',
+                'total_directories': len(kept),
+                'total_videos': tv,
+                'with_subtitles': tw,
+                'without_subtitles': two,
+                'total_subtitles': tsubs,
+                'directories': kept,
+                '_reused_from_task': t.id,
+            }
+        return None
+    except Exception as e:
+        logger.warning(f"_load_recent_scan_report 失败，走重扫兜底: {e}")
+        return None
+
+
+def _norm_path(p: str) -> str:
+    """统一斜杠 + lower（仅供本模块路径比对用）。"""
+    return str(p or '').replace('\\', '/').rstrip('/').lower()
+
+
 def run_subtitle_auto_fix_inline(
     paths: List[str],
     recursive: bool = False,
-    expected_langs: Optional[List[str]] = None,
+    required_langs: Optional[List[str]] = None,      # 缺字幕判定（None → settings.required_langs）
+    downloading_langs: Optional[List[str]] = None,   # 下载优先级（None → settings.downloading_langs）
     dry_run: bool = True,
-    do_rename: bool = True,
+    do_rename: bool = False,                         # 下载已用 BCP 47 命名，align 已冗余；想跑得显式 True
     refresh_library_ids: Optional[List[str]] = None,
     limit: Optional[int] = None,
     progress_cb: Optional[callable] = None,
+    reuse_recent_scan: bool = True,                  # 默认尝试复用最近 10 min 内的 subtitle_scan 任务结果
 ) -> Dict:
     """
     同步执行字幕 auto-fix 全流程，返回结果 dict —— **不写 task / 不写 ScanReport**。
@@ -894,15 +1008,23 @@ def run_subtitle_auto_fix_inline(
     from tools.subtitle_manager.scanner import format_episode
     from web.backend.api.medialibraries import trigger_refresh
 
-    if expected_langs is None:
-        expected_langs = settings.preferred_langs
+    if required_langs is None:
+        required_langs = settings.required_langs
+    if downloading_langs is None:
+        downloading_langs = settings.downloading_langs
     if refresh_library_ids is None:
         refresh_library_ids = []
 
-    def _emit(pct, msg):
+    def _emit(pct, msg, patch=None):
+        """触发进度回调。patch 可选，传则把 dict 合并写入 task.result，
+        让任务详情页在运行中也能看到累积的 details / scan_details，无需等结束。"""
         if progress_cb:
             try:
-                progress_cb(pct, msg)
+                # 兼容老 callback：先试 3 参，失败退回 2 参
+                try:
+                    progress_cb(pct, msg, patch)
+                except TypeError:
+                    progress_cb(pct, msg)
             except Exception:
                 logger.exception("progress_cb 抛错，已忽略")
 
@@ -939,68 +1061,130 @@ def run_subtitle_auto_fix_inline(
     if not scan_dirs:
         scan_dirs = paths  # 兜底（即使路径不存在）
 
-    # ============ Step 1: 扫描 ============
-    _emit(2, "开始扫描...")
-    scanner = SubtitleScanner(preferred_langs=expected_langs)
+    # ============ Step 1: 扫描（先尝试复用最近 10 min 的 subtitle_scan 结果） ============
+    report_data: Optional[Dict] = None
+    if reuse_recent_scan and file_whitelist is None:
+        # 注意：有 file_whitelist 时不复用，因为复用的 dirs 数据可能含白名单外的视频，
+        # 二次过滤实现起来要重做一遍 _norm + path 过滤，简单起见直接走重扫
+        report_data = _load_recent_scan_report(scan_dirs, required_langs)
 
-    all_dirs = []
-    total_videos = 0
-    total_with = 0
-    total_without = 0
-    total_subs = 0
-    last_scan_time = ""
+    # scan_details：扁平化的逐视频列表，给详情页"扫描详情"tab 用。
+    # 每条 = { video_path, video_name, episode, subtitles[], embedded_langs[], missing_langs[] }
+    scan_details: List[Dict] = []
 
-    for idx, p in enumerate(scan_dirs):
-        pct = 2 + int(28 * (idx + 1) / max(len(scan_dirs), 1))  # 扫描占 2%-30%
-        _emit(pct, f"扫描 [{idx+1}/{len(scan_dirs)}] {p}")
-        result = scanner.scan(Path(p), recursive=recursive)
-        last_scan_time = result.scan_time
-
-        for d in result.directories:
-            videos_filtered = []
-            for v in d.videos:
-                # 文件白名单过滤：只保留 dispatched_files 指定的视频
-                if file_whitelist is not None and _norm(str(v.path)) not in file_whitelist:
-                    continue
-                videos_filtered.append({
-                    "path": str(v.path),
-                    "name": v.name,
-                    "episode": format_episode(v.episode),
-                    "subtitles": v.subtitles,
-                    "embedded_langs": v.embedded_langs,
-                    "missing_langs": v.missing_langs,
+    def _videos_to_details(dirs):
+        out = []
+        for d in dirs:
+            for v in d.get('videos') or []:
+                out.append({
+                    'video_path': v.get('path'),
+                    'video_name': v.get('name'),
+                    'episode':    v.get('episode'),
+                    'dir_path':   d.get('path'),
+                    'subtitles':  v.get('subtitles') or [],     # [{lang, name, ext, langs}, ...]
+                    'embedded_langs': v.get('embedded_langs') or [],
+                    'missing_langs':  v.get('missing_langs') or [],
                 })
-            if not videos_filtered:
-                continue
+        return out
 
-            with_sub = sum(1 for vd in videos_filtered if vd['subtitles'] or vd['embedded_langs'])
-            without_sub = len(videos_filtered) - with_sub
+    if report_data is not None:
+        reused_id = report_data.get('_reused_from_task')
+        _emit(30, f"复用扫描结果（任务 #{reused_id}），跳过扫描")
+        total_videos = report_data['total_videos']
+        total_with = report_data['with_subtitles']
+        total_without = report_data['without_subtitles']
+        total_subs = report_data['total_subtitles']
+        last_scan_time = report_data.get('scan_time') or ''
+        scan_details = _videos_to_details(report_data.get('directories') or [])
+        # 复用情况下扫描详情可以一次性 emit（数据已现成，不是真扫）
+        _emit(30, f"复用扫描结果（任务 #{reused_id}），共 {total_videos} 视频", patch={
+            'scan': {
+                'total_videos': total_videos,
+                'with_subtitles': total_with,
+                'without_subtitles': total_without,
+                'total_subtitles': total_subs,
+            },
+            'scan_details': scan_details,
+            'reused_from_task': reused_id,
+        })
+    else:
+        _emit(2, "开始扫描...")
+        scanner = SubtitleScanner(required_langs=required_langs)
 
-            total_videos += len(videos_filtered)
-            total_with += with_sub
-            total_without += without_sub
-            total_subs += sum(len(vd['subtitles']) for vd in videos_filtered)
+        all_dirs = []
+        total_videos = 0
+        total_with = 0
+        total_without = 0
+        total_subs = 0
+        last_scan_time = ""
 
-            all_dirs.append({
-                "path": str(d.path),
-                "name": d.name,
-                "media_type": d.media_type,
-                "total_videos": len(videos_filtered),
-                "with_subtitles": with_sub,
-                "without_subtitles": without_sub,
-                "videos": videos_filtered,
+        # 增量 emit：每扫完一个根路径 emit 一次累积的 scan_details
+        for idx, p in enumerate(scan_dirs):
+            pct = 2 + int(28 * (idx + 1) / max(len(scan_dirs), 1))  # 扫描占 2%-30%
+            _emit(pct, f"扫描 [{idx+1}/{len(scan_dirs)}] {p}")
+            result = scanner.scan(Path(p), recursive=recursive)
+            last_scan_time = result.scan_time
+
+            new_dirs_added = []
+            for d in result.directories:
+                videos_filtered = []
+                for v in d.videos:
+                    # 文件白名单过滤：只保留 dispatched_files 指定的视频
+                    if file_whitelist is not None and _norm(str(v.path)) not in file_whitelist:
+                        continue
+                    videos_filtered.append({
+                        "path": str(v.path),
+                        "name": v.name,
+                        "episode": format_episode(v.episode),
+                        "subtitles": v.subtitles,
+                        "embedded_langs": v.embedded_langs,
+                        "missing_langs": v.missing_langs,
+                    })
+                if not videos_filtered:
+                    continue
+
+                with_sub = sum(1 for vd in videos_filtered if vd['subtitles'] or vd['embedded_langs'])
+                without_sub = len(videos_filtered) - with_sub
+
+                total_videos += len(videos_filtered)
+                total_with += with_sub
+                total_without += without_sub
+                total_subs += sum(len(vd['subtitles']) for vd in videos_filtered)
+
+                d_dict = {
+                    "path": str(d.path),
+                    "name": d.name,
+                    "media_type": d.media_type,
+                    "total_videos": len(videos_filtered),
+                    "with_subtitles": with_sub,
+                    "without_subtitles": without_sub,
+                    "videos": videos_filtered,
+                }
+                all_dirs.append(d_dict)
+                new_dirs_added.append(d_dict)
+
+            # 增量 emit：每根路径扫完 emit 一次累积的 scan_details + scan 汇总
+            scan_details.extend(_videos_to_details(new_dirs_added))
+            _emit(pct, f"扫描进度 [{idx+1}/{len(scan_dirs)}] 已发现 {total_videos} 视频", patch={
+                'scan': {
+                    'total_videos': total_videos,
+                    'with_subtitles': total_with,
+                    'without_subtitles': total_without,
+                    'total_subtitles': total_subs,
+                },
+                'scan_details': list(scan_details),
             })
 
-    report_data = {
-        "scan_paths": paths,
-        "scan_time": last_scan_time,
-        "total_directories": len(all_dirs),
-        "total_videos": total_videos,
-        "with_subtitles": total_with,
-        "without_subtitles": total_without,
-        "total_subtitles": total_subs,
-        "directories": all_dirs,
-    }
+        report_data = {
+            "scan_paths": paths,
+            "scan_time": last_scan_time,
+            "total_directories": len(all_dirs),
+            "total_videos": total_videos,
+            "with_subtitles": total_with,
+            "without_subtitles": total_without,
+            "total_subtitles": total_subs,
+            "directories": all_dirs,
+        }
 
     # ============ Step 2: 下载缺失字幕（按 per-video missing_langs）============
     _emit(32, "开始下载缺失字幕...")
@@ -1010,7 +1194,11 @@ def run_subtitle_auto_fix_inline(
     init_error: Optional[str] = None
 
     try:
-        downloader = SubtitleDownloader(settings.to_dict())
+        # 把 inline 收到的 downloading_langs 覆盖到 config 里，让 SubtitleDownloader 用最新值
+        # （API 调用可能传了自定义优先级，不一定等于 settings.downloading_langs）
+        _cfg = settings.to_dict()
+        _cfg.setdefault('subtitle', {})['downloading_langs'] = downloading_langs
+        downloader = SubtitleDownloader(_cfg)
         targets = downloader.collect_targets_from_report(report_data)
         if limit:
             targets = targets[:limit]
@@ -1026,10 +1214,30 @@ def run_subtitle_auto_fix_inline(
             trimmed_report = dict(report_data)
             trimmed_report['directories'] = fake_dirs
 
+            # 增量累积：downloader 每完成一条就 callback；我们就地累积 + 每 N 条 emit
+            running_details: List[Dict] = []
+            EMIT_EVERY = 3   # 每 3 条 emit 一次，避免 DB 写入过频；最后一条也强制 emit
+
+            def _stat(running):
+                """从累积 details 实时算 download 汇总数。"""
+                t = len(running)
+                success = sum(1 for d in running if d.get('status') in ('success', 'exists'))
+                skipped = sum(1 for d in running if d.get('status') in ('not_found', 'skipped'))
+                failed  = t - success - skipped
+                return {'total': t, 'success': success, 'failed': failed, 'skipped': skipped}
+
             def _dl_progress(idx, total, item):
                 pct = 32 + int(48 * idx / max(total, 1))  # 下载占 32%-80%
                 msg = f"下载 [{idx}/{total}] {item.get('video', '')} - {item.get('status', '')}"
-                _emit(pct, msg)
+                running_details.append(item)
+                # 每 N 条或最后一条 → emit 累积 details 到 task.result
+                if idx == total or idx % EMIT_EVERY == 0:
+                    _emit(pct, msg, patch={
+                        'download_details': list(running_details),
+                        'download': _stat(running_details),
+                    })
+                else:
+                    _emit(pct, msg)
 
             download_details = downloader.auto_fix_from_report(
                 trimmed_report,
@@ -1132,39 +1340,45 @@ def run_subtitle_auto_fix_inline(
         },
         "dry_run": dry_run,
         "jellyfin_refreshed": refreshed,
+        "scan_details": scan_details,          # 给详情页"扫描详情" tab 用（逐视频）
         "download_details": download_details,
         "rename_details": rename_details,
         "report_data": report_data,
     }
 
 
+@cancellable_task
 def run_subtitle_auto_fix(
     task_id: int,
     paths: List[str],
     recursive: bool,
-    expected_langs: List[str],
+    required_langs: List[str],         # 判定缺否
+    downloading_langs: List[str],      # 下载优先级
     dry_run: bool,
     do_rename: bool,
     refresh_library_ids: List[str],
     limit: Optional[int],
+    reuse_recent_scan: bool = True,
 ):
     """auto-fix 后台任务（task wrapper）：调 inline + 写 ScanReport + complete_task。"""
     from web.backend.database import SessionLocal
 
-    def _progress(pct, msg):
+    def _progress(pct, msg, patch=None):
         with SessionLocal() as db:
-            update_task_progress(db, task_id, pct, msg)
+            update_task_progress(db, task_id, pct, msg, result_patch=patch)
 
     try:
         result = run_subtitle_auto_fix_inline(
             paths=paths,
             recursive=recursive,
-            expected_langs=expected_langs,
+            required_langs=required_langs,
+            downloading_langs=downloading_langs,
             dry_run=dry_run,
             do_rename=do_rename,
             refresh_library_ids=refresh_library_ids,
             limit=limit,
             progress_cb=_progress,
+            reuse_recent_scan=reuse_recent_scan,
         )
 
         if result.get("error") and not dry_run:
@@ -1193,8 +1407,11 @@ def run_subtitle_auto_fix(
                 "rename": result["rename"],
                 "dry_run": result["dry_run"],
                 "jellyfin_refreshed": result["jellyfin_refreshed"],
-                "download_details": result["download_details"][:200],
-                "rename_details": result["rename_details"][:200],
+                # 写全量明细（前端分页展示）。一次任务规模 ~300 视频 / ~250 下载条目，
+                # JSON ~150KB 在 Postgres 不是问题；过去 [:200] 截断造成详情看不全已不必要。
+                "scan_details": result.get("scan_details") or [],
+                "download_details": result["download_details"],
+                "rename_details": result["rename_details"],
             })
 
     except Exception as e:
@@ -1223,7 +1440,7 @@ class AssrtSearchRequest(BaseModel):
 class AssrtDownloadRequest(BaseModel):
     sub_id: int                        # 字幕 ID
     video_path: str                    # 目标视频绝对路径（落盘用）
-    preferred_langs: Optional[List[str]] = None  # None → settings.preferred_langs
+    downloading_langs: Optional[List[str]] = None  # None → settings.downloading_langs
     overwrite: bool = False
 
 
@@ -1277,7 +1494,7 @@ class MultiSearchRequest(BaseModel):
     year: Optional[int] = None
     sources: Optional[List[str]] = None  # 默认全部启用源；可指定 ['assrt', 'opensubtitles']
     cnt: int = 15
-    preferred_langs: Optional[List[str]] = None
+    downloading_langs: Optional[List[str]] = None
 
 
 @router.post("/multi-search")
@@ -1294,7 +1511,7 @@ def multi_search(request: MultiSearchRequest):
     logger.info(
         f"/subtitle/multi-search: query={query!r} imdb_id={request.imdb_id!r} "
         f"tmdb_id={request.tmdb_id!r} year={request.year!r} "
-        f"sources={request.sources!r} cnt={request.cnt} langs={request.preferred_langs!r}"
+        f"sources={request.sources!r} cnt={request.cnt} langs={request.downloading_langs!r}"
     )
     if len(query) < 3:
         raise HTTPException(status_code=400, detail="query 长度需 ≥ 3 字符")
@@ -1317,7 +1534,7 @@ def multi_search(request: MultiSearchRequest):
         if not enabled:
             enabled = {'assrt', 'opensubtitles'}
 
-    preferred = request.preferred_langs or settings.preferred_langs or ['chs', 'eng']
+    preferred = request.downloading_langs or settings.downloading_langs or ['chs', 'eng']
 
     # 构造 video info（用于跨源 Bazarr 风格打分）
     # release tag 从 video_path stem 解析（resolution / source / release_group / SxxExx）；
@@ -1367,9 +1584,10 @@ def multi_search(request: MultiSearchRequest):
                     or flat.get('title')
                     or ''
                 )
-                # assrt 的 lang_codes 可能是 ['chs','eng']（双语）；打分时取首个，
-                # lang_match 已在 score_candidate 内按 preferred 序处理
-                cand_lang = (flat.get('lang_codes') or [None])[0] or ''
+                # assrt 的 lang_codes 可能是 ['chs','eng']（双语）；拼成 dot-separated 复合 code
+                # ('chs.eng')，让 lang_match_score 能把双语包识别为 preferred=['chs.eng',...] 的首位命中。
+                # bug fix：之前只取 [0] 会把双语包当单语 chs 处理，bilingual 偏好的语义直接丢失。
+                cand_lang = '.'.join(flat.get('lang_codes') or []) or ''
                 cand = SubtitleCandidate(
                     source='assrt',
                     raw=flat,
@@ -1499,8 +1717,13 @@ def multi_search(request: MultiSearchRequest):
         out_item['score'] = cand.score
         out_item['score_breakdown'] = cand.score_breakdown
         out_item['score_pct'] = min(100, round(cand.score / SCORE_NORMALIZE_BASE * 100))
+        out_item['lang_rank'] = cand.lang_rank   # 给前端展示用（也可作 UI 排序兜底）
 
+    # 分层排序：先按语言 tier（preferred 序列）严格分层 ——
+    # 偏好里靠前的语言（如 'chs.eng'）的候选**永远**在靠后的（如 'eng'）之前；
+    # 同 tier 内才用 Bazarr score 比 release 信息；最后 download_count 兜底
     raw_pairs.sort(key=lambda p: (
+        p[1].lang_rank,
         -p[0]['score'],
         -int(p[0].get('download_count') or 0),
     ))
@@ -1534,7 +1757,7 @@ class MultiDownloadRequest(BaseModel):
     source: str           # 'assrt' / 'opensubtitles'
     sub_id: str           # 各源各自的 ID（assrt 是 sub.id；opensubtitles 是 file_id）
     video_path: str
-    preferred_langs: Optional[List[str]] = None
+    downloading_langs: Optional[List[str]] = None
     overwrite: bool = False
 
 
@@ -1544,7 +1767,7 @@ def multi_download(request: MultiDownloadRequest):
     logger.info(
         f"/subtitle/multi-download: source={request.source!r} sub_id={request.sub_id!r} "
         f"video_path={request.video_path!r} overwrite={request.overwrite} "
-        f"preferred_langs={request.preferred_langs!r}"
+        f"downloading_langs={request.downloading_langs!r}"
     )
     if request.source == 'assrt':
         # 路径翻译：前端传 jellyfin 视角路径，转成本机
@@ -1554,7 +1777,7 @@ def multi_download(request: MultiDownloadRequest):
         sub = AssrtDownloadRequest(
             sub_id=int(request.sub_id),
             video_path=local_path,
-            preferred_langs=request.preferred_langs,
+            downloading_langs=request.downloading_langs,
             overwrite=request.overwrite,
         )
         return assrt_download(sub)
@@ -1576,10 +1799,11 @@ def multi_download(request: MultiDownloadRequest):
         except ValueError:
             raise HTTPException(status_code=400, detail=f"opensubtitles sub_id 应为整数: {request.sub_id}")
         # 选语言：用文件信息推断 / preferred 第一个
-        preferred = request.preferred_langs or settings.preferred_langs or ['chs']
+        preferred = request.downloading_langs or settings.downloading_langs or ['chs']
         lang = preferred[0] if preferred else 'chs'
         # 输出名 <stem>.<lang>.srt（OpenSubtitles 多数字幕是 .srt）
-        target = video_path.parent / f"{video_path.stem}.{lang}.srt"
+        # 落盘 token：chs → zh-Hans / cht → zh-Hant，让 Jellyfin 正确识别
+        target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(lang)}.srt"
         if target.exists() and not request.overwrite:
             return {
                 'status': 'exists',
@@ -1644,7 +1868,7 @@ def assrt_download(request: AssrtDownloadRequest):
     if not video_path.parent.exists():
         raise HTTPException(status_code=400, detail=f"视频所在目录不存在: {video_path.parent}")
 
-    preferred = request.preferred_langs or settings.preferred_langs
+    preferred = request.downloading_langs or settings.downloading_langs
     preferred_formats = settings.preferred_subtitle_formats
 
     client = _get_assrt_client()
@@ -1675,7 +1899,7 @@ def assrt_download(request: AssrtDownloadRequest):
     # 3a. 直接是字幕文件 → 直接落地
     if ext.lower() in _assrt.SUB_EXTENSIONS:
         lang = _assrt.guess_lang_from_filename(archive_filename) or (preferred[0] if preferred else 'chs')
-        target = video_path.parent / f"{video_path.stem}.{lang}{ext.lower()}"
+        target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(lang)}{ext.lower()}"
         if target.exists() and not request.overwrite:
             return {
                 'status': 'exists',
@@ -1722,7 +1946,7 @@ def assrt_download(request: AssrtDownloadRequest):
         raise HTTPException(status_code=502, detail="压缩包内未发现字幕文件")
     best_name, best_data, best_lang = best
     sub_ext = Path(best_name).suffix.lower() or '.srt'
-    target = video_path.parent / f"{video_path.stem}.{best_lang}{sub_ext}"
+    target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(best_lang)}{sub_ext}"
     if target.exists() and not request.overwrite:
         return {
             'status': 'exists',
@@ -1752,7 +1976,7 @@ def assrt_download(request: AssrtDownloadRequest):
         if lang2_tokens.issubset(best_tokens):
             continue
         ext2 = Path(fname).suffix.lower() or '.srt'
-        target2 = video_path.parent / f"{video_path.stem}.{lang2}{ext2}"
+        target2 = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(lang2)}{ext2}"
         if target2.exists() and not request.overwrite:
             continue
         was_existing2 = target2.exists()

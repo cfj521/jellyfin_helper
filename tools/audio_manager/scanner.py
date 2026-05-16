@@ -215,6 +215,23 @@ class AudioTrackScanner:
         if cur.get('lang_code') in self.preferred_langs:
             return result
 
+        # ---- 例外：以下两种"当前默认音轨"不自动切换 ----
+        #
+        # 1. 当前默认已经是汉语（chs / cht / zh 任一变体）：
+        #    已经是中文了，没必要再切。user 通常想要的"chs > eng"在这种情况下已满足；
+        #    如果是 cht 想切 chs（或 zh 想切 chs）这种细颗粒切换，也意义不大且容易切错。
+        # 2. 无法识别语言（und / 空 / 没被 normalize_lang 认出的）：
+        #    metadata 缺失时贸然切换风险大（容易把唯一可听的轨道切到嘿玩意儿上）
+        cur_lang = cur.get('lang_code')
+        if cur_lang in ('chs', 'cht', 'zh'):
+            result['skipped'] = True
+            result['skip_reason'] = '当前默认是汉语 (保留原设置)'
+            return result
+        if not cur_lang or cur_lang in ('und', 'undefined'):
+            result['skipped'] = True
+            result['skip_reason'] = '当前默认音轨语言未识别 (保留原设置)'
+            return result
+
         # 否则在其它轨找期望语言
         if not result['modifiable']:
             # 不可改的文件即便能找到目标也不建议修改

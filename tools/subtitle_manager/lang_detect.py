@@ -215,15 +215,21 @@ def _has_latin_letter(s: str) -> bool:
 
 def _classify_chinese_simp_trad(samples: List[str]) -> str:
     """
-    在已确认是中文的前提下区分简体/繁体。
-    取所有样本拼起来做字符集对比；命中传统字符多则 cht，否则 chs。
+    在已确认是中文的前提下区分简体/繁体：
+      - 传统字符多于简体字符 → 'cht'
+      - 有简体独占字符 → 'chs'
+      - 两边都没命中独占字符（只含共用汉字）→ 'zh' 通用中文（未指定简繁）
+        这种情况在 check_missing_langs 里同时覆盖 chs 和 cht 需求，
+        避免让用户既缺简又缺繁。
     """
     text = ''.join(samples)
     simp_hits = sum(1 for ch in text if ch in SIMPLIFIED_ONLY)
     trad_hits = sum(1 for ch in text if ch in TRADITIONAL_ONLY)
     if trad_hits > simp_hits and trad_hits > 0:
         return 'cht'
-    return 'chs'
+    if simp_hits > 0:
+        return 'chs'
+    return 'zh'
 
 
 def _detect_one_cue_lang(text: str) -> Optional[str]:
