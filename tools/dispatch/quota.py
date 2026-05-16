@@ -104,7 +104,7 @@ def _resolve_quota_limit() -> Optional[int]:
 def get_disk_usage() -> Dict:
     """
     返回下载盘用量统计 —— 全部按真实磁盘空间（shutil.disk_usage）。
-      - used: 盘真实已用（含 jellyfin-tools 种子 + 盘上其他东西）
+      - used: 盘真实已用（含 jellyfin-helper 种子 + 盘上其他东西）
       - limit: 盘真实容量
       - dispatch_used: qB 种子 size 求和（"我们占了多少"，仅展示）
       - torrents_count: qB 上的种子数（仅展示）

@@ -143,21 +143,25 @@ class TorrentOrganizer:
             'junk_count': N,
             'bytes_copied': total,
             'skipped_files': [(src, dst, reason)],   # 因 duplicate policy 跳过的
+            'target_dir_was_new': bool,              # mkdir 前 target_dir 是否不存在
         }
         """
         src_root = Path(src_root)
         target_dir = Path(target_dir)
+        target_dir_was_new = not target_dir.exists()
         target_dir.mkdir(parents=True, exist_ok=True)
 
         videos, subs, junk = _classify_files(src_root)
         logger.info(
             f"organize {src_root.name} → {target_dir} "
-            f"(videos={len(videos)}, subs={len(subs)}, junk={len(junk)})"
+            f"(videos={len(videos)}, subs={len(subs)}, junk={len(junk)} 已识别但不动 src)"
         )
-
-        # 1. 处理 junk：移到 trash_dir（保留同结构，方便审计 / 误删恢复）
-        for j in junk:
-            self._move_to_trash(src_root, j)
+        # junk（sample / RARBG.txt 等）不参与 copy，但也**不从 src 移走** ——
+        # src 是 qB 的做种目录，物理移走会让种子文件清单缺失 → 校验报丢失文件 → 红种。
+        # junk 留在原地跟着种子做种，生命周期由 qB 删种时一起带走。
+        if junk:
+            for j in junk:
+                logger.debug(f"  junk (跳过 copy，保留在 src): {j.name}")
 
         # 2. 整理视频 + 字幕
         dispatched = []
@@ -234,6 +238,7 @@ class TorrentOrganizer:
             'junk_count': len(junk),
             'bytes_copied': bytes_copied,
             'skipped_files': skipped_files,
+            'target_dir_was_new': target_dir_was_new,
         }
 
     # ---- helpers ----

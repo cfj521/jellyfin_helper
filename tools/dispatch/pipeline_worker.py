@@ -396,8 +396,10 @@ class DispatchPipeline:
                 bytes_copied = org_result['bytes_copied']
                 files_count = len(dispatched_files)
                 skipped_files = org_result.get('skipped_files') or []
+                target_dir_was_new = bool(org_result.get('target_dir_was_new'))
             else:
                 # 兜底：简单递归复制
+                target_dir_was_new = not Path(target).exists()
                 copy_result = copy_tree_with_progress(
                     src_path, Path(target), progress_cb=cb,
                 )
@@ -473,6 +475,8 @@ class DispatchPipeline:
         row['dispatched_files'] = list(dispatched_files)
         row['copy_bytes_done'] = bytes_copied
         row['copy_bytes_total'] = bytes_copied
+        # target_dir 是否本轮新建（_step_jellyfin_send 据此决定是否要全库 scan_changes 兜底）
+        row['target_dir_was_new'] = target_dir_was_new
         return True
 
     def _step_organize(self, row: Dict) -> bool:
@@ -491,17 +495,29 @@ class DispatchPipeline:
         通知 Jellyfin "这些路径有变动"。phase 切到 jellyfin_recognizing 后释放 worker，
         是否真扫到由 jellyfin-watcher 轮询确认。
 
-        策略：**首次入库语义，双管齐下**：
-          ① /Library/Media/Updated 精准路径通知（毫秒触发，但服务端 60s 防抖；且对"全新
-             Series 文件夹"等顶层结构不一定能从零建出 Series→Season→Episode 层级）
-          ② /Items/{lib_id}/Refresh 整库 scan_changes 兜底（确保新顶层结构能被识别）
+        策略：**按 media_type + target_dir 是否新建决定**（dispatch 自知，无需问 jellyfin）：
+          ① /Library/Media/Updated 精准路径通知 —— 总会调（最快、最精准）
+          ② /Items/{lib_id}/Refresh 整库 scan_changes 兜底 —— 仅在
+             **media_type ∈ {tv, anime}** 且 **target_dir 是本轮新建** 时才调。
 
-        两个一起调，单独失败不阻断，watcher 来确认结果。
+        为什么只有剧集要兜底：jellyfin 对全新剧集首次入库要从零建
+        Series→Season→Episode 三层 item，单文件 media_updated 通知建不出完整层级；
+        电影 / 番号是单层 item，精准通知即可识别为新 Movie，调全库 scan_changes
+        反而是浪费（大库一次几千项）。
+
+        target_dir_was_new 由 _step_copy → organizer.organize() 通过 row 传过来；
+        缺省/未知按 True 处理（仅 tv/anime 时才会真触发 refresh，电影场景影响为零）。
+
+        单独失败不阻断，watcher 来确认结果。
         """
         h = row['torrent_hash']
         t0 = time.time()
         lib_id = row.get('target_library_id')
+        media_type = row.get('media_type') or ''
         dispatched_files = row.get('dispatched_files') or []
+        # 未知一律按"新建"处理；但仅 tv/anime 才会真触发 refresh
+        target_dir_was_new = row.get('target_dir_was_new', True)
+        needs_series_bootstrap = media_type in ('tv', 'anime') and target_dir_was_new
 
         if not lib_id and not dispatched_files:
             _set_phase(h, PHASE_JELLYFIN_RECOGNIZE_DONE, STATUS_SKIPPED,
@@ -534,11 +550,14 @@ class DispatchPipeline:
                 if jf.notify_media_updated(paths_for_jf, update_type='Created'):
                     notified_via.append(f'media_updated×{len(paths_for_jf)}(精确路径)')
 
-            # ② 整库 scan_changes —— 兜底首次入库场景（新 Series 顶层结构生成）
-            #    跟 ① 同时调，jellyfin 内部会合并防抖
-            if lib_id:
+            # ② 整库 scan_changes —— 仅在 tv/anime 首次入库时才兜底
+            #    电影 / 番号是单层 item，精准通知就够，调全库 scan_changes 是浪费
+            if lib_id and needs_series_bootstrap:
                 if jf.refresh_library(lib_id, mode='scan_changes'):
-                    notified_via.append(f'refresh_library({lib_id[:8]}…全库)')
+                    notified_via.append(f'refresh_library({lib_id[:8]}…全库,新剧首次入库)')
+            elif lib_id:
+                reason = '目录已存在' if not target_dir_was_new else f'{media_type or "未知"}无需全库兜底'
+                notified_via.append(f'refresh_library(跳过,{reason})')
 
         except Exception as e:
             logger.warning(f"jellyfin 通知失败（不阻断，watcher 接管）: {e}")

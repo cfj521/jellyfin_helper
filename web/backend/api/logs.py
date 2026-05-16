@@ -1,12 +1,12 @@
 """
 日志 API：在 Web UI 里看日志 + 调日志级别。
 
-后端日志文件由 main.py 配置的 RotatingFileHandler 写到 data/logs/backend.log。
+后端日志文件由 main.py 配置的 RotatingFileHandler 写到 logs/jellyfin-helper.log。
 本模块对外暴露：
   GET  /api/logs/tail?lines=500&level=INFO   读最后 N 行（可选按 level 过滤）
   GET  /api/logs/level                       当前 root logger 级别
   POST /api/logs/level   body={level: ...}   动态改 level（不写盘，重启失效）
-  GET  /api/logs/files                       列出 backend.log + rotate 备份
+  GET  /api/logs/files                       列出 jellyfin-helper.log + rotate 备份
 """
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ router = APIRouter()
 
 # 与 main.py 的 _LOG_FILE 保持一致；模块 import 时一次性算出
 _ROOT_DIR = Path(__file__).parent.parent.parent.parent
-_LOG_DIR = _ROOT_DIR / 'data' / 'logs'
-_LOG_FILE = _LOG_DIR / 'backend.log'
+_LOG_DIR = _ROOT_DIR / 'logs'
+_LOG_FILE = _LOG_DIR / 'jellyfin-helper.log'
 
 # 日志行级别匹配：'2026-05-08 21:06:54,667 [INFO] ...'
 _LEVEL_RE = re.compile(r'\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]')
@@ -41,7 +41,7 @@ class LogLevelRequest(BaseModel):
 @router.get("/logs/tail")
 def tail_logs(lines: int = 500, level: Optional[str] = None):
     """
-    读 backend.log 末尾 N 行；可按 level 过滤（>= 该 level 的才返回）。
+    读 jellyfin-helper.log 末尾 N 行；可按 level 过滤（>= 该 level 的才返回）。
     lines 上限 5000 防止前端加载过大。
     """
     lines = max(10, min(lines, 5000))
@@ -131,11 +131,11 @@ def set_log_level(req: LogLevelRequest):
 
 @router.get("/logs/files")
 def list_log_files():
-    """列出 backend.log 主文件 + rotate 备份（backend.log.1 / .2 ...）"""
+    """列出 jellyfin-helper.log 主文件 + rotate 备份（jellyfin-helper.log.1 / .2 ...）"""
     if not _LOG_DIR.exists():
         return {"dir": str(_LOG_DIR), "files": []}
     out = []
-    for p in sorted(_LOG_DIR.glob('backend.log*')):
+    for p in sorted(_LOG_DIR.glob('jellyfin-helper.log*')):
         try:
             stat = p.stat()
             out.append({

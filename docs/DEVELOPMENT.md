@@ -1,385 +1,86 @@
-# Jellyfin Tools 开发文档
+# 开发指南
 
-## 1. 项目概述
-
-### 1.1 项目简介
-Jellyfin Tools 是一套用于管理和优化 Jellyfin 媒体服务器的 Web 应用，帮助用户解决元数据缺失、字幕管理、媒体库维护、内容刮削等常见问题。
-
-### 1.2 目标用户
-- Jellyfin 自建服务器用户
-- 有大量影视内容需要管理的用户
-- 需要批量处理媒体文件的用户
-
-### 1.3 技术栈
-| 层级 | 技术选型 |
-|------|----------|
-| 后端 | Python 3.11+, FastAPI |
-| 前端 | Vue.js 3, Element Plus, Vite |
-| 数据库 | PostgreSQL 12+ |
-
-### 1.4 服务配置
-
-| 服务 | 地址 | 说明 |
-|------|------|------|
-| PostgreSQL | 127.0.0.1:5432 | 数据库 |
-| Jellyfin | 127.0.0.1:8096 | 媒体服务器 |
-| Jackett | 127.0.0.1:9117 | 种子搜索 |
-| qBittorrent | 127.0.0.1 | 下载管理 |
-| 本应用部署 | 127.0.0.1:8000 | Web 应用 |
+面向想加功能 / 调 bug / 看代码的开发者。如果你是要"跑起来"的用户，看根目录 [README.md](../README.md) 就够了。
 
 ---
 
-## 2. 功能模块
+## 1. 架构速览
 
-### 2.1 功能总览
+### 1.1 进程模型
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           Jellyfin Tools                                 │
-├─────────────┬─────────────┬─────────────┬──────────────┬────────────────┤
-│   元数据    │    字幕     │   媒体库    │   内容推荐   │   成人内容     │
-├─────────────┼─────────────┼─────────────┼──────────────┼────────────────┤
-│ 演员照片修复│ 扫描报告    │ 重复检测    │ 豆瓣/TMDB    │ 番号识别       │
-│ 海报下载    │ 自动重命名  │ 规范化命名  │ Jackett搜索  │ JavBus/JavDB   │
-│ NFO修复     │ 自动下载    │ 存储分析    │ qBit下载     │ NFO生成        │
-└─────────────┴─────────────┴─────────────┴──────────────┴────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│   Vue SPA (前端, vite dev / vite build + nginx 等)              │
+│   - 11 个主页面 (medialibraries / downloadpipeline / settings   │
+│     / tasks / discover / resourcesearch / ...)                  │
+│   - Composition API, Element Plus                              │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ HTTP + SSE
+┌──────────────────────────▼──────────────────────────────────────┐
+│   FastAPI 后端 (uvicorn 单进程多线程)                            │
+│   - 18 个 API router (按功能切片)                                │
+│   - SSE 端点: /api/tasks/stream, /api/tasks/{id}/stream         │
+│   - 后台:                                                       │
+│       * task 系统 (TaskRunner + cancellable_task 装饰器)         │
+│       * dispatch 流水线 (analyzer / pipeline_worker /           │
+│                         post_process_worker / adopt /           │
+│                         sweeper / jellyfin_watcher)             │
+│       * actress_builder (女优库后台构建)                         │
+│       * jellyfin WS 监听 (item 变更实时同步)                     │
+│       * ratings 异步 worker                                      │
+│   - lifespan shutdown + 15s force-exit watchdog                 │
+└─────┬──────────┬──────────┬──────────┬──────────┬───────────────┘
+      │          │          │          │          │
+   ┌──▼──┐   ┌──▼──┐    ┌──▼──┐    ┌──▼──┐    ┌──▼──┐
+   │ PG  │   │ JF  │    │ qB  │    │Jack │    │ ... │
+   │ DB  │   │ REST│    │ Web │    │ ett │    │     │
+   └─────┘   └─────┘    └─────┘    └─────┘    └─────┘
 ```
 
-### 2.2 功能详细说明
+### 1.2 关键设计决策
 
-#### 2.2.1 元数据管理
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 推送方式 | **SSE** 而非 WebSocket | 单向推送够用，proxy / shutdown 更好处理 |
+| 后台任务 | **进程内线程 + DB 状态** | 不引入 celery / redis；DB 作为消息总线 |
+| 任务取消 | **`update_task_progress` 拦截 + `TaskCancelledError`** | 长任务每次 emit 进度都检查 cancelled / shutdown，自动抛出退出 |
+| dispatch 阶段机 | **DB phase + status 列驱动** | 每个 worker 按 phase claim，崩溃恢复幂等 |
+| 跨进程限流 | **类级 `_global_lock` + `_global_last_call`** | assrt 等 API 必须进程级单例（实例化多次会失去节流） |
+| 反爬 | **`curl_cffi`** TLS impersonation | 过 CloudFlare 弱反爬（TLS fingerprint），但过不了 Turnstile JS challenge |
+| schema 变更 | **开发期直接清表** | 不维护迁移脚本；只在 schema 稳定后才考虑 alembic |
 
-| 功能 | 状态 | 优先级 | 说明 |
-|------|------|--------|------|
-| 演员照片修复 | ✅ 已完成 | P0 | 从 TMDB 获取演员图片上传到 Jellyfin |
-| 海报/背景图下载 | 待开发 | P1 | 批量下载缺失的电影/剧集海报 |
-| NFO元数据修复 | 待开发 | P2 | 修复/生成 NFO 文件 |
+### 1.3 关键代码入口
 
-#### 2.2.2 字幕管理
-
-| 功能 | 状态 | 优先级 | 说明 |
-|------|------|--------|------|
-| 字幕扫描报告 | ✅ 已完成 | P0 | 扫描媒体目录，生成HTML报告 |
-| 字幕重命名 | ✅ 已完成 | P0 | 自动匹配视频文件重命名字幕 |
-| 字幕下载 | ✅ 已完成 | P0 | 从 OpenSubtitles 下载字幕 |
-
-#### 2.2.3 媒体库管理
-
-| 功能 | 状态 | 优先级 | 说明 |
-|------|------|--------|------|
-| 重复文件检测 | 基础完成 | P1 | 基于文件名/大小检测重复 |
-| 文件规范化命名 | 待开发 | P1 | 按 Jellyfin 推荐格式重命名 |
-| 存储空间分析 | 基础完成 | P2 | 可视化存储占用 |
-
-#### 2.2.4 内容推荐与下载
-
-| 功能 | 状态 | 优先级 | 说明 |
-|------|------|--------|------|
-| 热门推荐聚合 | 待开发 | P1 | 从豆瓣/TMDB获取热门内容 |
-| Jackett搜索 | 待开发 | P1 | 搜索种子资源 |
-| qBittorrent下载 | 待开发 | P1 | 自动添加下载任务 |
-
-#### 2.2.5 成人内容管理
-
-| 功能 | 状态 | 优先级 | 说明 |
-|------|------|--------|------|
-| 番号识别 | 待开发 | P1 | 从文件名提取番号 |
-| 元数据刮削 | 待开发 | P1 | 从JavBus/JavDB获取信息 |
-| NFO生成 | 待开发 | P1 | 生成Jellyfin兼容的NFO |
+| 入口 | 位置 | 备注 |
+|---|---|---|
+| 后端启动 | `web/backend/run.py` | uvicorn 启动器；端口决议 |
+| 应用入口 | `web/backend/main.py` | lifespan / 信号 / 中间件 / router 注册 |
+| 任务装饰器 | `web/backend/api/tasks.py: cancellable_task` | 所有长任务包一层 |
+| dispatch 主循环 | `tools/dispatch/pipeline_worker.py` | 状态机推进 |
+| 字幕核心 | `web/backend/api/subtitle.py: run_subtitle_auto_fix_inline` | 所有调用方共享（dispatch / MediaToolbar / maintenance.run_all）|
+| 配置单例 | `web/backend/config.py: settings` | pydantic settings + yaml load |
+| 数据库模型 | `web/backend/database.py` | 全部 SQLAlchemy declarative |
+| 性能诊断 | `web/backend/diagnostics.py` | TimingMiddleware / DB 池监控 / 静音轮询白名单 |
 
 ---
 
-## 3. 系统架构
-
-### 3.1 整体架构
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                         用户层                                  │
-│  ┌──────────────┐                       ┌──────────────┐       │
-│  │   Web UI     │                       │   API 调用   │       │
-│  └──────┬───────┘                       └──────┬───────┘       │
-└─────────┼─────────────────────────────────────┼────────────────┘
-          │                                     │
-┌─────────▼─────────────────────────────────────▼────────────────┐
-│                       API 网关层                                │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    FastAPI Server                        │   │
-│  │   /api/subtitle/*  /api/media/*  /api/recommend/*       │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└────────────────────────────┬───────────────────────────────────┘
-                             │
-┌────────────────────────────▼───────────────────────────────────┐
-│                        业务逻辑层                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ SubtitleSvc  │  │  MediaSvc    │  │ DownloadSvc  │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-└────────────────────────────┬───────────────────────────────────┘
-                             │
-┌────────────────────────────▼───────────────────────────────────┐
-│                        数据访问层                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ Jellyfin API │  │   TMDB API   │  │ Jackett API  │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │  PostgreSQL  │  │  qBittorrent │  │  文件系统    │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-└────────────────────────────────────────────────────────────────┘
-```
-
-### 3.2 目录结构
-
-```
-jellyfin-tools/
-├── config.yaml                 # 主配置文件
-├── requirements.txt            # Python 依赖（后端 + tools 模块）
-├── docs/                       # 文档
-│   ├── DEVELOPMENT.md
-│   └── IMPLEMENTATION_PLAN.md
-├── common/                     # 共用模块
-│   ├── __init__.py
-│   ├── config.py
-│   ├── jellyfin_client.py
-│   ├── tmdb_client.py
-│   ├── jackett_client.py
-│   └── qbittorrent_client.py
-├── tools/                      # 业务模块（被 Web 后端 import）
-│   ├── actor_fix/
-│   ├── subtitle_manager/
-│   ├── subtitle_downloader/
-│   ├── audio_manager/
-│   └── adult_manager/
-└── web/                        # Web 应用
-    ├── README.md
-    ├── backend/                # FastAPI 后端
-    │   ├── main.py
-    │   ├── run.py
-    │   ├── config.py
-    │   ├── database.py
-    │   ├── api/
-    │   │   ├── subtitle.py
-    │   │   ├── metadata.py
-    │   │   ├── media.py
-    │   │   ├── audio.py
-    │   │   ├── discover.py
-    │   │   ├── adult.py
-    │   │   ├── stats.py
-    │   │   ├── tasks.py
-    │   │   └── config_api.py
-    │   ├── services/
-    │   └── scrapers/
-    └── frontend/               # Vue.js 前端
-        ├── package.json
-        ├── vite.config.js
-        └── src/
-            ├── views/
-            ├── components/
-            ├── api/
-            └── router/
-```
-
----
-
-## 4. 数据库设计
-
-### 4.1 PostgreSQL 连接信息
-
-- **Host**: 127.0.0.1
-- **Port**: 5432
-- **Database**: jellyfin_tools
-- **User**: jellyfin_tools
-- **Password**: JfTools@2026
-
-### 4.2 表结构
-
-```sql
--- 后台任务
-CREATE TABLE tasks (
-    id SERIAL PRIMARY KEY,
-    task_type VARCHAR(50) NOT NULL,
-    status VARCHAR(20) DEFAULT 'pending',
-    progress FLOAT DEFAULT 0.0,
-    message TEXT,
-    result TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP
-);
-
--- 扫描报告
-CREATE TABLE scan_reports (
-    id SERIAL PRIMARY KEY,
-    report_type VARCHAR(50) NOT NULL,
-    scan_path VARCHAR(500) NOT NULL,
-    total_items INTEGER DEFAULT 0,
-    issues_count INTEGER DEFAULT 0,
-    report_data TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- 演员信息缓存
-CREATE TABLE actors (
-    id SERIAL PRIMARY KEY,
-    jellyfin_id VARCHAR(100) UNIQUE NOT NULL,
-    name VARCHAR(200) NOT NULL,
-    tmdb_id INTEGER,
-    has_image BOOLEAN DEFAULT FALSE,
-    image_url VARCHAR(500),
-    last_checked TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- 媒体项目
-CREATE TABLE media_items (
-    id SERIAL PRIMARY KEY,
-    jellyfin_id VARCHAR(100) UNIQUE,
-    title VARCHAR(500) NOT NULL,
-    media_type VARCHAR(20),
-    file_path VARCHAR(1000),
-    file_size BIGINT,
-    resolution VARCHAR(20),
-    codec VARCHAR(50),
-    has_subtitle BOOLEAN DEFAULT FALSE,
-    subtitle_langs VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- 下载任务
-CREATE TABLE download_tasks (
-    id SERIAL PRIMARY KEY,
-    title VARCHAR(500) NOT NULL,
-    source VARCHAR(50),
-    magnet_link TEXT,
-    torrent_hash VARCHAR(100),
-    status VARCHAR(20) DEFAULT 'pending',
-    progress FLOAT DEFAULT 0.0,
-    download_path VARCHAR(1000),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP
-);
-
--- 成人内容
-CREATE TABLE adult_items (
-    id SERIAL PRIMARY KEY,
-    code VARCHAR(50) UNIQUE NOT NULL,
-    title VARCHAR(500),
-    release_date VARCHAR(20),
-    studio VARCHAR(200),
-    director VARCHAR(200),
-    actors TEXT,
-    tags TEXT,
-    cover_url VARCHAR(500),
-    poster_path VARCHAR(500),
-    nfo_path VARCHAR(500),
-    file_path VARCHAR(1000),
-    rating FLOAT,
-    source VARCHAR(50),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
----
-
-## 5. API 设计
-
-### 5.1 字幕管理 API
-
-```
-POST /api/subtitle/scan      # 扫描字幕
-POST /api/subtitle/rename    # 重命名字幕
-GET  /api/subtitle/reports   # 获取报告列表
-GET  /api/subtitle/reports/{id}  # 获取报告详情
-```
-
-### 5.2 元数据管理 API
-
-```
-GET  /api/metadata/actors           # 获取演员列表
-POST /api/metadata/actors/scan      # 扫描演员
-POST /api/metadata/actors/fix       # 批量修复演员图片
-POST /api/metadata/actors/{id}/fix  # 修复单个演员
-```
-
-### 5.3 媒体库 API
-
-```
-GET  /api/media/browse          # 浏览目录
-POST /api/media/scan            # 扫描媒体
-GET  /api/media/duplicates      # 检测重复
-GET  /api/media/storage         # 存储分析
-```
-
-### 5.4 任务管理 API
-
-```
-GET    /api/tasks               # 获取任务列表
-GET    /api/tasks/{id}          # 获取任务详情
-POST   /api/tasks/{id}/cancel   # 取消任务
-DELETE /api/tasks/{id}          # 删除任务
-```
-
-### 5.5 统计 API
-
-```
-GET /api/stats/overview         # 总览统计
-GET /api/stats/tasks/history    # 任务历史
-GET /api/stats/actors/stats     # 演员统计
-```
-
----
-
-## 6. 开发计划
-
-### Phase 1: 基础框架 ✅ 已完成
-- [x] FastAPI 后端框架
-- [x] Vue.js 前端框架
-- [x] PostgreSQL 数据库
-
-### Phase 2: 字幕管理 Web化 (待完善)
-- [x] 字幕扫描 API + 页面 (基础)
-- [x] 字幕重命名 API + 页面 (基础)
-- [ ] 字幕下载 API + 页面
-- [ ] WebSocket 实时更新
-
-### Phase 3: 元数据管理 (待完善)
-- [x] 演员照片修复 API + 页面 (基础)
-- [ ] 海报下载功能
-- [ ] NFO 修复功能
-
-### Phase 4: 媒体库管理 (待完善)
-- [x] 文件浏览
-- [x] 重复检测 (基础)
-- [x] 存储分析 (基础)
-- [ ] 文件规范化命名
-
-### Phase 5: 内容推荐与下载 (待开发)
-- [ ] 豆瓣/TMDB 热门数据
-- [ ] Jackett API 集成
-- [ ] qBittorrent API 集成
-
-### Phase 6: 成人内容管理 (待开发)
-- [ ] 番号识别
-- [ ] JavBus/JavDB 刮削
-- [ ] NFO 生成
-
----
-
-## 7. 开发环境
+## 2. 开发环境
 
 ### Windows
 
 ```powershell
-# 后端
-cd D:\colex\codes\projects\jellyfin-tools
-conda activate env_jf
+# 用 conda 隔离（推荐）
+conda create -n env_jellyfin_helper python=3.12
+conda activate env_jellyfin_helper
+
+cd D:\path\to\jellyfin-helper
 pip install -r requirements.txt
+
+# 后端（热重载）
 $env:BACKEND_RELOAD='1'; python -m web.backend.run
 
-# 前端 (新终端)
-cd D:\colex\codes\projects\jellyfin-tools\web\frontend
+# 前端（新终端）
+cd web\frontend
 npm install
 npm run dev
 ```
@@ -387,83 +88,185 @@ npm run dev
 ### Linux / macOS
 
 ```bash
-# 后端
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
 BACKEND_RELOAD=1 python -m web.backend.run
 
-# 前端 (新终端)
-cd web/frontend
-npm install
-npm run dev
+# 前端
+cd web/frontend && npm install && npm run dev
 ```
 
-### 访问地址
-- 前端: http://localhost:5173
-- 后端 API: http://localhost:8000/docs
+### 访问
 
-端口可在 `config.yaml` 的 `server` 段调整，或通过 `BACKEND_PORT` / `FRONTEND_PORT` 环境变量临时覆盖。
+- 前端：http://localhost:5173
+- API Swagger：http://localhost:8000/docs
+
+### 常用环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `BACKEND_PORT` | 临时覆盖后端端口 |
+| `FRONTEND_PORT` | 临时覆盖前端端口 |
+| `BACKEND_RELOAD=1` | 启用 uvicorn `--reload` 热重载 |
+
+> ⚠️ `BACKEND_RELOAD=1` 在跑长任务时会假阻塞前端（reload 会断 SSE）。如果调试长任务，**关掉热重载**。
 
 ---
 
-## 8. 配置说明
+## 3. 数据库
 
-### config.yaml
+### 3.1 业务库 (PostgreSQL)
 
-```yaml
-# 数据库配置 (PostgreSQL)
-database:
-  host: "127.0.0.1"
-  port: 5432
-  name: "jellyfin_tools"
-  user: "jellyfin_tools"
-  password: "JfTools@2026"
+启动时自动建表（`web/backend/database.py: init_db`），不写迁移脚本。开发阶段改 schema 直接清表重扫。
 
-# Jellyfin 配置
-jellyfin:
-  host: "http://127.0.0.1:8096"
-  api_key: "your_api_key"
+主要表（节选）：
 
-# TMDB 配置
-tmdb:
-  api_key: "your_api_key"
+| 表 | 用途 |
+|---|---|
+| `tasks` | 后台任务（含 result JSON、status、progress、cancel 标志） |
+| `scan_reports` | 字幕 / 元数据扫描结果归档（10 分钟内可被 auto-fix 复用） |
+| `actors` | 演员缓存（jellyfin id → tmdb id + image） |
+| `media_items` | jellyfin item 长缓存（带 path / 字幕语言 / 时长 / 分辨率等） |
+| `media_metadata` | 媒体元数据实体表（评分 / 海报 / 演员等多源合并） |
+| `download_dispatch_map` | dispatch 流水线 phase 状态机的主表 |
+| `download_quota` | 配额 / 节流 |
+| `adult_items` | 番号元数据 |
+| `adult_actresses` | 女优档案（多源 chain：javdb + minnano_av） |
+| `ratings` | MDBList + 豆瓣评分缓存 |
+| `video_annotations` | 用户手工标注（如硬字幕语言） |
+| `llm_classify_cache` | LLM 识别结果缓存 |
 
-# 字幕设置
-subtitle:
-  preferred_langs: ["chs", "chs.eng", "eng"]
-  opensubtitles_api_key: ""
+完整 schema 看 [web/backend/database.py](../web/backend/database.py)。
 
-# Jackett 配置
-jackett:
-  host: "http://127.0.0.1:9117"
-  api_key: "***REMOVED***"
+### 3.2 Jellyfin SQLite 直读（可选）
 
-# qBittorrent 配置
-qbittorrent:
-  host: "http://127.0.0.1"
-  username: "admin"
-  password: "your_password"
-  download_path: "/downloads"
+`common/jellyfin_db.py` 实现了 jellyfin 10.9+ `BaseItems` 主表的只读访问，用于 path → item 反查加速（实测 4ms vs REST 1500ms）。
 
-# 成人内容配置
-adult:
-  enabled: false
-  media_path: ""
-  scraper_delay: 1.0
+- 开关：`config.yaml: jellyfin.db_path`，留空走 REST
+- 安全：`?mode=ro&nolock=1&immutable=1`，跨 SMB 也能读
+- Fallback：schema 不兼容 / 权限不通 / SQL 失败 → 自动禁用 + 退到 REST，业务无感知
+- 永远只读，**绝不可写**
+
+---
+
+## 4. 添加新功能
+
+### 4.1 新 API router
+
+```python
+# web/backend/api/foo.py
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get("/something")
+def get_something():
+    return {"ok": True}
+```
+
+然后在 `web/backend/main.py` 注册：
+```python
+from web.backend.api import foo
+app.include_router(foo.router, prefix="/api/foo", tags=["foo"])
+```
+
+### 4.2 长任务
+
+走 `tasks.py` 的 task wrapper 模式：
+
+```python
+from web.backend.api.tasks import cancellable_task, update_task_progress
+
+@cancellable_task
+def run_my_task(task_id: int, ...):
+    for i, item in enumerate(items):
+        # update_task_progress 内部会检查 cancelled / shutdown，
+        # 触发 TaskCancelledError，被装饰器自动 catch + 标 cancelled
+        update_task_progress(db, task_id, pct=int(i/len(items)*100),
+                             msg=f"处理 {item}")
+        do_work(item)
+    complete_task(db, task_id, result={"done": True})
+```
+
+### 4.3 前端调 API
+
+`web/frontend/src/api/index.js` 已配置全局 axios 实例：
+
+```javascript
+import { discoverApi } from '@/api'
+
+const r = await discoverApi.someMethod({ foo: 'bar' })
+```
+
+**注意 list query 参数**：axios 1.x 全局已配 `paramsSerializer: { indexes: null }`，所以 `{ ids: ['a', 'b'] }` 会序列化为 `?ids=a&ids=b`，FastAPI 的 `Query(List[str])` 能正常接收。**不要回退到默认 serializer**（会变成 `?ids[]=a&ids[]=b`，FastAPI 收不到）。
+
+### 4.4 新增第三方服务客户端
+
+按 `common/*_client.py` 风格放进 `common/`，对外暴露一个类，构造函数接 base_url + key。`config.py` 加对应字段，`config.yaml.example` 同步更新。
+
+---
+
+## 5. 调试技巧
+
+### 5.1 性能问题先加日志
+
+诊断慢请求看 `[diag] HTTP SLOW ...` 日志（`web/backend/diagnostics.py` 自动打 >500ms 的请求）。
+
+DB 连接持有过久（>500ms）也会 warning 并打调用栈。
+
+### 5.2 静音高频轮询日志
+
+`diagnostics.py: _SILENT_POLL_PATHS` 维护一份白名单，命中的端点 INFO 日志被静音，但 SLOW WARNING 仍打。新增高频轮询接口时把路径加进去。
+
+### 5.3 任务失败排查
+
+每条 task 有 `result` JSON 列，运行期会增量更新。出错时 result 含 `error` 字段。前端任务详情页右上角"原始数据"按钮可看完整 result。
+
+### 5.4 dispatch 流水线卡住
+
+看 `download_dispatch_map.phase + phase_status` 列。常见阻塞 phase：
+- `analyzing` 卡住 → 看 analyzer 日志，多半是 identify 走 LLM 超时
+- `copying` 卡住 → 看 copier 日志（大文件 + 跨网络盘很慢正常）
+- `needs_review` → 前端会弹审核 modal，等用户决策
+- `jellyfin_recognizing` → 看 jellyfin_watcher 日志，是不是 jellyfin 真的没扫到
+
+### 5.5 字幕下载结果迷茫
+
+`run_subtitle_auto_fix_inline` 末尾会打 per-video 决策日志：
+
+```
+auto-fix 扫描汇总: videos=N 已有字幕=X 完全无字幕=Y 缺所需语言=Z required=[chs,eng]
+  ✓ XXX.mp4  内嵌=[eng,chs,...] 外挂=[] → 已覆盖 [chs,eng]，跳过下载
+  ↓ YYY.mp4  内嵌=[eng] 外挂=[] → 缺 [chs]，启动下载
 ```
 
 ---
 
-## 9. 附录
+## 6. 代码风格
 
-### 9.1 外部 API 参考
-- [Jellyfin API](https://api.jellyfin.org/)
-- [TMDB API](https://developers.themoviedb.org/3)
-- [OpenSubtitles API](https://opensubtitles.stoplight.io/)
-- [Jackett API](https://github.com/Jackett/Jackett)
-- [qBittorrent WebUI API](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API)
+- Python: 3.12 语法，type hint 鼓励但不强制；模块顶部 docstring 说明"这个文件干啥的"
+- 注释写"为什么"不写"是什么"；hidden constraint / 历史踩坑必须留注释
+- 异常：**业务层不裸 catch Exception**，分类型 catch 或显式说理由
+- DB session 短事务：`with SessionLocal() as db:` 包，**不持久跨 HTTP**
+- 不写 backward-compat 兜底（开发期 schema 变更直接清表）
 
-### 9.2 相关工具
-- [Sonarr](https://sonarr.tv/) - 电视剧自动化
-- [Radarr](https://radarr.video/) - 电影自动化
-- [Bazarr](https://www.bazarr.media/) - 字幕自动化
-- [Jackett](https://github.com/Jackett/Jackett) - 种子索引器
+---
+
+## 7. 历史与归档
+
+设计阶段的 PRD / 决策报告在 [docs/archive/](archive/)：
+
+- `2026-05-09-download-pipeline-plan.md` — dispatch 流水线 PRD（已实现）
+- `2026-05-11-dispatch-partial-duplicate.md` — duplicate_policy 8 场景决策表
+- `2026-05-11-ratings-system-review.md` — 评分系统 review
+- `2026-05-15-media-metadata-store.md` — 媒体元数据实体表 PRD（已实现）
+
+阅读时注意时间戳，部分细节可能跟当前实现有出入。
+
+---
+
+## 8. 相关项目参考
+
+- [Sonarr](https://sonarr.tv/) / [Radarr](https://radarr.video/) / [Bazarr](https://www.bazarr.media/) — 主流自动化方案
+- [Jellyfin API 文档](https://api.jellyfin.org/) — REST API 参考
+- [TMDB API](https://developers.themoviedb.org/3) / [OpenSubtitles API](https://opensubtitles.stoplight.io/) — 主要外部服务文档

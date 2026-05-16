@@ -95,6 +95,18 @@
                 {{ apiKeyCheckResult.message }}
               </div>
             </el-form-item>
+            <el-form-item label="数据库路径">
+              <el-input
+                v-model="form.jellyfin.db_path"
+                placeholder="留空走 REST；填了走 SQLite 直读"
+              />
+              <div class="form-hint">
+                可选，仅用于 <code>lookup_jellyfin_item</code>（path → item 反查）加速；失败自动 fallback REST。
+                Linux 默认 <code>/var/lib/jellyfin/data/jellyfin.db</code>，
+                后端 user 需加入 jellyfin 组：
+                <code>sudo usermod -a -G jellyfin &lt;user&gt;</code> 后重启后端。
+              </div>
+            </el-form-item>
             <el-form-item label="库信息缓存(天)">
               <el-input-number v-model="form.cache.library_days" :min="1" :max="90" controls-position="right" />
               <span class="form-hint" style="margin-left: 8px">
@@ -368,7 +380,7 @@
               </div>
             </el-form-item>
             <el-form-item label="User-Agent">
-              <el-input v-model="form.wikidata.user_agent" placeholder="如 JellyfinTools/1.0 (your@email.com)" />
+              <el-input v-model="form.wikidata.user_agent" placeholder="如 JellyfinHelper/1.0 (your@email.com)" />
               <div class="form-hint">
                 Wikidata 强制要求带联系邮箱的 UA，否则会被 429。改完邮箱保存即可
               </div>
@@ -1412,7 +1424,7 @@ const DISPATCH_DEFAULT_FILE = {
 
 const blank = () => ({
   server: { backend_port: 8099, frontend_port: 5173 },
-  jellyfin: { host: '', api_key: '' },
+  jellyfin: { host: '', api_key: '', db_path: '' },
   tmdb: { api_key: '', request_delay: 30, language: 'zh-CN' },
   subtitle: {
     opensubtitles_api_key: '',
@@ -1523,7 +1535,7 @@ const blank = () => ({
   },
   wikidata: {
     enabled: true,
-    user_agent: 'JellyfinTools/1.0',
+    user_agent: 'JellyfinHelper/1.0',
     language_order: ['zh', 'en'],
     request_delay: 1.0,
   },

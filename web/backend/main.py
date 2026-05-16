@@ -17,12 +17,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 _LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 
-# 日志落盘：data/logs/backend.log，rotate 20MB × 10 个 = 最多 200MB 历史
+# 日志落盘：logs/jellyfin-helper.log，rotate 20MB × 10 个 = 最多 200MB 历史
 # 这次 !!unorganized 事故就是因为只有 stdout、终端关掉就没证据，必须留盘
 _ROOT_DIR = Path(__file__).parent.parent.parent
-_LOG_DIR = _ROOT_DIR / 'data' / 'logs'
+_LOG_DIR = _ROOT_DIR / 'logs'
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
-_LOG_FILE = _LOG_DIR / 'backend.log'
+_LOG_FILE = _LOG_DIR / 'jellyfin-helper.log'
 
 _file_handler = logging.handlers.RotatingFileHandler(
     _LOG_FILE,
@@ -49,6 +49,33 @@ logger = logging.getLogger(__name__)
 logger.info(f"日志落盘启用: {_LOG_FILE} (rotate 20MB × 10)")
 
 
+class _SilentPollAccessFilter(logging.Filter):
+    """过滤掉 uvicorn.access 中高频轮询端点的日志行（200/304 才过滤；错误状态码保留）。
+
+    uvicorn.access 的 record.args 形如 (client_addr, method, full_path, http_version, status_code)。
+    我们用 status_code < 400 + path 前缀匹配判断是否静音。
+    路径列表与 diagnostics._SILENT_POLL_PATHS 共用一份，单点维护。
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            from web.backend.diagnostics import _SILENT_POLL_PATHS
+            args = record.args
+            if not isinstance(args, tuple) or len(args) < 5:
+                return True
+            full_path = str(args[2] or '')
+            # 去掉 query string，按纯 path 前缀匹配
+            pure_path = full_path.split('?', 1)[0]
+            status_code = int(args[4]) if args[4] is not None else 0
+            if status_code < 400 and any(pure_path.startswith(p) for p in _SILENT_POLL_PATHS):
+                return False
+        except Exception:
+            pass
+        return True
+
+
+_uvicorn_access_filter = _SilentPollAccessFilter()
+
+
 def _patch_uvicorn_loggers():
     """让 uvicorn 自带的 access / default logger 也通过 root 落盘 + 输出到 console。
 
@@ -56,11 +83,19 @@ def _patch_uvicorn_loggers():
     之前的实现保留了它们自己的 handlers + 打开 propagate → 同一条 access log 被
     输出 3 次（uvicorn 自己 stderr + root file + root console，看起来就是"重复 3 次"）。
     正确做法：**清掉 uvicorn 自己的 handlers**，只通过 root 输出一次。
+
+    同时给 uvicorn.access 挂一个高频轮询端点过滤器，把 200/304 噪音吞掉
+    （错误状态码仍然保留）。
     """
     for name in ('uvicorn', 'uvicorn.access', 'uvicorn.error'):
         lg = logging.getLogger(name)
         lg.handlers.clear()
         lg.propagate = True
+
+    access_lg = logging.getLogger('uvicorn.access')
+    # 避免重复挂载（lifespan 启动时会再 patch 一次）
+    if _uvicorn_access_filter not in access_lg.filters:
+        access_lg.addFilter(_uvicorn_access_filter)
 
 
 _patch_uvicorn_loggers()

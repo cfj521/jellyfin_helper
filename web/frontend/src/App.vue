@@ -4,8 +4,8 @@
       <!-- 侧边栏 -->
       <el-aside width="220px" class="app-aside">
         <div class="logo">
-          <el-icon :size="28"><VideoCamera /></el-icon>
-          <span>Jellyfin Tools</span>
+          <el-icon :size="28"><MagicStick /></el-icon>
+          <span>Jellyfin Helper</span>
         </div>
 
         <el-menu

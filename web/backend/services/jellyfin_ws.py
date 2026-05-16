@@ -109,7 +109,7 @@ class JellyfinWSClient:
         parsed = urlparse(host)
         scheme = 'wss' if parsed.scheme == 'https' else 'ws'
         netloc = parsed.netloc or parsed.path  # 容错：host 写成 'jellyfin:8096'
-        return f"{scheme}://{netloc}/socket?api_key={settings.jellyfin_api_key}&deviceId=jellyfin-tools"
+        return f"{scheme}://{netloc}/socket?api_key={settings.jellyfin_api_key}&deviceId=jellyfin-helper"
 
     async def _main_loop(self):
         """长期运行的主循环：根据 settings 决定连接/断开 + 重连退避"""
