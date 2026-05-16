@@ -1022,8 +1022,8 @@ def get_anilist(
             now = _dt.utcnow()
             season_map = {1: 'WINTER', 2: 'SPRING', 3: 'SUMMER', 4: 'FALL'}
             season = season_map[((now.month - 1) // 3) + 1]
-        items = client.current_season(season=season, year=now.year,
-                                       page=page, limit=_ANILIST_PAGE_SIZE)
+            items = client.current_season(season=season, year=now.year,
+                                          page=page, limit=_ANILIST_PAGE_SIZE)
     except Exception as e:
         logger.warning(f"AniList {category} 上游异常: {e}")
         items = []

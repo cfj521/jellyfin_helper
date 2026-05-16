@@ -13,11 +13,6 @@
           router
           class="app-menu"
         >
-          <el-menu-item index="/tasks">
-            <el-icon><List /></el-icon>
-            <span>任务管理</span>
-          </el-menu-item>
-
           <el-menu-item index="/medialibraries">
             <el-icon><Collection /></el-icon>
             <span>媒体库</span>
@@ -38,7 +33,11 @@
             <span>下载流水线</span>
           </el-menu-item>
 
-          <!-- 配置入口：放在菜单末尾，视觉上与导航项分开 -->
+          <el-menu-item index="/tasks" class="tasks-menu-item">
+            <el-icon><List /></el-icon>
+            <span>任务管理</span>
+          </el-menu-item>
+
           <el-menu-item index="/settings" class="settings-menu-item">
             <el-icon><Setting /></el-icon>
             <span>设置</span>
@@ -119,7 +118,7 @@ const { themes, current: currentTheme, setTheme } = useTheme()
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.3px;
-  background: linear-gradient(135deg, var(--jt-brand) 0%, var(--jt-accent) 100%);
+  background: var(--jt-logo-bg, linear-gradient(135deg, var(--jt-brand) 0%, var(--jt-accent) 100%));
   position: relative;
 
   span {
@@ -215,11 +214,11 @@ const { themes, current: currentTheme, setTheme } = useTheme()
     }
   }
 
-  .settings-menu-item {
+  .tasks-menu-item {
     margin-top: 16px !important;
     position: relative;
 
-    &::after {
+    &::before {
       content: '';
       position: absolute;
       top: -10px;

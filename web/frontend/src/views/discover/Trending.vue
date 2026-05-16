@@ -126,11 +126,6 @@
             </div>
             <!-- 对应 .ratings-row -->
             <div class="sk-line sk-ratings" />
-            <!-- 对应 .actions-row 两个按钮 -->
-            <div class="actions-row">
-              <div class="sk-block sk-btn" />
-              <div class="sk-block sk-btn" />
-            </div>
           </div>
         </el-card>
         <el-card
@@ -208,6 +203,16 @@
               @click.stop
             />
             <div v-if="item.badge" class="src-badge">{{ item.badge }}</div>
+            <!-- 简介按钮：海报右下角，纯图标 -->
+            <el-button
+              size="small"
+              circle
+              class="poster-overview-btn"
+              @click.stop="toggleOverview(item)"
+              title="简介"
+            >
+              <el-icon><Document /></el-icon>
+            </el-button>
             <div
               v-if="overviewVisible[item._key]"
               class="overview-overlay"
@@ -227,9 +232,22 @@
             </div>
           </div>
           <div class="info">
-            <div class="title clickable" :title="item.title" @click="openDetail(item)">{{ item.title }}</div>
+            <div class="title-row">
+              <div class="title clickable" :title="item.title" @click="openDetail(item)">{{ item.title }}</div>
+              <el-button
+                size="small"
+                circle
+                type="primary"
+                plain
+                class="title-search-btn"
+                :loading="searchingKeys.has(item._key)"
+                @click.stop="searchTorrents(item)"
+                title="搜种子"
+              >
+                <el-icon><Search /></el-icon>
+              </el-button>
+            </div>
             <div class="meta">
-              <!-- 风格标签：取前 2 个，太多会换行；类型徽标已在海报左上角 -->
               <div class="genre-tags" v-if="(item.genres || []).length">
                 <el-tag
                   v-for="g in item.genres.slice(0, 2)"
@@ -242,23 +260,6 @@
               </div>
               <span v-else class="meta-placeholder"></span>
               <span class="year">{{ item.year || '' }}</span>
-            </div>
-            <div class="actions-row">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                class="action-btn"
-                :loading="searchingKeys.has(item._key)"
-                @click.stop="searchTorrents(item)"
-              >
-                <template #icon><el-icon><Search /></el-icon></template>
-                搜种子
-              </el-button>
-              <el-button size="small" type="primary" plain class="action-btn" @click.stop="toggleOverview(item)">
-                <el-icon><Document /></el-icon>
-                简介
-              </el-button>
             </div>
           </div>
         </el-card>
@@ -1252,14 +1253,6 @@ onBeforeUnmount(_detachRuntime)
     margin-bottom: 8px;
   }
 
-  // 对应 .actions-row 两个 el-button size=small（实际 24px，不是 28）
-  .actions-row {
-    .sk-btn {
-      flex: 1;
-      height: 24px;
-      border-radius: 4px;
-    }
-  }
 }
 
 .poster-card {
@@ -1491,10 +1484,38 @@ onBeforeUnmount(_detachRuntime)
       &.mt-adult  { color: #fecaca; }
       &.mt-person { color: #e2e8f0; }
     }
+
+    .poster-overview-btn {
+      position: absolute;
+      bottom: 6px;
+      right: 6px;
+      z-index: 3;
+      opacity: 0;
+      transition: opacity 0.2s;
+      background: rgba(0, 0, 0, 0.6) !important;
+      border-color: rgba(255, 255, 255, 0.2) !important;
+      color: #fff !important;
+
+      &:hover {
+        background: rgba(0, 0, 0, 0.8) !important;
+        border-color: rgba(255, 255, 255, 0.4) !important;
+      }
+    }
+
+    &:hover .poster-overview-btn {
+      opacity: 1;
+    }
   }
 
   .info {
     padding: 10px;
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
 
     .title {
       font-size: 14px;
@@ -1502,7 +1523,8 @@ onBeforeUnmount(_detachRuntime)
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-bottom: 6px;
+      flex: 1;
+      min-width: 0;
 
       &.clickable {
         cursor: pointer;
@@ -1510,11 +1532,15 @@ onBeforeUnmount(_detachRuntime)
       }
     }
 
+    .title-search-btn {
+      flex-shrink: 0;
+      margin-left: auto !important;
+    }
+
     .meta {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 8px;
       min-height: 22px;
       gap: 6px;
 
@@ -1528,7 +1554,6 @@ onBeforeUnmount(_detachRuntime)
       }
       .genre-tag {
         max-width: 100%;
-        // size=small 默认 22px，跟 .meta min-height 22px 对齐
         :deep(.el-tag__content) {
           overflow: hidden;
           text-overflow: ellipsis;
@@ -1543,14 +1568,6 @@ onBeforeUnmount(_detachRuntime)
     .ratings-row {
       margin-bottom: 8px;
       min-height: 18px;
-    }
-
-    .actions-row {
-      display: flex;
-      gap: 6px;
-
-      .action-btn { margin-left: 0 !important; }
-      .action-btn + .action-btn { margin-left: auto !important; }
     }
   }
 }
