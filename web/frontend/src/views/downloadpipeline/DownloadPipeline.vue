@@ -396,13 +396,13 @@
           <template v-if="reviewForm._target_mode === 'auto'">
             <el-form-item label="目标库">
               <span class="auto-target">
-                <strong v-if="reviewTarget.dispatch?.target_library_name">{{ reviewTarget.dispatch.target_library_name }}</strong>
+                <strong v-if="reviewForm._auto_library_name">{{ reviewForm._auto_library_name }}</strong>
                 <span v-else class="muted">⚠ 该 media_type 未配置库</span>
                 <span class="muted" style="margin-left: 8px">（保存后按 media_type 规则自动重算）</span>
               </span>
             </el-form-item>
             <el-form-item label="目标路径">
-              <span class="auto-target path-text" v-if="reviewTarget.dispatch?.target_path">{{ reviewTarget.dispatch.target_path }}</span>
+              <span class="auto-target path-text" v-if="reviewForm._auto_target_path">{{ reviewForm._auto_target_path }}</span>
               <span v-else class="muted">—</span>
             </el-form-item>
           </template>
@@ -1271,6 +1271,9 @@ const reviewForm = reactive({
   _target_mode: 'auto',
   target_library_id: '',
   target_path: '',
+  // auto 模式下的预览值（跟随重新识别刷新）
+  _auto_library_name: '',
+  _auto_target_path: '',
 })
 
 // copy-phase 冲突弹窗状态（跟 reviewVisible 互斥；同样从"人工审核"按钮触发）
@@ -1306,6 +1309,8 @@ const openReview = async (row) => {
   reviewForm._target_mode = 'auto'
   reviewForm.target_library_id = d.target_library_id || ''
   reviewForm.target_path = d.target_path || ''
+  reviewForm._auto_library_name = d.target_library_name || ''
+  reviewForm._auto_target_path = d.target_path || ''
   reviewVisible.value = true
 }
 
@@ -1482,14 +1487,12 @@ const reidentifyInReview = async () => {
     if (ident.title) reviewForm.title = ident.title
     if (ident.year) reviewForm.year = ident.year
     if (ident.series_name) reviewForm.series_name = ident.series_name
-    // 目标：回填到 manual 字段 + 同步更新 auto 模式的预览显示
+    // 目标：回填到 manual 字段 + 同步更新 auto 模式的预览值
     if (target.target_library_id) reviewForm.target_library_id = target.target_library_id
     if (target.target_path) reviewForm.target_path = target.target_path
-    // auto 模式的"目标库""目标路径"读自 reviewTarget.dispatch，需要同步刷新
-    if (reviewTarget.value?.dispatch) {
-      if (target.library_name) reviewTarget.value.dispatch.target_library_name = target.library_name
-      if (target.target_path) reviewTarget.value.dispatch.target_path = target.target_path
-    }
+    // auto 模式预览：直接写 reactive 的 reviewForm，确保 Vue 响应性
+    reviewForm._auto_library_name = target.library_name || ''
+    reviewForm._auto_target_path = target.target_path || ''
     const conf = ident.confidence
     ElMessage.success(
       `识别结果：${ident.media_type || '?'} / ${ident.title || '?'} `
