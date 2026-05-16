@@ -1,7 +1,3 @@
-# 配置文件（含敏感信息）
-config.yaml
-config.yml
-
 # 数据目录
 data/
 *.db
