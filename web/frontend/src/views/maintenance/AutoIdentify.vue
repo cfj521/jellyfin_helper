@@ -260,16 +260,16 @@ onUnmounted(stopPolling)
 <style lang="scss" scoped>
 .page-header {
   display: flex; align-items: center; gap: 16px;
-  .hint-tag { color: #6b7280; font-size: 13px; }
+  .hint-tag { color: var(--jt-text-secondary); font-size: 13px; }
 }
 .form-card, .progress-card { margin-bottom: 16px; }
 .progress-card {
   .card-header { display: flex; justify-content: space-between; align-items: center; }
-  .progress-message { margin-bottom: 10px; color: #606266; font-size: 14px; word-break: break-all; }
+  .progress-message { margin-bottom: 10px; color: var(--jt-text-regular); font-size: 14px; word-break: break-all; }
   .result-block { margin-top: 16px; }
   .error-box { margin-top: 16px; }
 }
-.muted { color: #94a3b8; }
+.muted { color: var(--jt-text-muted); }
 .hint-line { font-size: 12px; margin-top: 8px; }
 
 .candidate-detail {
@@ -283,8 +283,8 @@ onUnmounted(stopPolling)
     font-size: 13px;
     line-height: 1.6;
 
-    a { color: #0ea5e9; text-decoration: none; font-family: ui-monospace, monospace; font-size: 12px; }
-    .overview { color: #475569; font-size: 12px; margin-top: 4px; }
+    a { color: var(--jt-link); text-decoration: none; font-family: ui-monospace, monospace; font-size: 12px; }
+    .overview { color: var(--jt-text-regular); font-size: 12px; margin-top: 4px; }
   }
 }
 </style>

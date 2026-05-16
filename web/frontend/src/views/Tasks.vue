@@ -384,7 +384,7 @@ onMounted(() => {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: #409eff;
+    color: var(--jt-brand);
     font-size: 13px;
   }
 }
@@ -412,7 +412,7 @@ onMounted(() => {
   }
   .quick-label {
     font-size: 13px;
-    color: #64748b;
+    color: var(--jt-text-secondary);
   }
 }
 
@@ -422,10 +422,10 @@ onMounted(() => {
   transition: background-color 0.15s ease;
 }
 .clickable-table :deep(.el-table__row:hover > td) {
-  background-color: #f0f9ff !important;
+  background-color: var(--jt-brand-light-9) !important;
 }
 
-.task-id { color: #94a3b8; font-family: monospace; }
+.task-id { color: var(--jt-text-muted); font-family: monospace; }
 
 .type-cell {
   display: flex;
@@ -437,7 +437,7 @@ onMounted(() => {
 
 .message {
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -466,14 +466,14 @@ onMounted(() => {
   border-radius: 10px;
   font-size: 12px;
   line-height: 18px;
-  background: #fff;
+  background: var(--jt-card-bg);
 
   .chip-icon { font-weight: bold; }
   .chip-value { font-family: monospace; }
 }
 
 .error-summary {
-  color: #f56c6c;
+  color: var(--jt-danger);
   font-size: 12px;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -481,8 +481,8 @@ onMounted(() => {
   overflow: hidden;
 }
 
-.duration { color: #64748b; font-size: 12px; font-family: monospace; }
-.time     { color: #64748b; font-size: 12px; }
-.muted    { color: #94a3b8; }
+.duration { color: var(--jt-text-secondary); font-size: 12px; font-family: monospace; }
+.time     { color: var(--jt-text-secondary); font-size: 12px; }
+.muted    { color: var(--jt-text-muted); }
 
 </style>

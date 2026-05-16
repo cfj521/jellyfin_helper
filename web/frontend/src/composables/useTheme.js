@@ -3,9 +3,9 @@ import { ref, watch } from 'vue'
 const STORAGE_KEY = 'jt-theme'
 
 const THEMES = [
-  { key: 'default', name: '靛蓝', color: '#6366f1', icon: '💎' },
-  { key: 'dark',    name: '暗夜', color: '#818cf8', icon: '🌙' },
-  { key: 'emerald', name: '翡翠', color: '#10b981', icon: '🌿' },
+  { key: 'default', name: '浅色', color: '#6366f1' },
+  { key: 'dark',    name: '深色', color: '#818cf8' },
+  { key: 'emerald', name: '翡翠', color: '#10b981' },
 ]
 
 const current = ref(localStorage.getItem(STORAGE_KEY) || 'default')

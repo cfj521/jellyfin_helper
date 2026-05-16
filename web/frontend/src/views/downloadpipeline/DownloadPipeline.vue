@@ -417,7 +417,7 @@
           </template>
 
           <el-form-item v-if="reviewAfterCopy">
-            <span class="muted" style="font-size: 12px; color: #f59e0b">
+            <span class="muted" style="font-size: 12px; color: var(--jt-warning)">
               ⚠ 文件已经在复制了，改这里不会自动搬已经下载好的文件，需要自己处理
             </span>
           </el-form-item>
@@ -1931,16 +1931,16 @@ onUnmounted(() => {
   gap: 4px;
   padding: 4px 12px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   text-decoration: none;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
   border-radius: 4px;
-  background: #fff;
+  background: var(--jt-card-bg);
   transition: all 0.15s ease;
 
   &:hover {
-    color: #00a4dc;
-    border-color: #00a4dc;
+    color: var(--jt-link);
+    border-color: var(--jt-link);
   }
 
   .el-icon { font-size: 14px; }
@@ -1973,22 +1973,22 @@ onUnmounted(() => {
   }
   .quota-label {
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
   }
   .quota-value {
     font-size: 13px;
     font-weight: 600;
     margin-right: auto;
-    &.state-normal { color: #10b981; }
-    &.state-warn { color: #f59e0b; }
-    &.state-cleanup, &.state-over { color: #ef4444; animation: pulse 1.5s infinite; }
-    &.state-disabled { color: #94a3b8; font-style: italic; }
+    &.state-normal { color: var(--jt-success); }
+    &.state-warn { color: var(--jt-warning); }
+    &.state-cleanup, &.state-over { color: var(--jt-danger); animation: pulse 1.5s infinite; }
+    &.state-disabled { color: var(--jt-text-muted); font-style: italic; }
   }
   .quota-bar-wrap {
     .quota-bar {
       width: 100%;
       height: 8px;
-      background: #f1f5f9;
+      background: var(--jt-divider-light);
       border-radius: 4px;
       overflow: hidden;
     }
@@ -2006,15 +2006,15 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   min-width: 180px;
   .speed-line { display: flex; align-items: center; gap: 4px; }
-  .speed-icon { color: #94a3b8; }
-  .speed-value { font-weight: 600; color: #0f172a; }
+  .speed-icon { color: var(--jt-text-muted); }
+  .speed-value { font-weight: 600; color: var(--jt-text-primary); }
   .speed-totals {
     margin-top: 4px;
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
 }
 
@@ -2033,12 +2033,12 @@ onUnmounted(() => {
     .lbl {
       width: 32px;
       font-size: 12px;
-      color: #475569;
+      color: var(--jt-text-regular);
       flex-shrink: 0;
     }
     .unit {
       font-size: 11px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
     }
   }
   .row:last-of-type { margin-bottom: 0; }
@@ -2077,7 +2077,7 @@ onUnmounted(() => {
 
 // 批量按钮内嵌在 toolbar，无背景；"已选 N 项"高亮提示，跟 small 按钮字号一致
 .bulk-info {
-  color: #4338ca;
+  color: var(--jt-brand-dark);
   font-weight: 600;
   font-size: 12px;
 }
@@ -2093,19 +2093,19 @@ onUnmounted(() => {
       font-size: 13px;
 
       .meta-label {
-        color: #64748b;
+        color: var(--jt-text-secondary);
         flex-shrink: 0;
         min-width: 56px;
       }
       .meta-name {
-        color: #1e293b;
+        color: var(--jt-text-primary);
         font-weight: 500;
         word-break: break-all;
         line-height: 1.4;
       }
     }
     .review-reason {
-      color: #f59e0b;
+      color: var(--jt-warning);
       font-size: 12px;
       font-style: italic;
       .el-icon { font-size: 14px; }
@@ -2113,21 +2113,21 @@ onUnmounted(() => {
     .review-dup {
       gap: 8px;
       font-size: 12px;
-      color: #475569;
-      .muted { color: #94a3b8; }
-      strong { color: #047857; font-weight: 600; }
+      color: var(--jt-text-regular);
+      .muted { color: var(--jt-text-muted); }
+      strong { color: var(--jt-success); font-weight: 600; }
     }
   }
 
   .auto-target {
-    color: #475569;
+    color: var(--jt-text-regular);
     font-size: 13px;
-    strong { color: #047857; font-weight: 600; }
-    .muted { color: #94a3b8; font-size: 12px; }
+    strong { color: var(--jt-success); font-weight: 600; }
+    .muted { color: var(--jt-text-muted); font-size: 12px; }
     &.path-text {
       font-family: ui-monospace, SFMono-Regular, monospace;
       font-size: 12px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       word-break: break-all;
     }
   }
@@ -2155,20 +2155,20 @@ onUnmounted(() => {
   display: inline-block;
   padding: 1px 8px;
   font-size: 11px;
-  background: #ecfdf5;
-  color: #047857;
-  border: 1px solid #a7f3d0;
+  background: var(--jt-success-tint);
+  color: var(--jt-success-text);
+  border: 1px solid var(--jt-success-border);
   border-radius: 3px;
 }
 
 .path-text {
   font-size: 11px;
-  color: #475569;
+  color: var(--jt-text-regular);
   font-family: ui-monospace, SFMono-Regular, monospace;
   word-break: break-all;
 }
 
-.muted { color: #cbd5e1; }
+.muted { color: var(--jt-text-muted); }
 
 // 紧凑表格：缩小列内 padding，让信息密度更高
 .downloads-table {
@@ -2196,16 +2196,15 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   vertical-align: middle;
 
-  &.status-running       { color: #475569; }
-  &.status-succeeded     { color: #10b981; }
-  &.status-warned        { color: #f59e0b; }
-  &.status-skipped       { color: #94a3b8; }
-  &.status-failed        { color: #ef4444; font-weight: 500; }
-  &.status-needs_review  { color: #f59e0b; font-weight: 500; }
-  // downloading 阶段专属
-  &.status-metadata_pending { color: #6366f1; }
-  &.status-stalled       { color: #f59e0b; }
-  &.status-paused        { color: #94a3b8; }
+  &.status-running       { color: var(--jt-text-regular); }
+  &.status-succeeded     { color: var(--jt-success); }
+  &.status-warned        { color: var(--jt-warning); }
+  &.status-skipped       { color: var(--jt-text-muted); }
+  &.status-failed        { color: var(--jt-danger); font-weight: 500; }
+  &.status-needs_review  { color: var(--jt-warning); font-weight: 500; }
+  &.status-metadata_pending { color: var(--jt-brand); }
+  &.status-stalled       { color: var(--jt-warning); }
+  &.status-paused        { color: var(--jt-text-muted); }
 }
 
 .main-tabs {
@@ -2232,7 +2231,7 @@ onUnmounted(() => {
     }
     .ext-link {
       font-size: 12px;
-      color: #6366f1;
+      color: var(--jt-brand);
       text-decoration: none;
       &:hover { text-decoration: underline; }
     }
@@ -2249,7 +2248,7 @@ onUnmounted(() => {
     flex: 1;
     .feed-name { font-weight: 500; }
     .feed-meta {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-size: 12px;
       margin-left: auto;
       .unread-badge {
@@ -2265,7 +2264,7 @@ onUnmounted(() => {
 
   // 已读条目淡化
   :deep(.rss-row-read) td {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
 
   // qB RSS 全局设置条
@@ -2276,8 +2275,8 @@ onUnmounted(() => {
     flex-wrap: wrap;
     padding: 10px 12px;
     margin-top: 12px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--jt-fill-light);
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
 
     .setting-item {
@@ -2285,7 +2284,7 @@ onUnmounted(() => {
       align-items: center;
       gap: 6px;
       font-size: 12px;
-      color: #475569;
+      color: var(--jt-text-regular);
 
       label { cursor: default; }
     }
@@ -2297,8 +2296,8 @@ onUnmounted(() => {
 .re-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  color: #475569;
-  background: #f1f5f9;
+  color: var(--jt-text-regular);
+  background: var(--jt-fill-light);
   padding: 1px 4px;
   border-radius: 3px;
   white-space: nowrap;
@@ -2322,7 +2321,7 @@ onUnmounted(() => {
       content: '·';
       position: absolute;
       left: -12px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-weight: bold;
     }
   }
@@ -2346,14 +2345,14 @@ onUnmounted(() => {
   content: '·';
   position: absolute;
   left: -10px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   font-weight: bold;
 }
 .re-code-global {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  color: #475569;
-  background: #f1f5f9;
+  color: var(--jt-text-regular);
+  background: var(--jt-fill-light);
   padding: 1px 4px;
   border-radius: 3px;
   white-space: nowrap;
@@ -2384,7 +2383,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #475569;
+  color: var(--jt-text-regular);
   flex-shrink: 0;
 }
 

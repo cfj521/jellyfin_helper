@@ -308,16 +308,16 @@ onActivated(() => {
   gap: 4px;
   padding: 4px 12px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   text-decoration: none;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
   border-radius: 4px;
-  background: #fff;
+  background: var(--jt-card-bg);
   transition: all 0.15s ease;
 
   &:hover {
-    color: #00a4dc;
-    border-color: #00a4dc;
+    color: var(--jt-link);
+    border-color: var(--jt-link);
   }
 
   .el-icon {
@@ -365,7 +365,7 @@ onActivated(() => {
   gap: 12px;
 
   .results-count {
-    color: #475569;
+    color: var(--jt-text-regular);
     font-weight: 500;
   }
 
@@ -380,11 +380,11 @@ onActivated(() => {
   flex-wrap: wrap;
   gap: 8px;
   padding-top: 10px;
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--jt-card-border);
   margin-top: 4px;
 
   .presets-label {
-    color: #64748b;
+    color: var(--jt-text-secondary);
     font-size: 13px;
   }
 
