@@ -28,36 +28,7 @@
           <el-icon><Delete /></el-icon>
           清空元数据重扫
         </el-button>
-        <!-- 显示排除项开关：默认关，开后列表里包含 excluded=true 的条目（不影响 cooldown 中条目，那些一直显示）
-             Jellyfin 视图下"excluded"是 AdultItem 表特有概念，禁用此开关 -->
-        <div class="toolbar-switch" :class="{ disabled: filters.use_jellyfin_db }">
-          <span class="switch-label">显示排除项</span>
-          <el-switch
-            v-model="filters.show_excluded"
-            size="small"
-            :disabled="filters.use_jellyfin_db"
-            :title="filters.use_jellyfin_db
-              ? 'Jellyfin 视图下不区分排除项；切回 AdultItem 数据源后可用'
-              : (filters.show_excluded
-                ? '当前显示已排除条目（用户标记为无效番号）'
-                : '当前隐藏已排除条目；打开后才能看到/取消排除')"
-            @change="onFilterChange"
-          />
-        </div>
-        <!-- 「仅看健康有问题」已移到 sort-bar 里作 chip 形式（紧跟排序按钮后）-->
-
-        <!-- 数据源切换开关：靠右 -->
-        <div class="toolbar-switch">
-          <span class="switch-label">使用 Jellyfin 数据库</span>
-          <el-switch
-            v-model="filters.use_jellyfin_db"
-            size="small"
-            :title="filters.use_jellyfin_db
-              ? '当前以 Jellyfin 视角列出库内所有视频，反查我们刮的元数据做 cross-ref'
-              : '当前以 AdultItem 表为数据源（番号刮削结果）'"
-            @change="onFilterChange"
-          />
-        </div>
+        <!-- 「仅看健康有问题」chip + 显示排除项 / 使用 Jellyfin 数据库 两个开关都在下方 items-header 行 -->
       </div>
     </div>
 
@@ -195,6 +166,36 @@
             </el-select>
           </div>
 
+        <!-- 右侧开关组：margin-left:auto 推到行尾，跟在 filter-row 之后；从顶栏迁过来 -->
+        <div class="header-switches">
+          <!-- 显示排除项：Jellyfin 视图下"excluded"是 AdultItem 表特有概念，禁用此开关 -->
+          <div class="toolbar-switch" :class="{ disabled: filters.use_jellyfin_db }">
+            <span class="switch-label">显示排除项</span>
+            <el-switch
+              v-model="filters.show_excluded"
+              size="small"
+              :disabled="filters.use_jellyfin_db"
+              :title="filters.use_jellyfin_db
+                ? 'Jellyfin 视图下不区分排除项；切回 AdultItem 数据源后可用'
+                : (filters.show_excluded
+                  ? '当前显示已排除条目（用户标记为无效番号）'
+                  : '当前隐藏已排除条目；打开后才能看到/取消排除')"
+              @change="onFilterChange"
+            />
+          </div>
+          <div class="toolbar-switch">
+            <span class="switch-label">使用 Jellyfin 数据库</span>
+            <el-switch
+              v-model="filters.use_jellyfin_db"
+              size="small"
+              :title="filters.use_jellyfin_db
+                ? '当前以 Jellyfin 视角列出库内所有视频，反查我们刮的元数据做 cross-ref'
+                : '当前以 AdultItem 表为数据源（番号刮削结果）'"
+              @change="onFilterChange"
+            />
+          </div>
+        </div>
+
         <ViewModeToggle v-model="viewMode" />
       </div>
     </div>
@@ -267,7 +268,7 @@
         @selection-change="onSelectionChange"
         :row-class-name="rowClassName"
       >
-        <el-table-column type="selection" width="44" />
+        <el-table-column type="selection" width="40" class-name="adult-selection-col" />
 
         <el-table-column label="封面" width="180">
           <template #default="{ row }">
@@ -418,6 +419,45 @@
       :item="editDialog.item"
       @saved="onMetadataSaved"
     />
+
+    <!-- 通用确认对话框（样式跟 MediaToolbar 一致；支持 dry-run）-->
+    <el-dialog
+      v-model="confirmDialog.visible"
+      :title="confirmDialog.action?.label || '确认'"
+      width="520px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      append-to-body
+    >
+      <div class="confirm-scope">作用范围：{{ library.name }}</div>
+      <div class="confirm-text" v-html="confirmDialog.action?.text || ''" />
+
+      <!-- 只有当 action 支持 dry-run AND 用户在「基础配置」开了"显示测试模式"开关才显示 -->
+      <div
+        v-if="confirmDialog.action?.supportsDryRun && showDryRunInToolbar"
+        class="dry-run-row"
+      >
+        <el-checkbox v-model="confirmDialog.dryRun" size="large">
+          <span class="dry-run-label">测试模式</span>
+        </el-checkbox>
+        <div class="dry-run-hint">
+          {{ confirmDialog.dryRun
+            ? (confirmDialog.action.dryRunHint || '仅扫描预览，不实际执行')
+            : '勾选后仅统计影响范围，不真删/不真下载，确认后再正式跑' }}
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="confirmDialog.visible = false">取消</el-button>
+        <el-button
+          :type="confirmBtnType"
+          :class="confirmBtnClass"
+          @click="onConfirmOk"
+        >
+          {{ confirmBtnText }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -428,7 +468,7 @@ import {
   Check, Close, Operation, CaretTop, CaretBottom, DocumentCopy, Delete,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adultApi } from '@/api'
+import { adultApi, configApi } from '@/api'
 import { debugInfo } from '@/composables/useDebugInfo'
 import AdultPosterCell from '@/components/adult/AdultPosterCell.vue'
 import TitleCell from '@/components/adult/TitleCell.vue'
@@ -1060,120 +1100,173 @@ const rowClassName = ({ row }) => {
   return ''
 }
 
-// ---- 3 按钮：每个先弹确认 → 用户点确定再调后端 ----
+// ---- 4 按钮：用统一 confirm dialog（样式对齐 MediaToolbar）+ dry-run 支持 ----
+//
+// action 定义：
+//   - label/text：对话框标题 + 提示 HTML（支持 v-html）
+//   - level：'warning' / 'danger' —— 影响确认按钮颜色
+//   - supportsDryRun：是否显示"测试模式"勾选；不支持就不展示
+//   - dryRunHint：勾选后的提示文本
+//   - handler({dryRun}): 真正动作 —— 返回 Promise，外层负责 loading / message / error
+const confirmDialog = reactive({
+  visible: false,
+  action: null,
+  dryRun: false,
+})
 
-const confirmAction = async (title, html) => {
+// 调试开关：从 config.debug.show_dry_run_in_toolbar 读，控制确认弹窗里 dry-run 行的显隐
+// 默认 false（生产环境隐藏），用户在「基础配置 → 调试开关」打开后才会出现
+const showDryRunInToolbar = ref(false)
+onMounted(async () => {
   try {
-    await ElMessageBox.confirm(html, title, {
-      type: 'warning',
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      dangerouslyUseHTMLString: true,
-    })
-    return true
-  } catch {
-    return false
-  }
-}
-
-// 用作每个 confirm 顶部的"作用范围"摘要（与普通库 MediaToolbar 风格一致）
-const scopeHtml = () =>
-  `<div style="padding: 6px 10px; background: #f1f5f9; border-radius: 4px; font-size: 13px; color: #475569; margin-bottom: 10px;">作用范围：${props.library.name}</div>`
-
-const scanNow = async () => {
-  if (!await confirmAction(
-    '本地库重扫',
-    scopeHtml() + '将扫描磁盘上该库的所有视频文件，识别 番号 并入库（不会刮削元数据）。'
-  )) return
-  scanning.value = true
-  try {
-    await adultApi.watcherRunNow(props.library.id)
-    ElMessage.success('已启动本地库扫描')
-    setTimeout(() => { reload(); loadStats() }, 1500)
-  } finally {
-    scanning.value = false
-  }
-}
-
-const repairCovers = async () => {
-  if (!await confirmAction(
-    '扫描并修复封面图',
-    scopeHtml() + '将扫描已识别但缺封面的条目，从对应数据源重新下载封面图。<br>已有图的条目会被跳过。'
-  )) return
-  repairing.covers = true
-  try {
-    const r = await adultApi.repairCovers(props.library.id)
-    if (r.data.count === 0) {
-      ElMessage.info('没有需要修复的封面')
-    } else {
-      ElMessage.success(`已启动封面修复任务（共 ${r.data.count} 条）`)
-    }
-  } finally {
-    repairing.covers = false
-  }
-}
-
-const repairMetadata = async () => {
-  if (!await confirmAction(
-    '扫描并修复识别错误',
-    scopeHtml() + '将扫描所有未刮 / 刮失败的条目，重新调用刮削源识别元数据并写回（含封面 + NFO）。'
-  )) return
-  repairing.meta = true
-  try {
-    const r = await adultApi.repairMetadata(props.library.id)
-    if (r.data.count === 0) {
-      ElMessage.info('没有需要修复的条目')
-    } else {
-      ElMessage.success(`已启动识别修复任务（共 ${r.data.count} 条）`)
-    }
-  } finally {
-    repairing.meta = false
-  }
-}
-
-// 清空所有 AdultItem 元数据（仅当前库范围）→ 重扫入库 → 同任务衔接刮削
-const resetAndRescan = async () => {
-  try {
-    await ElMessageBox.confirm(
-      `<div style="line-height:1.6">
-        <p>将<b>清空当前库</b>所有 AdultItem 的识别 + 刮削数据：</p>
-        <ul style="margin:8px 0;padding-left:20px;color:#475569;font-size:13px">
-          <li>番号、标题、女优、标签、厂商、导演 等元数据</li>
-          <li>本地封面 / NFO 路径记录（DB 字段；磁盘文件不动）</li>
-          <li>排除 / 冷却 / 失败计数 / 手动覆盖等状态</li>
-        </ul>
-        <p style="color:#dc2626;margin:6px 0">视频文件、海报图片、NFO <b>文件不会被删除</b>，仅清 DB 记录</p>
-        <p>清空后会立即触发一个任务：先扫描入库识别番号，扫完<b>同一任务内</b>衔接刮削。</p>
-        <p style="color:#7f1d1d;margin-top:6px">⚠️ NFO / 海报内容会被新数据覆盖</p>
-      </div>`,
-      '清空元数据重扫',
-      {
-        confirmButtonText: '确定清空 + 重扫',
-        confirmButtonClass: 'el-button--danger',
-        cancelButtonText: '取消',
-        type: 'warning',
-        dangerouslyUseHTMLString: true,
-      },
-    )
-  } catch {
-    return
-  }
-  resettingScan.value = true
-  try {
-    const r = await adultApi.resetAndRescan(props.library.id)
-    ElMessage.success(r.data?.message || '已启动')
-    // 立即清空当前页表格让用户视觉感知"已清空"
-    items.value = []
-    itemsTotal.value = 0
-    nextOffset.value = 0
-    hasMore.value = true
-    loadStats()
+    const res = await configApi.getFull()
+    showDryRunInToolbar.value = !!res?.data?.config?.debug?.show_dry_run_in_toolbar
   } catch (e) {
-    ElMessage.error('启动失败：' + (e.response?.data?.detail || e.message))
-  } finally {
-    resettingScan.value = false
+    console.warn('[AdultLibraryView] 读取 debug 开关失败，dry-run 默认隐藏', e)
+  }
+})
+
+const ADULT_ACTIONS = {
+  scan_now: {
+    label: '本地库重扫',
+    level: 'warning',
+    text: '将扫描磁盘上该库的所有视频文件，识别<b>番号</b>并入库（不会刮削元数据）。',
+    supportsDryRun: false,
+    handler: async () => {
+      scanning.value = true
+      try {
+        await adultApi.watcherRunNow(props.library.id)
+        ElMessage.success('已启动本地库扫描')
+        setTimeout(() => { reload(); loadStats() }, 1500)
+      } finally {
+        scanning.value = false
+      }
+    },
+  },
+  repair_covers: {
+    label: '扫描并修复封面图',
+    level: 'warning',
+    text: '将扫描已识别但缺封面的条目，从对应数据源重新下载封面图。<br>已有图的条目会被跳过。',
+    supportsDryRun: true,
+    dryRunHint: '仅统计待修复条目数量，不实际下载封面',
+    handler: async ({ dryRun }) => {
+      repairing.covers = true
+      try {
+        const r = await adultApi.repairCovers(props.library.id, { dryRun })
+        const count = r.data.count
+        if (count === 0) {
+          ElMessage.info('没有需要修复的封面')
+        } else if (dryRun) {
+          ElMessage.success(`【测试】找到 ${count} 条待修复封面，未实际下载`)
+        } else {
+          ElMessage.success(`已启动封面修复任务（共 ${count} 条）`)
+        }
+      } finally {
+        repairing.covers = false
+      }
+    },
+  },
+  repair_metadata: {
+    label: '扫描并修复识别错误',
+    level: 'warning',
+    text: '将扫描所有未刮 / 刮失败的条目，重新调用刮削源识别元数据并写回（含封面 + NFO）。',
+    supportsDryRun: true,
+    dryRunHint: '仅统计待修复条目数量，不实际调用刮削源',
+    handler: async ({ dryRun }) => {
+      repairing.meta = true
+      try {
+        const r = await adultApi.repairMetadata(props.library.id, { dryRun })
+        const count = r.data.count
+        if (count === 0) {
+          ElMessage.info('没有需要修复的条目')
+        } else if (dryRun) {
+          ElMessage.success(`【测试】找到 ${count} 条待修复元数据，未实际刮削`)
+        } else {
+          ElMessage.success(`已启动识别修复任务（共 ${count} 条）`)
+        }
+      } finally {
+        repairing.meta = false
+      }
+    },
+  },
+  reset_and_rescan: {
+    label: '清空元数据重扫',
+    level: 'danger',
+    text: `
+      <p style="margin:0 0 8px">将<b>清空当前库</b>所有 AdultItem 的识别 + 刮削数据：</p>
+      <ul style="margin:0 0 8px;padding-left:20px;color:#475569;font-size:13px">
+        <li>番号、标题、女优、标签、厂商、导演 等元数据</li>
+        <li>本地封面 / NFO 路径记录（DB 字段；磁盘文件不动）</li>
+        <li>排除 / 冷却 / 失败计数 / 手动覆盖等状态</li>
+      </ul>
+      <p style="color:#dc2626;margin:0 0 6px">视频文件、海报图片、NFO <b>文件不会被删除</b>，仅清 DB 记录</p>
+      <p style="margin:0 0 4px">清空后会立即触发一个任务：先扫描入库识别番号，扫完<b>同一任务内</b>衔接刮削。</p>
+      <p style="color:#7f1d1d;margin:0">⚠️ NFO / 海报内容会被新数据覆盖</p>
+    `,
+    supportsDryRun: true,
+    dryRunHint: '仅统计会被清空的条数，不真删、不触发扫描',
+    handler: async ({ dryRun }) => {
+      resettingScan.value = true
+      try {
+        const r = await adultApi.resetAndRescan(props.library.id, { dryRun })
+        ElMessage.success(r.data?.message || '已启动')
+        if (!dryRun) {
+          // 立即清空当前页表格让用户视觉感知"已清空"
+          items.value = []
+          itemsTotal.value = 0
+          nextOffset.value = 0
+          hasMore.value = true
+        }
+        loadStats()
+      } catch (e) {
+        ElMessage.error('启动失败：' + (e.response?.data?.detail || e.message))
+      } finally {
+        resettingScan.value = false
+      }
+    },
+  },
+}
+
+const openConfirm = (key) => {
+  const action = ADULT_ACTIONS[key]
+  if (!action) return
+  confirmDialog.action = action
+  confirmDialog.dryRun = false           // 默认关
+  confirmDialog.visible = true
+}
+
+const onConfirmOk = async () => {
+  const action = confirmDialog.action
+  const dryRun = confirmDialog.dryRun && action.supportsDryRun
+  confirmDialog.visible = false
+  try {
+    await action.handler({ dryRun })
+  } catch (e) {
+    console.error('[AdultLibraryView] action failed:', e)
   }
 }
+
+// 确认按钮的颜色 / 文案 —— 跟 MediaToolbar 的逻辑一致
+const confirmBtnType = computed(() => {
+  if (confirmDialog.dryRun) return 'primary'
+  const lvl = confirmDialog.action?.level
+  if (lvl === 'danger') return 'primary'   // 用 class 染红，type 留 primary
+  return 'primary'
+})
+const confirmBtnClass = computed(() => {
+  if (confirmDialog.dryRun) return ''
+  return confirmDialog.action?.level === 'danger' ? 'el-button--danger' : ''
+})
+const confirmBtnText = computed(() => {
+  if (confirmDialog.dryRun) return '开始测试'
+  return confirmDialog.action?.level === 'danger' ? '执行' : '开始'
+})
+
+// 兼容旧 @click 绑定的薄包装：保持模板里 @click="scanNow" 等不动
+const scanNow = () => openConfirm('scan_now')
+const repairCovers = () => openConfirm('repair_covers')
+const repairMetadata = () => openConfirm('repair_metadata')
+const resetAndRescan = () => openConfirm('reset_and_rescan')
 
 // ---- 单行 ----
 // 单行"重新识别" → 弹搜索对话框（与普通库 IdentifyDialog 同套路）
@@ -1365,6 +1458,12 @@ onUnmounted(() => {
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
+
+      // 干掉 Element Plus 默认的 .el-button + .el-button { margin-left: 12px }
+      // 已经用 flex gap: 8px 控制间距，多余 margin 会让按钮间距叠加成 20px
+      :deep(.el-button + .el-button) {
+        margin-left: 0;
+      }
     }
 
 
@@ -1524,6 +1623,31 @@ onUnmounted(() => {
       gap: 10px;
       flex-wrap: wrap;
       flex: 1;
+    }
+
+    // 从顶栏迁过来的两个开关：靠右；filter-row 用 flex:1 自然把这组推到右边
+    .header-switches {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .toolbar-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .switch-label {
+        font-size: 13px;
+        color: #475569;
+        white-space: nowrap;
+      }
+
+      // 禁用态：label 也变浅色
+      &.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        .switch-label { color: #94a3b8; }
+      }
     }
   }
 
@@ -1876,33 +2000,79 @@ onUnmounted(() => {
     --el-table-tr-bg-color: rgba(237, 233, 254, 0.4);
   }
 
-  // 表格选择 checkbox 加深 —— 默认 #dcdfe6 太浅，在白底/浅灰底/浅紫底上几乎看不见
+  // 选择列：收紧 cell 默认 padding，让 checkbox 更靠近左边缘（跟普通库视觉接近）
+  :deep(.adult-selection-col .cell) {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  // 表格选择 checkbox 样式 —— 与普通库 LibraryDetail.vue 保持一致
+  // 关键：box 18×18 + 2px 边框 → 内部 14×14 = Element Plus 默认 box 大小，
+  // 钩子 ::after 完全不动，自然居中不歪
   :deep(.el-table) {
     .el-checkbox__inner {
-      width: 16px;
-      height: 16px;
-      border-color: #94a3b8;       // slate-400，明显高于默认
+      width: 18px;
+      height: 18px;
+      border-color: #94a3b8;
+      border-width: 2px;
+      border-radius: 3px;
       background: #fff;
     }
-    .el-checkbox__input:hover .el-checkbox__inner,
     .el-checkbox__inner:hover {
-      border-color: #475569;       // hover 更深
+      border-color: #6366f1;
     }
-    // 选中后保持品牌色
-    .el-checkbox__input.is-checked .el-checkbox__inner {
-      background-color: var(--el-color-primary);
-      border-color: var(--el-color-primary);
-    }
-    // indeterminate（半选）也明显
+    .el-checkbox__input.is-checked .el-checkbox__inner,
     .el-checkbox__input.is-indeterminate .el-checkbox__inner {
-      background-color: var(--el-color-primary);
-      border-color: var(--el-color-primary);
+      background-color: #6366f1;
+      border-color: #6366f1;
     }
   }
 
   // 无限滚动哨兵：仅作位置锚点，不可见
   .scroll-sentinel {
     height: 1px;
+  }
+}
+
+// ─── 统一 confirm dialog 样式（跟 MediaToolbar 一致；这里不嵌 .adult-lib-view 是因为
+//     el-dialog 默认 append-to-body 后样式作用不到 scoped 选择器内部需要的层级）
+.confirm-scope {
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #475569;
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+.confirm-text {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.7;
+  margin-bottom: 14px;
+
+  :deep(p) { margin: 0 0 6px; }
+  :deep(ul) { margin: 0 0 8px; padding-left: 20px; font-size: 13px; color: #475569; }
+  :deep(b)  { color: #0f172a; }
+}
+
+.dry-run-row {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: #fefce8;
+  border: 1px dashed #fde047;
+  border-radius: 6px;
+
+  .dry-run-label {
+    font-weight: 500;
+    color: #854d0e;
+  }
+  .dry-run-hint {
+    margin-top: 4px;
+    margin-left: 24px;
+    font-size: 12px;
+    color: #a16207;
+    line-height: 1.5;
   }
 }
 </style>

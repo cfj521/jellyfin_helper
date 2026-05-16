@@ -13,7 +13,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from web.backend.database import get_db, Task, MediaItem
-from web.backend.api.tasks import create_task, update_task_progress, complete_task
+from web.backend.api.tasks import (
+    create_task, update_task_progress, complete_task,
+    cancellable_task, TaskCancelledError, mark_task_cancelled,
+)
 from web.backend.task_restart import register_resumable
 from web.backend.path_translator import translate_path_with_settings
 
@@ -130,6 +133,7 @@ def scan_media(
 
 
 @register_resumable("media_scan", ["path", "recursive"])
+@cancellable_task
 def run_media_scan(task_id: int, path: str, recursive: bool):
     """执行媒体扫描"""
     from web.backend.database import SessionLocal

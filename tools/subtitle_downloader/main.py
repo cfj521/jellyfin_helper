@@ -15,6 +15,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from common.config import load_config, setup_logging
+from common.lang_utils import internal_to_filename_token
 from .opensubtitles import OpenSubtitlesClient
 from . import assrt as _assrt
 from . import shooter as _shooter
@@ -147,7 +148,9 @@ class _OpenSubtitlesProvider(_Provider):
         _SUB_EXT_WHITELIST = {'.srt', '.ass', '.ssa', '.sub', '.vtt', '.sup', '.idx', '.smi'}
         declared_fmt = (attrs.get('format') or attrs.get('subtitle_format') or '').lower().lstrip('.')
         ext = f'.{declared_fmt}' if f'.{declared_fmt}' in _SUB_EXT_WHITELIST else '.srt'
-        output_name = f"{video_path.stem}.{lang_code}{ext}"
+        # 落盘 token：chs → zh-Hans / cht → zh-Hant，让 Jellyfin 正确识别
+        filename_lang = internal_to_filename_token(lang_code)
+        output_name = f"{video_path.stem}.{filename_lang}{ext}"
         output_path = video_path.parent / output_name
 
         if output_path.exists():
@@ -176,7 +179,7 @@ class _OpenSubtitlesProvider(_Provider):
                 head = f.read(2048)
             actual_ext = _sniff_subtitle_ext(head)
             if actual_ext and actual_ext in _SUB_EXT_WHITELIST and actual_ext != ext:
-                new_name = f"{video_path.stem}.{lang_code}{actual_ext}"
+                new_name = f"{video_path.stem}.{filename_lang}{actual_ext}"
                 new_path = video_path.parent / new_name
                 output_path.rename(new_path)
                 logger.info(
@@ -200,7 +203,7 @@ class _AssrtProvider(_Provider):
             raise ValueError("assrt 未配置 API Token")
         self.client = _assrt.AssrtClient(
             token=token,
-            request_delay=sub_cfg.get('assrt_request_delay', 3.0),
+            request_delay=sub_cfg.get('assrt_request_delay', 4.0),
         )
         # 字幕格式偏好：默认 ass>srt>sup
         self.preferred_formats = sub_cfg.get('preferred_formats', ['ass', 'srt', 'sup'])
@@ -236,31 +239,45 @@ class _AssrtProvider(_Provider):
         if not subs:
             return {"status": "not_found"}
 
-        # ---- 2. 选最匹配的：先按语言命中过滤，再按 vote_score 排序 ----
+        # ---- 2. 选最匹配的：分层排序 —— 语言 tier 严格分层，同 tier 内按 vote 兜底 ----
+        from common.lang_utils import lang_match_score as _lang_score
+
         def lang_codes_of(s: Dict) -> List[str]:
             lang_block = s.get('lang') or {}
             return _assrt.parse_langlist(
                 lang_block.get('langlist'), lang_block.get('desc') or '',
             )
 
-        # 给候选打两层分：第一层语言匹配位置（越靠前越优），第二层 -vote
+        # 关键：assrt 双语字幕 codes=['chs','eng']，需要拼成 'chs.eng' 让
+        # lang_match_score 识别为对 preferred=['chs.eng',...] 首位命中。
+        # 否则 'chs.eng' 跟单语 'chs' / 'eng' 一样只命中后两位，bilingual 偏好被弱化。
         def sort_key(s: Dict):
             codes = lang_codes_of(s)
-            for i, want in enumerate(languages):
-                if want in codes:
-                    return (i, -float(s.get('vote_score') or 0))
-            return (999, -float(s.get('vote_score') or 0))
+            cand_lang = '.'.join(codes) if codes else ''
+            neg_cov, first_hit = _lang_score(cand_lang, languages or [])
+            # 没命中任何 preferred 项 → 沉底 (lang_rank=999)
+            lang_rank = first_hit if neg_cov < 0 else 999
+            return (lang_rank, -float(s.get('vote_score') or 0))
 
         subs.sort(key=sort_key)
         best = subs[0]
         sub_id = best.get('id')
 
         # 候选语言里挑一个跟 languages 最契合的，作为 dry_run 兜底标签
+        # 优先用 best 的完整复合 lang（chs.eng），让落盘 / 上层报告用对的语义；
+        # 拼不出就退到 preferred 序的第一个匹配单语
         best_codes = lang_codes_of(best)
-        chosen_lang = next(
-            (c for c in languages if c in best_codes),
-            languages[0] if languages else 'chs',
-        )
+        best_combo = '.'.join(best_codes) if best_codes else ''
+        if best_combo and any(
+            set(want.split('.')).issubset(set(best_codes))
+            for want in (languages or [])
+        ):
+            chosen_lang = best_combo
+        else:
+            chosen_lang = next(
+                (c for c in (languages or []) if c in best_codes),
+                (languages or ['chs'])[0],
+            )
 
         if dry_run:
             return {
@@ -291,7 +308,8 @@ class _AssrtProvider(_Provider):
         if ext.lower() in _assrt.SUB_EXTENSIONS:
             archive_name = detail.get('filename') or f"assrt_{sub_id}{ext}"
             guessed = _assrt.guess_lang_from_filename(archive_name) or chosen_lang
-            target = video_path.parent / f"{video_path.stem}.{guessed}{ext.lower()}"
+            # 内部 code guessed（chs/cht/eng...）→ 落盘 BCP 47
+            target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(guessed)}{ext.lower()}"
             if target.exists():
                 return {"status": "exists", "subtitle": target.name, "language": guessed, "source": self.name}
             target.write_bytes(content)
@@ -322,7 +340,7 @@ class _AssrtProvider(_Provider):
 
         best_name, best_data, best_lang = picked
         sub_ext = Path(best_name).suffix.lower() or '.srt'
-        target = video_path.parent / f"{video_path.stem}.{best_lang}{sub_ext}"
+        target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(best_lang)}{sub_ext}"
         if target.exists():
             return {"status": "exists", "subtitle": target.name, "language": best_lang, "source": self.name}
         target.write_bytes(best_data)
@@ -400,7 +418,8 @@ class _ShooterProvider(_Provider):
         if not link:
             return {"status": "not_found"}
 
-        output_name = f"{video_path.stem}.{best.language}{ext}"
+        # 落盘 token：chs → zh-Hans / cht → zh-Hant；其它语言不变
+        output_name = f"{video_path.stem}.{internal_to_filename_token(best.language)}{ext}"
         target = video_path.parent / output_name
         if target.exists():
             return {"status": "exists", "subtitle": output_name, "language": best.language, "source": self.name}
@@ -439,7 +458,13 @@ class SubtitleDownloader:
         self.config = config
         sub_cfg = config.get('subtitle', {}) or {}
 
-        self.preferred_langs = sub_cfg.get('preferred_langs', ['chs', 'eng'])
+        # downloading_langs：下载优先级（排序池），前优先；支持双语复合 chs.eng / cht.eng
+        # 兼容旧 preferred_langs：旧配置存在时也能读到（一次性兜底）
+        self.downloading_langs = (
+            sub_cfg.get('downloading_langs')
+            or sub_cfg.get('preferred_langs')
+            or ['chs.eng', 'chs', 'eng']
+        )
 
         # 解析 sources 优先级；如果配置缺失，给个回退（assrt 优先）
         configured = sub_cfg.get('sources') or [
@@ -489,7 +514,7 @@ class SubtitleDownloader:
         dry_run: bool = True,
     ) -> Dict:
         if languages is None:
-            languages = self.preferred_langs
+            languages = self.downloading_langs
 
         last_failure: Optional[Dict] = None
 

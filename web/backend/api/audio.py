@@ -16,7 +16,10 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.config import settings
 from web.backend.database import get_db
-from web.backend.api.tasks import create_task, update_task_progress, complete_task
+from web.backend.api.tasks import (
+    create_task, update_task_progress, complete_task,
+    cancellable_task, TaskCancelledError, mark_task_cancelled,
+)
 
 from tools.audio_manager.scanner import (
     AudioTrackScanner, ALL_VIDEO_EXTS, MODIFIABLE_VIDEO_EXTS,
@@ -426,6 +429,7 @@ def run_default_track_inline(
     }
 
 
+@cancellable_task
 def run_default_track_task(
     task_id: int,
     target: Dict,

@@ -19,7 +19,10 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.database import get_db, SessionLocal, AdultItem
 from web.backend.config import settings
-from web.backend.api.tasks import create_task, update_task_progress, complete_task
+from web.backend.api.tasks import (
+    create_task, update_task_progress, complete_task,
+    cancellable_task, TaskCancelledError, mark_task_cancelled,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -766,7 +769,7 @@ def watcher_status():
 
 
 @router.post("/reset-and-rescan")
-def reset_and_rescan(library_id: str):
+def reset_and_rescan(library_id: str, dry_run: bool = False):
     """
     清空指定库的所有 AdultItem 元数据 + 重扫入库 + 刮削。
 
@@ -776,8 +779,10 @@ def reset_and_rescan(library_id: str):
          同一 task 内先扫描入库（识别番号），扫完后立即刮削（拉元数据 + 下封面 + 写 NFO）
 
     任务进度：5% 解析路径 → 15% 找到 N 视频 → 90% 识别完成 → 92% 刮削 → 100% 完成
+
+    dry_run=True 时：只统计会被删的条数，不真删、不触发扫描。
     """
-    logger.warning(f"/adult/reset-and-rescan: library_id={library_id!r}")
+    logger.warning(f"/adult/reset-and-rescan: library_id={library_id!r} dry_run={dry_run}")
     if not library_id:
         raise HTTPException(status_code=400, detail="必须指定 library_id")
 
@@ -785,6 +790,19 @@ def reset_and_rescan(library_id: str):
     if cond is None:
         logger.warning(f"/adult/reset-and-rescan: 无法解析 library {library_id} 的路径")
         raise HTTPException(status_code=400, detail=f"无法解析 library {library_id} 的路径")
+
+    if dry_run:
+        with SessionLocal() as db:
+            would_delete = db.query(AdultItem).filter(cond).count()
+        return {
+            "ok": True,
+            "dry_run": True,
+            "deleted": 0,
+            "would_delete": would_delete,
+            "library_id": library_id,
+            "task_id": None,
+            "message": f"测试模式：将清空 {would_delete} 条记录，未实际执行",
+        }
 
     # 1. 清表（仅该库范围）
     with SessionLocal() as db:
@@ -953,6 +971,7 @@ def scrape_one(
     return {"task_id": task.id, "status": "started"}
 
 
+@cancellable_task
 def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, download_cover: bool):
     """
     批量刮削。**关键约束**：每条 item 一个短事务，HTTP 慢请求期间不持有 DB 连接。
@@ -2135,12 +2154,15 @@ def rescrape_one_item(item_id: int):
 def repair_covers(
     background_tasks: BackgroundTasks,
     library_id: Optional[str] = None,
+    dry_run: bool = False,
     db: Session = Depends(get_db),
 ):
     """
     扫描并修复封面图：
       条件：item.code IS NOT NULL 且 (poster_path 不存在 OR poster 文件实际不存在)
       仅对那些有 cover_url 的条目重新下载（cover_url 空的就跳过 —— 那是没刮过元数据）。
+
+    dry_run=True 时：只算 candidates 数返回，不创建任务、不实际下载。
     """
     query = db.query(AdultItem).filter(AdultItem.code != None)  # noqa: E711
     if library_id:
@@ -2160,13 +2182,17 @@ def repair_covers(
 
     if not candidates:
         # 没东西可修不算错误：返回 200 + count=0，让前端区分"启动了"和"没活儿干"
-        return {"task_id": None, "status": "noop", "count": 0}
+        return {"task_id": None, "status": "noop", "count": 0, "dry_run": dry_run}
+
+    if dry_run:
+        return {"task_id": None, "status": "dry_run", "count": len(candidates), "dry_run": True}
 
     task = create_task(db, "adult_repair_covers", f"修复封面 {len(candidates)} 条")
     background_tasks.add_task(_run_repair_covers, task.id, candidates)
-    return {"task_id": task.id, "status": "started", "count": len(candidates)}
+    return {"task_id": task.id, "status": "started", "count": len(candidates), "dry_run": False}
 
 
+@cancellable_task
 def _run_repair_covers(task_id: int, item_ids: List[int]):
     """重新下载封面到本地（仅刷新 poster_path，不动其它元数据）。"""
     from web.backend.database import SessionLocal
@@ -2238,12 +2264,15 @@ def _run_repair_covers(task_id: int, item_ids: List[int]):
 def repair_metadata(
     background_tasks: BackgroundTasks,
     library_id: Optional[str] = None,
+    dry_run: bool = False,
     db: Session = Depends(get_db),
 ):
     """
     扫描并修复识别/刮削错误：
       包括所有 (recognized 但 source IN (NULL, 'pending', 'not_found')) 即未刮 / 刮失败的条目。
       未识别（code IS NULL）的不处理 —— 那需要用户手动指定番号。
+
+    dry_run=True 时：只算 candidates 数返回，不创建任务、不实际刮削。
     """
     query = db.query(AdultItem).filter(AdultItem.code != None)  # noqa: E711
     if library_id:
@@ -2269,11 +2298,14 @@ def repair_metadata(
     candidates = [i.id for i in query.all()]
 
     if not candidates:
-        return {"task_id": None, "status": "noop", "count": 0}
+        return {"task_id": None, "status": "noop", "count": 0, "dry_run": dry_run}
+
+    if dry_run:
+        return {"task_id": None, "status": "dry_run", "count": len(candidates), "dry_run": True}
 
     task = create_task(db, "adult_scrape_batch", f"修复识别 {len(candidates)} 条")
     background_tasks.add_task(run_adult_scrape_batch, task.id, candidates, True, True)
-    return {"task_id": task.id, "status": "started", "count": len(candidates)}
+    return {"task_id": task.id, "status": "started", "count": len(candidates), "dry_run": False}
 
 
 # ============================================================================

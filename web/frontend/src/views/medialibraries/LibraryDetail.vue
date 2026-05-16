@@ -147,6 +147,14 @@
             <el-icon v-if="filterMissingTmdb" class="filter-check"><Check /></el-icon>
             缺 TMDB
           </button>
+          <button
+            :class="['sort-chip', 'filter-chip', { active: filterMissingSubtitle }]"
+            :title="filterMissingSubtitle ? '点击取消「缺字幕」过滤' : '只看缺字幕的条目（依据最近一次字幕扫描结果）'"
+            @click="filterMissingSubtitle = !filterMissingSubtitle"
+          >
+            <el-icon v-if="filterMissingSubtitle" class="filter-check"><Check /></el-icon>
+            缺字幕
+          </button>
         </div>
 
         <!-- 搜索框 -->
@@ -863,6 +871,7 @@
     <RefreshLibraryDialog
       v-model="showRefreshDialog"
       :library-name="library?.name"
+      :selected-count="selectedItems.length"
       :loading="refreshing"
       @confirm="onRefreshConfirm"
     />
@@ -1135,6 +1144,8 @@ const sortDir = ref('asc') // 'asc' | 'desc'
 // 派生字段 filter（jellyfin 不知道，后端拉全量 + 内存过滤；5min 缓存）
 const filterHasHealthIssue = ref(false)
 const filterMissingTmdb = ref(false)
+// 缺字幕 filter：依据最近一次 subtitle_scan 任务结果，逻辑与"字幕覆盖"统计同源
+const filterMissingSubtitle = ref(false)
 
 // 切到不同字段时给个合理默认方向（找高分时降序更顺手）
 const _defaultDir = (field) =>
@@ -1447,9 +1458,27 @@ const formatTotalRuntime = (minutes) => {
 }
 
 // 字幕语言代码 → 显示文本（短）+ tag 风格颜色
+// 输入按 jellyfin/MediaStreams 的 ISO 639-2/T 小写代码，全部走中文短名
 const _SUB_LANG_LABEL = {
-  chs: '简', cht: '繁', eng: 'EN', jpn: '日',
-  kor: '韩', fre: '法', ger: '德', spa: '西', rus: '俄', ita: '意',
+  // 常见
+  chs: '简', cht: '繁', eng: 'EN', jpn: '日', kor: '韩',
+  // 拉丁/欧洲主流
+  fre: '法', fra: '法',
+  ger: '德', deu: '德',
+  spa: '西', ita: '意', rus: '俄', por: '葡',
+  // 北欧 / 北海
+  dan: '丹', swe: '瑞', nob: '挪', nor: '挪', fin: '芬', nld: '荷', dut: '荷',
+  // 中东欧
+  ces: '捷', cze: '捷', pol: '波', hun: '匈', ron: '罗', rum: '罗',
+  hrv: '克', srp: '塞', slv: '斯洛文', slk: '斯洛伐',
+  // 地中海 / 中东
+  ell: '希', gre: '希', tur: '土', heb: '希伯',
+  ara: '阿拉伯', ukr: '乌',
+  // 东南亚 / 南亚
+  tha: '泰', vie: '越', ind: '印尼', msa: '马来', may: '马来',
+  hin: '印地', ben: '孟加拉',
+  // 其它
+  yue: '粤', cmn: '简',
   und: '未知',  // jellyfin 给 Language=und 时的友好显示
 }
 const _SUB_LANG_TAG_TYPE = {
@@ -1460,8 +1489,11 @@ const _SUB_LANG_TAG_TYPE = {
   kor: 'info',
   und: 'info',        // 未知 → 灰
 }
-const subLangLabel = (code) => _SUB_LANG_LABEL[code] || (code || '').toUpperCase().slice(0, 4)
-const subLangTagType = (code) => _SUB_LANG_TAG_TYPE[code] || 'info'
+const subLangLabel = (code) => {
+  const k = (code || '').toLowerCase()
+  return _SUB_LANG_LABEL[k] || k.toUpperCase().slice(0, 4)
+}
+const subLangTagType = (code) => _SUB_LANG_TAG_TYPE[(code || '').toLowerCase()] || 'info'
 
 // 字幕下载 dialog 状态
 const showSubDownloadDialog = ref(false)
@@ -1846,29 +1878,27 @@ const loadAll = async () => {
 }
 
 /**
- * 页头"强制刷新"按钮：刷新本页所有数据，旁路所有缓存
- *   - 后端 seasons/episodes/aggregates 1h 缓存（清零）
- *   - 库信息 / 库统计 (force=true 跳过 2h 缓存)
- *   - 字幕扫描复用窗口 (force=true 启新扫描)
- *   - 顶层条目列表（替换 items 数组 → el-table tree state 一并重置）
+ * 页头"强制刷新"按钮：旁路所有缓存 + F5 当前页面
+ *   1. 服务端缓存预清（先 await，让 reload 后默认拉取就是 fresh 数据）：
+ *      - seasons / episodes / aggregates 内存缓存（清零）
+ *      - 库统计 KV (force=true 让后端 invalidate + 重算)
+ *      - 字幕扫描 (force=true 启新 subtitle_scan 任务，reload 后 mount 会接力轮询)
+ *   2. 字幕轮询停掉，避免 reload 前最后一刻的状态干扰
+ *   3. window.location.reload() —— 前端所有 Vue 状态（selection / expanded / wanted /
+ *      滚动位置 / 字幕统计 / 缓存的 children）全部清零，从挂载流程重新拉
  */
 const forceRefresh = async () => {
-  // 1. 清后端 seasons/episodes/aggregates 缓存
-  try {
-    await jellyfinApi.clearChildrenCache()
-  } catch (e) {
-    console.warn('清空 children 缓存失败', e)
-  }
-  // 2. 字幕扫描状态：停掉轮询 + 清掉旧值
   stopSubtitlePoll()
-  subtitleStats.value = null
-  // 3. 重新拉所有数据
-  await loadLibrary()
-  loadStats(true)
+  const tasks = [
+    jellyfinApi.clearChildrenCache(),
+    loadStats(true),
+  ]
   if (visibleStats.value.subtitle) {
-    loadSubtitleStats(true)
+    tasks.push(loadSubtitleStats(true))
   }
-  loadItems()
+  // 全部 settled 后再 reload —— 失败也不阻塞 F5（最坏情况是部分数据走缓存，比卡住强）
+  await Promise.allSettled(tasks)
+  window.location.reload()
 }
 
 const loadLibrary = async () => {
@@ -1942,6 +1972,10 @@ const loadItems = async () => {
     itemsTotal.value = res.data.total || 0
     nextStartIndex.value = newItems.length
     hasMore.value = newItems.length >= FETCH_BATCH && nextStartIndex.value < itemsTotal.value
+    // 缺字幕过滤但还没有扫描结果：提示用户先跑一次扫描
+    if (res.data.missing_subtitle_unavailable) {
+      ElMessage.warning('还没有可用的字幕扫描结果，请先在工具栏运行"扫描字幕缺失"')
+    }
     _fireBatchEnrichments()
   } catch (e) {
     ElMessage.error('加载内容失败: ' + (e.response?.data?.detail || e.message))
@@ -2117,6 +2151,9 @@ const _buildItemsParams = (start, limit) => {
   }
   if (filterMissingTmdb.value) {
     params.missing_tmdb = true
+  }
+  if (filterMissingSubtitle.value) {
+    params.missing_subtitle = true
   }
   return params
 }
@@ -2567,11 +2604,37 @@ const deleteOthersInGroup = async (group, idx) => {
 const onRefreshConfirm = async (mode) => {
   refreshing.value = true
   try {
-    await jellyfinApi.refreshLibrary(id.value, mode)
-    ElMessage.success({
-      message: `已通知 Jellyfin 刷新（模式：${MODE_LABELS[mode]}）`,
-      duration: 4000,
-    })
+    const picks = selectedItems.value
+    if (picks.length > 0) {
+      // 选中项：逐个调 /Items/{id}/Refresh（jellyfin 同一端点，传 item id 即可，Recursive=true 默认递归）
+      // 并发限制为 4，避免大批选中时一次性轰炸 jellyfin
+      const ids = picks.map(it => it.id).filter(Boolean)
+      let ok = 0
+      let fail = 0
+      const CONCURRENCY = 4
+      for (let i = 0; i < ids.length; i += CONCURRENCY) {
+        const batch = ids.slice(i, i + CONCURRENCY)
+        const results = await Promise.allSettled(batch.map(iid => jellyfinApi.refreshLibrary(iid, mode)))
+        results.forEach(r => r.status === 'fulfilled' ? ok++ : fail++)
+      }
+      if (fail === 0) {
+        ElMessage.success({
+          message: `已通知 Jellyfin 刷新选中的 ${ok} 项（模式：${MODE_LABELS[mode]}）`,
+          duration: 4000,
+        })
+      } else {
+        ElMessage.warning({
+          message: `刷新完成：成功 ${ok} 项，失败 ${fail} 项（模式：${MODE_LABELS[mode]}）`,
+          duration: 5000,
+        })
+      }
+    } else {
+      await jellyfinApi.refreshLibrary(id.value, mode)
+      ElMessage.success({
+        message: `已通知 Jellyfin 刷新（模式：${MODE_LABELS[mode]}）`,
+        duration: 4000,
+      })
+    }
     showRefreshDialog.value = false
   } catch (e) {
     console.error(e)
@@ -2617,7 +2680,7 @@ watch(() => id.value, async (newId) => {
 // sort / hideFolders / 派生 filter 切换：全部下推到后端 → 触发 reload 重新拉首页
 // 派生字段（health_issue / missing_tmdb）由后端拉全量 + 内存过滤 + 5min 缓存承担，
 // 前端流程跟普通分页一致，无限滚动天然兼容
-watch([sortField, sortDir, hideFolders, filterHasHealthIssue, filterMissingTmdb], () => {
+watch([sortField, sortDir, hideFolders, filterHasHealthIssue, filterMissingTmdb, filterMissingSubtitle], () => {
   loadItems()
 })
 
@@ -3586,9 +3649,9 @@ body:has(.lib-detail-root) .app-main {
   background-color: #fffbeb !important;
 }
 
-// 让选择列的复选框更显眼：边框加粗 + 颜色加深 + 尺寸略大
-// 注意：Element Plus 对勾是 ::after border-rotate 45° 拼出来的，box 大小变了
-// 必须按比例调 width/height/left/top（默认 3×7 ratio），否则会显得"歪"
+// 让选择列的复选框更显眼：box 放大到 18×18 + 2px 边框 + 紫色高亮
+// 关键：内部可用空间 = 18 - 2×2 = 14×14，正好是 Element Plus 默认 box 大小，
+// 所以钩子 ::after **完全不动**（默认 3×7 / left:4 / top:1 / border:1px），自然居中不歪
 .items-card :deep(.el-table) {
   .el-checkbox__inner {
     width: 18px;
@@ -3596,16 +3659,6 @@ body:has(.lib-detail-root) .app-main {
     border-color: #94a3b8;
     border-width: 2px;
     border-radius: 3px;
-
-    &::after {
-      // 默认值: width 3 / height 7 / left 4 / top 1 / border 1px（14×14 box 用）
-      // 按 18/14 = 1.28 等比放大并对齐 2px 边框
-      border-width: 2px;
-      width: 4px;
-      height: 8px;
-      left: 5px;
-      top: 1px;
-    }
   }
 
   .el-checkbox__input.is-checked .el-checkbox__inner,

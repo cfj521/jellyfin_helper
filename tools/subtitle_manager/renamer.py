@@ -1,9 +1,15 @@
 """
 字幕重命名器
 把目录下的字幕重命名为与视频同名（带语言后缀）：
-    movie.mkv  +  sub_chs.srt          → movie.chs.srt
+    movie.mkv  +  sub_chs.srt          → movie.zh-Hans.srt
     movie.mkv  +  movie.srt（裸名）    → movie.{detected}.srt
                                           ↑ 用前 5 条 cue 内容识别语言
+
+落盘约定：内部识别用 chs/cht/eng/jpn/kor，写盘时通过
+common.lang_utils.internal_to_filename_token 映射成 Jellyfin 认得的 BCP 47：
+    chs → zh-Hans / cht → zh-Hant / eng → eng / jpn → jpn / kor → kor
+旧 .chs.srt / .cht.srt 仍能被回读识别（向后兼容）。
+
 .sup（蓝光图形字幕）无法读字符；裸名 .sup 没法识别 → 仅在文件名带语言后缀时才会被改名
 """
 import logging
@@ -13,6 +19,7 @@ from typing import List, Tuple, Optional, Dict
 
 from .scanner import VIDEO_EXTS, SUB_EXTS, LANG_CODES, episodes_match
 from .lang_detect import detect_subtitle_language
+from common.lang_utils import internal_to_filename_token
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +120,8 @@ class SubtitleRenamer:
         final_lang = self.resolve_lang(subtitle, force_lang=lang)
 
         if final_lang:
-            new_name = f"{video_stem}.{final_lang}{sub_ext}"
+            # 写盘用 BCP 47（chs → zh-Hans / cht → zh-Hant），让 Jellyfin 显示成"简体中文/繁体中文"
+            new_name = f"{video_stem}.{internal_to_filename_token(final_lang)}{sub_ext}"
         else:
             new_name = f"{video_stem}{sub_ext}"
 
@@ -151,7 +159,7 @@ class SubtitleRenamer:
             final_lang = self.resolve_lang(sub, force_lang=lang)
 
             if final_lang:
-                new_name = f"{video_stem}.{final_lang}{sub_ext}"
+                new_name = f"{video_stem}.{internal_to_filename_token(final_lang)}{sub_ext}"
             else:
                 new_name = f"{video_stem}{sub_ext}"
 

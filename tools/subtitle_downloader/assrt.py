@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 # 也常见组合 "chs,eng"（双语字幕）
 _LANG_NORMALIZE = {
     'chs': 'chs', 'gb': 'chs', 'simplified': 'chs', 'zh': 'chs', 'zh-cn': 'chs', 'zh_cn': 'chs',
+    'zh-hans': 'chs', 'zh_hans': 'chs',         # BCP 47 简体（新落盘格式回读）
     'cht': 'cht', 'big5': 'cht', 'traditional': 'cht', 'zh-tw': 'cht', 'zh_tw': 'cht',
+    'zh-hant': 'cht', 'zh_hant': 'cht',         # BCP 47 繁体（新落盘格式回读）
     'eng': 'eng', 'en': 'eng', 'english': 'eng',
     'jpn': 'jpn', 'jap': 'jpn', 'ja': 'jpn', 'japanese': 'jpn',
     'kor': 'kor', 'ko': 'kor', 'korean': 'kor',
@@ -107,13 +109,25 @@ class AssrtClient:
     """
     assrt.net API 客户端。
 
-    自带极简串行限频：每次请求间隔 >= request_delay 秒。
-    多线程共享一个实例时也能保证不超过 20/min。
+    限频：assrt 服务端按 **token + IP 共享** 20 req/min（30900 错误码触发）。
+    实战观察：多个 AssrtClient 实例（auto-fix 任务 / 手动搜索 endpoint / 配额查询）
+    会同时打 API，如果每实例各自一把锁，就会击穿这个上限。
+
+    所以这里把 `_last_call` 和 `_lock` 抬到**类级**：进程内**所有实例共享**
+    同一个串行限频通道，与"全进程 ≤ 20 req/min"严格对齐。
+
+    跨进程多 worker 部署仍可能击穿（不在本类管辖范围）；用 4s 的 default
+    request_delay 留 buffer 缓解。
     """
     BASE_URL = "https://api.assrt.net"
     DEFAULT_TIMEOUT = 15
 
-    def __init__(self, token: str, request_delay: float = 3.0, base_url: Optional[str] = None):
+    # 全进程共享的限频锁 + 上次请求时间戳
+    # 任何 AssrtClient 实例的 _request 都要排队过这道闸
+    _global_last_call: float = 0.0
+    _global_lock = threading.Lock()
+
+    def __init__(self, token: str, request_delay: float = 4.0, base_url: Optional[str] = None):
         if not token:
             raise ValueError("缺少 assrt API token")
         self.token = token
@@ -121,18 +135,21 @@ class AssrtClient:
         self.base_url = (base_url or self.BASE_URL).rstrip('/')
         self.session = requests.Session()
         self.session.headers['User-Agent'] = 'JellyfinTools/1.0'
-        self._last_call = 0.0
-        self._lock = threading.Lock()
 
     # ---- 内部 ----
 
     def _wait_quota(self):
-        """两次请求间最小间隔。"""
-        with self._lock:
-            elapsed = time.monotonic() - self._last_call
+        """全进程串行限频：所有 AssrtClient 实例共用 _global_last_call/_lock。
+
+        request_delay 由调用方实例决定；多实例不同 delay 时取**当前调用方**的，
+        但 last_call 是全局的 —— 实践上配置统一来源 settings.assrt_request_delay
+        不会出现多种 delay。
+        """
+        with AssrtClient._global_lock:
+            elapsed = time.monotonic() - AssrtClient._global_last_call
             if elapsed < self.request_delay:
                 time.sleep(self.request_delay - elapsed)
-            self._last_call = time.monotonic()
+            AssrtClient._global_last_call = time.monotonic()
 
     def _request(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         params = dict(params or {})

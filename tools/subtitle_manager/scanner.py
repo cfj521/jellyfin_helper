@@ -144,7 +144,7 @@ class DirectoryInfo:
     # 完全没任何字幕（既没外挂也没内嵌）的视频数
     videos_with_sub: int = 0
     videos_without_sub: int = 0
-    # 缺所需语言（preferred_langs 任一）的视频数 —— 即使有别的语言字幕也算"缺"
+    # 缺所需语言（required_langs 任一）的视频数 —— 即使有别的语言字幕也算"缺"
     # 这是用户真正关心的"缺字幕"指标
     videos_without_required: int = 0
 
@@ -194,19 +194,20 @@ class SubtitleScanner:
 
     def __init__(
         self,
-        preferred_langs: Optional[List[str]] = None,
+        required_langs: Optional[List[str]] = None,
         probe_embedded: bool = True,
         probe_concurrency: int = 5,
     ):
-        # 把用户配置归一化（兼容 'chs.eng' 这种复合写法 —— 拆开当作两个独立语言）
-        raw_langs: List[str] = preferred_langs or ['chs', 'eng']
+        # required_langs：缺字幕判定的依据（原子单语言）。配置写 'chs.eng' 这种复合也容错，
+        # 拆成两个独立 atomic 语言（语义：要 chs AND eng，缺哪个都缺）
+        raw_langs: List[str] = required_langs or ['chs', 'eng']
         normalized: List[str] = []
         for item in raw_langs:
             for token in item.split('.'):
                 code = normalize_lang_code(token)
                 if code and code not in normalized:
                     normalized.append(code)
-        self.preferred_langs: List[str] = normalized or ['chs', 'eng']
+        self.required_langs: List[str] = normalized or ['chs', 'eng']
 
         self.probe_embedded = probe_embedded
         self.probe_concurrency = max(1, probe_concurrency)
@@ -330,15 +331,20 @@ class SubtitleScanner:
 
     def check_missing_langs(self, video_info: 'VideoInfo') -> List[str]:
         """
-        检查 preferred_langs 中哪些语言在该视频上找不到。
+        检查 required_langs 中哪些语言在该视频上找不到。
         覆盖来源：内嵌字幕轨 + 外挂字幕的 langs 集合。
+
+        zh 覆盖规则：通用中文 'zh'（未指定简繁的字幕，如 .chinese.srt / 内容嗅探不出简繁的）
+        同时算覆盖 chs 和 cht 两个需求，避免让用户既缺简又缺繁。
         """
+        from common.lang_utils import expand_zh_coverage
         covered: Set[str] = set(video_info.embedded_langs or [])
         for s in video_info.subtitles:
             for lc in s.get('langs') or []:
                 covered.add(lc)
+        covered = expand_zh_coverage(covered)
 
-        missing = [lc for lc in self.preferred_langs if lc not in covered]
+        missing = [lc for lc in self.required_langs if lc not in covered]
         return missing
 
     def _probe_embedded_for_videos(self, videos: List[Path]) -> Dict[Path, List[str]]:
@@ -417,7 +423,7 @@ class SubtitleScanner:
                 dir_info.videos_with_sub += 1
             else:
                 dir_info.videos_without_sub += 1
-            # "缺所需语言" = preferred_langs 里任一语言找不到（即使有别的语言字幕也算）
+            # "缺所需语言" = required_langs 里任一语言找不到（即使有别的语言字幕也算）
             # 这是用户真正关心的"缺字幕"指标
             if video_info.missing_langs:
                 dir_info.videos_without_required += 1

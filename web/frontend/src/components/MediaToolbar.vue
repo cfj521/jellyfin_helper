@@ -55,15 +55,19 @@
       append-to-body
     >
       <div class="confirm-scope">{{ scopeLabel }}</div>
-      <div class="confirm-text" v-html="confirmDialog.btn?.confirm?.text || ''" />
+      <div class="confirm-text" v-html="resolvedConfirmText" />
 
-      <div v-if="confirmDialog.btn?.confirm?.supportsDryRun" class="dry-run-row">
+      <!-- 只有当按钮支持 dry-run AND 用户在设置里开了"显示测试模式"开关，才显示 -->
+      <div
+        v-if="confirmDialog.btn?.confirm?.supportsDryRun && showDryRunInToolbar"
+        class="dry-run-row"
+      >
         <el-checkbox v-model="confirmDialog.dryRun" size="large">
           <span class="dry-run-label">测试模式</span>
         </el-checkbox>
         <div class="dry-run-hint">
           {{ confirmDialog.dryRun
-            ? (confirmDialog.btn.confirm.dryRunHint || '仅扫描预览，不实际写入或删除')
+            ? (resolvedDryRunHint || '仅扫描预览，不实际写入或删除')
             : '勾选后仅扫描预览，不实际写入/删除/上传，可用于先看影响面' }}
         </div>
       </div>
@@ -98,7 +102,12 @@
         <el-radio value="jpn">日语 (Japanese)</el-radio>
       </el-radio-group>
 
-      <div class="dry-run-row">
+      <div class="audio-exception-tip">
+        <el-icon><InfoFilled /></el-icon>
+        <span>若当前音轨为汉语或无法识别语言则跳过</span>
+      </div>
+
+      <div v-if="showDryRunInToolbar" class="dry-run-row">
         <el-checkbox v-model="audioDryRun" size="large">
           <span class="dry-run-label">测试模式</span>
         </el-checkbox>
@@ -148,9 +157,13 @@
           <el-radio value="yue">汉语（粤语）</el-radio>
           <el-radio value="jpn">日语</el-radio>
         </el-radio-group>
+        <div v-if="runAllAudioLang" class="audio-exception-tip" style="margin-top: 8px">
+          <el-icon><InfoFilled /></el-icon>
+          <span>若当前音轨为汉语或无法识别语言则跳过</span>
+        </div>
       </div>
 
-      <div class="dry-run-row">
+      <div v-if="showDryRunInToolbar" class="dry-run-row">
         <el-checkbox v-model="runAllDryRun" size="large">
           <span class="dry-run-label">测试模式（所有步骤都跑 dry-run）</span>
         </el-checkbox>
@@ -186,15 +199,15 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Picture, User, Document, Download, EditPen, Headset, Operation,
-  Delete, Compass, Aim, MagicStick,
+  Delete, Compass, Aim, MagicStick, InfoFilled,
 } from '@element-plus/icons-vue'
 import {
-  metadataApi, subtitleApi, audioApi, maintenanceApi, taskApi,
+  metadataApi, subtitleApi, audioApi, maintenanceApi, taskApi, configApi,
 } from '@/api'
 
 const props = defineProps({
@@ -213,6 +226,37 @@ const router = useRouter()
 
 const loadingKey = ref(null)
 
+// 字幕下载源列表（从 config 拉），用来动态填充"自动下载字幕"提示文本
+// 显示名映射跟 Settings.vue 一致；只展示 enabled=true 的
+const _SUB_SOURCE_LABEL = {
+  assrt: '射手网 (assrt)',
+  opensubtitles: 'OpenSubtitles',
+  shooter: 'Shooter (hash 匹配)',
+}
+const enabledSubtitleSources = ref([])
+// 调试开关：从 config.debug.show_dry_run_in_toolbar 读，控制确认弹窗里"测试模式"行是否显示
+const showDryRunInToolbar = ref(false)
+onMounted(async () => {
+  try {
+    const res = await configApi.getFull()
+    const cfg = res?.data?.config || {}
+    const sources = cfg.subtitle?.sources || []
+    enabledSubtitleSources.value = sources
+      .filter(s => s.enabled !== false)
+      .map(s => _SUB_SOURCE_LABEL[s.name] || s.name)
+    showDryRunInToolbar.value = !!cfg.debug?.show_dry_run_in_toolbar
+  } catch (e) {
+    console.warn('[MediaToolbar] 读取 config 失败，提示文本 + dry-run 走兜底', e)
+  }
+})
+const subtitleSourcesText = computed(() => {
+  const arr = enabledSubtitleSources.value
+  if (!arr.length) return '已配置的字幕下载源'    // 兜底
+  if (arr.length === 1) return arr[0]
+  if (arr.length === 2) return `${arr[0]} 和 ${arr[1]}`
+  return arr.slice(0, -1).join(' / ') + ' / ' + arr[arr.length - 1]
+})
+
 // 通用确认对话框（替代 ElMessageBox，因为要塞 dry-run 复选框）
 const confirmDialog = reactive({
   visible: false,
@@ -220,6 +264,22 @@ const confirmDialog = reactive({
   dryRun: false,
 })
 let confirmResolver = null
+
+// 动态确认文本：对 subtitle-auto-fix 这类涉及外部源的按钮，替换占位符为当前配置的源列表；
+// 其余按钮原样返回 btn.confirm.text
+const _SOURCE_PLACEHOLDER = '{{SUB_SOURCES}}'
+const resolvedConfirmText = computed(() => {
+  const t = confirmDialog.btn?.confirm?.text || ''
+  return t.includes(_SOURCE_PLACEHOLDER)
+    ? t.replaceAll(_SOURCE_PLACEHOLDER, subtitleSourcesText.value)
+    : t
+})
+const resolvedDryRunHint = computed(() => {
+  const t = confirmDialog.btn?.confirm?.dryRunHint || ''
+  return t.includes(_SOURCE_PLACEHOLDER)
+    ? t.replaceAll(_SOURCE_PLACEHOLDER, subtitleSourcesText.value)
+    : t
+})
 
 // 音轨独立对话框
 const audioDialogVisible = ref(false)
@@ -374,7 +434,27 @@ const buttonDefs = [
     }),
   },
 
-  // ── 字幕 ──
+  // ── 字幕（顺序：对齐 → 扫描 → 下载；对齐先做，避免已有字幕被误判为"缺失"）──
+  {
+    key: 'subtitle-rename',
+    label: '字幕文件名对齐',
+    icon: EditPen,
+    taskTypes: ['subtitle_rename'],
+    supports: ['all', 'library', 'items'],
+    confirm: {
+      level: 'warning',
+      text: '将扫描范围内同目录的字幕文件，对未对齐媒体文件名的字幕进行重命名（仅改字幕名，不动视频）。',
+      supportsDryRun: true,
+      dryRunHint: '仅扫描并显示将要重命名的字幕清单，不实际改名',
+    },
+    handler: ({ dryRun = false } = {}) => subtitleApi.rename(null, {
+      // rename 的 execute 与 dryRun 取反
+      execute: !dryRun,
+      // 字幕外挂文件 Jellyfin 是即时发现的，重命名后无需重扫
+      refresh_jellyfin: false,
+      ...buildScopePayload(),
+    }),
+  },
   {
     key: 'subtitle-scan',
     label: '扫描字幕缺失',
@@ -399,34 +479,15 @@ const buttonDefs = [
     supports: ['all', 'library', 'items'],
     confirm: {
       level: 'warning',
-      text: '将扫描范围内的视频，对缺字幕项调用 OpenSubtitles 下载字幕到媒体同目录，并自动对齐文件名。',
+      // {{SUB_SOURCES}} 占位符在 resolvedConfirmText 里替换成当前配置启用的源列表
+      text: '将扫描范围内的视频，对缺字幕项依次调用 {{SUB_SOURCES}} 下载字幕到媒体同目录，并自动对齐文件名。',
       supportsDryRun: true,
-      dryRunHint: '仅扫描并显示将要下载的字幕清单，不实际请求 OpenSubtitles',
+      dryRunHint: '仅扫描并显示将要下载的字幕清单，不实际请求 {{SUB_SOURCES}}',
     },
     handler: ({ dryRun = false } = {}) => subtitleApi.autoFix(null, {
       dry_run: dryRun,
       rename: true,
       // 字幕外挂文件 Jellyfin 是即时发现的，不需要触发整库重扫
-      refresh_jellyfin: false,
-      ...buildScopePayload(),
-    }),
-  },
-  {
-    key: 'subtitle-rename',
-    label: '字幕文件名对齐',
-    icon: EditPen,
-    taskTypes: ['subtitle_rename'],
-    supports: ['all', 'library', 'items'],
-    confirm: {
-      level: 'warning',
-      text: '将扫描范围内同目录的字幕文件，对未对齐媒体文件名的字幕进行重命名（仅改字幕名，不动视频）。',
-      supportsDryRun: true,
-      dryRunHint: '仅扫描并显示将要重命名的字幕清单，不实际改名',
-    },
-    handler: ({ dryRun = false } = {}) => subtitleApi.rename(null, {
-      // rename 的 execute 与 dryRun 取反
-      execute: !dryRun,
-      // 字幕外挂文件 Jellyfin 是即时发现的，重命名后无需重扫
       refresh_jellyfin: false,
       ...buildScopePayload(),
     }),
@@ -661,9 +722,9 @@ const runAllSteps = computed(() => {
     { key: 'auto_identify',       label: '扫描并修复识别错误' },
     { key: 'poster_fix',          label: '扫描并修复缺失海报' },
     { key: 'actor_fix',           label: '扫描并修复演员图片' },
+    { key: 'subtitle_rename',     label: '字幕文件名对齐' },
     { key: 'subtitle_scan',       label: '扫描字幕缺失' },
     { key: 'subtitle_auto_fix',   label: '自动下载字幕' },
-    { key: 'subtitle_rename',     label: '字幕文件名对齐' },
     { key: 'audio_default_track', label: `设置默认音轨${audioOn ? '（' + langDisplay(runAllAudioLang.value) + '）' : ''}`, skip: !audioOn },
   ]
 })
@@ -741,6 +802,13 @@ const confirmRunAll = async () => {
     flex-wrap: wrap;
     gap: 8px;
     align-items: center;
+
+    // 干掉 Element Plus 默认的 .el-button + .el-button { margin-left: 12px }
+    // 已经用 flex gap: 8px 控制间距，多余 margin 会让按钮间距叠加成 20px
+    // 排除 .run-all-btn —— 它要靠 margin-left: auto 推到行尾
+    :deep(.el-button + .el-button:not(.run-all-btn)) {
+      margin-left: 0;
+    }
   }
 
   // 一键修复：自动占据剩余空间靠右
@@ -755,6 +823,27 @@ const confirmRunAll = async () => {
   font-size: 13px;
   color: #64748b;
   line-height: 1.5;
+}
+
+// 切默认音轨的例外说明（提示哪些情况自动跳过，避免用户疑惑"为啥这几个没改"）
+.audio-exception-tip {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-left: 3px solid #6366f1;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.5;
+
+  .el-icon {
+    color: #6366f1;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
 }
 
 // ── 通用确认对话框 ──

@@ -78,7 +78,13 @@
           >
             <el-icon><ArrowDown /></el-icon>
           </el-button>
-          <el-button size="small" type="danger" @click="remove(idx)" title="移出">
+          <el-button
+            size="small"
+            type="danger"
+            :disabled="atMin"
+            @click="remove(idx)"
+            :title="atMin ? `至少保留 ${minItems} 项，不能再移出` : '移出'"
+          >
             <el-icon><Delete /></el-icon>
           </el-button>
         </el-button-group>
@@ -88,7 +94,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Plus, Check, Delete, ArrowUp, ArrowDown, Rank } from '@element-plus/icons-vue'
 
 const props = defineProps({
@@ -102,8 +108,13 @@ const props = defineProps({
   allowBaseUrl: { type: Boolean, default: false },
   /** key → 默认 base_url 提示 */
   defaultBaseUrls: { type: Object, default: () => ({}) },
+  /** 至少保留 N 项（< minItems 时删除按钮禁用，避免空集合）。默认 0 = 无约束 */
+  minItems: { type: Number, default: 0 },
 })
 const emit = defineEmits(['update:modelValue'])
+
+// 是否已经到达 minItems 下限（再删就空了 / 低于约束）
+const atMin = computed(() => props.modelValue.length <= props.minItems)
 
 // 拖拽状态
 const draggingIdx = ref(-1)

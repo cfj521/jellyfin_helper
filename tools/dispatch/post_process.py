@@ -88,12 +88,15 @@ def post_process_subtitle_align(
 
 def post_process_subtitle(
     dispatched_files: List[str],
-    preferred_langs: Optional[List[str]] = None,
+    required_langs: Optional[List[str]] = None,
+    downloading_langs: Optional[List[str]] = None,
     progress_cb: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[str, Dict]:
     """
     字幕处理：扫描 + 下载 + 重命名对齐。失败仅警告，不阻断。
 
+    required_langs：判定"缺字幕"的依据（None → settings.required_langs）。
+    downloading_langs：自动下载时的语言优先级（None → settings.downloading_langs）。
     返回 (status, info) 其中 status ∈ {'ok', 'warned', 'skipped'}。
     """
     if not dispatched_files:
@@ -106,16 +109,19 @@ def post_process_subtitle(
         logger.warning(f"字幕模块 import 失败（不阻断）: {e}")
         return ('warned', {'error': str(e)})
 
-    langs = preferred_langs or _settings.preferred_langs
+    req = required_langs or _settings.required_langs
+    dl  = downloading_langs or _settings.downloading_langs
     logger.info(
-        f"post_process_subtitle: 处理 {len(dispatched_files)} 个文件 langs={langs}"
+        f"post_process_subtitle: 处理 {len(dispatched_files)} 个文件 "
+        f"required={req} downloading={dl}"
     )
 
     try:
         result = run_subtitle_auto_fix_inline(
             paths=dispatched_files,
             recursive=False,
-            expected_langs=langs,
+            required_langs=req,
+            downloading_langs=dl,
             dry_run=False,
             do_rename=True,
             refresh_library_ids=[],   # 主 pipeline 已 refresh
@@ -124,9 +130,9 @@ def post_process_subtitle(
         if result.get('error'):
             logger.warning(f"post_process_subtitle: error={result['error']}")
             return ('warned', {'error': result['error']})
-        dl = result.get('download') or {}
-        success = dl.get('success', 0)
-        failed = dl.get('failed', 0)
+        dl_stats = result.get('download') or {}
+        success = dl_stats.get('success', 0)
+        failed = dl_stats.get('failed', 0)
         if failed > 0:
             logger.warning(
                 f"post_process_subtitle: 部分下载失败 success={success} failed={failed}"
