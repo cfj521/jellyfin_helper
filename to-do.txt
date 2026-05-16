@@ -3,10 +3,6 @@
 
 考虑涉及到的应用都整体打包为docker
 
-ok，还有2件事儿，gateway vm有我的个人网站，部署在/data/home_web，
-我想把192.168.89.4:3000 暴露在index卡片
-把
-
 $ENV:ANTHROPIC_MODEL="qwen/qwen3.6-27b"
 $ENV:ANTHROPIC_API_KEY="sk-lm-YwRn0DEy:5S2aYjbOLLKwrT7qjg7L"
 $ENV:ANTHROPIC_BASE_URL="http://localhost:1234"
