@@ -2,11 +2,9 @@
 配置管理 API
 读取/写入 config.yaml，支持热加载。
 """
-import shutil
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import yaml
 from fastapi import APIRouter, HTTPException
@@ -19,8 +17,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 CONFIG_PATH = ROOT_DIR / "config.yaml"
-BACKUP_DIR = ROOT_DIR / "data" / "config_backups"
-BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 # 已不再脱敏——根据用户要求，配置页面直接显示原值
 # 这意味着 GET /api/config/full 返回的 dict 包含真实的 API Key / 密码
@@ -40,31 +36,10 @@ def _load_yaml() -> Dict[str, Any]:
 
 
 def _save_yaml(data: Dict[str, Any]) -> Path:
-    """写入 config.yaml，先备份原文件。"""
-    backup_path: Optional[Path] = None
-    if CONFIG_PATH.exists():
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_path = BACKUP_DIR / f"config_{ts}.yaml"
-        shutil.copy2(CONFIG_PATH, backup_path)
-        # 只保留最近 20 份
-        backups = sorted(BACKUP_DIR.glob("config_*.yaml"), reverse=True)
-        removed = []
-        for old in backups[20:]:
-            try:
-                old.unlink(missing_ok=True)
-                removed.append(old.name)
-            except Exception:
-                pass
-        if removed:
-            logger.info(f"config 备份清理: 删除 {len(removed)} 份旧备份（保留近 20 份）")
-
+    """写入 config.yaml（私人仓库，配置由 git 管理，不再本地备份）。"""
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, indent=2)
-
-    logger.info(
-        f"config 写入: {CONFIG_PATH}"
-        + (f"（已备份至 {backup_path.name}）" if backup_path else "（无原文件，首次写入）")
-    )
+    logger.info(f"config 写入: {CONFIG_PATH}")
     return CONFIG_PATH
 
 
@@ -177,18 +152,3 @@ def update_full_config(payload: ConfigPayload):
         raise HTTPException(status_code=500, detail=f"保存失败: {e}")
 
 
-@router.get("/config/backups")
-def list_backups():
-    """列出配置备份文件"""
-    backups: List[Dict] = []
-    for p in sorted(BACKUP_DIR.glob("config_*.yaml"), reverse=True):
-        try:
-            stat = p.stat()
-            backups.append({
-                "name": p.name,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            })
-        except OSError:
-            continue
-    return {"backups": backups}

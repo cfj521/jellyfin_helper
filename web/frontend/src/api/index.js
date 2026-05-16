@@ -477,7 +477,6 @@ export const configApi = {
   get: () => api.get('/api/config'),
   getFull: () => api.get('/api/config/full'),
   saveFull: (data) => api.put('/api/config/full', { data }),
-  getBackups: () => api.get('/api/config/backups'),
 }
 
 // 统计相关 API
