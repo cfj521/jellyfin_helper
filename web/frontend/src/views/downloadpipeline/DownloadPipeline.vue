@@ -879,6 +879,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Refresh, Link, ArrowDown, Brush, Setting, Moon, Plus, Warning, Close, Download, MagicStick, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { discoverApi, configApi, dispatchApi } from '@/api'
+import { useNetwork } from '@/composables/useNetwork'
 import AddTorrentDialog from '@/components/AddTorrentDialog.vue'
 import dayjs from 'dayjs'
 
@@ -1889,11 +1890,15 @@ const formatAddedOn = (epoch) => {
   return d.toLocaleDateString() + ' ' + d.toLocaleTimeString().slice(0, 5)
 }
 
+const { isLan } = useNetwork()
+
 const loadQbitUrl = async () => {
   try {
     const r = await configApi.getFull()
-    const host = r.data?.config?.qbittorrent?.host
-    if (host) qbitUrl.value = String(host).replace(/\/$/, '') + '/'
+    const qb = r.data?.config?.qbittorrent || {}
+    // 内网访问用 host，公网访问用 external_url（没配则不显示）
+    const url = isLan ? (qb.external_url || qb.host) : qb.external_url
+    if (url) qbitUrl.value = String(url).replace(/\/$/, '') + '/'
   } catch {}
 }
 

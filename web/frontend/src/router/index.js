@@ -2,6 +2,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { title: '登录', public: true }
+  },
+  {
     path: '/',
     redirect: '/medialibraries',
   },
@@ -108,6 +114,13 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to) => {
+  if (to.meta.public) return true
+  const token = localStorage.getItem('token')
+  if (!token) return { name: 'Login', query: { redirect: to.fullPath } }
+  return true
 })
 
 export default router

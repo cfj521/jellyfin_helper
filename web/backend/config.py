@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # 可通过环境变量 JF_CORS_ORIGINS='["http://x","http://y"]' 收紧
     cors_origins: List[str] = ["*"]
 
+    # 认证
+    auth_secret_key: str = (_yaml_config.get('auth') or {}).get('secret_key', 'change-me-to-a-random-string')
+    auth_token_expire_hours: int = (_yaml_config.get('auth') or {}).get('token_expire_hours', 72)
+    auth_users: List[dict] = (_yaml_config.get('auth') or {}).get('users') or []
+
     # 服务端口（环境变量 JF_BACKEND_PORT / JF_FRONTEND_PORT 优先于 yaml）
     backend_port: int = _yaml_config.get('server', {}).get('backend_port', 8000)
     frontend_port: int = _yaml_config.get('server', {}).get('frontend_port', 5173)
@@ -78,6 +83,7 @@ class Settings(BaseSettings):
 
     # Jellyfin 配置
     jellyfin_host: str = _yaml_config.get('jellyfin', {}).get('host', 'http://localhost:8096')
+    jellyfin_external_url: str = _yaml_config.get('jellyfin', {}).get('external_url', '')
     jellyfin_api_key: str = _yaml_config.get('jellyfin', {}).get('api_key', '')
     # jellyfin SQLite 数据库文件本地可达路径（Ubuntu 部署默认 /var/lib/jellyfin/data/jellyfin.db）。
     # 跨主机部署时填 SMB 挂载的本地路径（如 W:/jellyfin/jellyfin.db）。
