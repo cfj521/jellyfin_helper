@@ -488,8 +488,9 @@
   color: var(--jt-brand);
 }
 
-// ============ Popover / Tooltip / Dropdown ============
-.el-popper,
+// ============ Dropdown / Select Popper ============
+// 排除 .is-dark（tooltip 默认深色），只覆盖下拉/弹出面板
+.el-popper:not(.is-dark),
 .el-dropdown-menu {
   background-color: var(--jt-card-bg) !important;
   border-color: var(--jt-card-border) !important;
