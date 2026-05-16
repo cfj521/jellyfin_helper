@@ -1482,9 +1482,14 @@ const reidentifyInReview = async () => {
     if (ident.title) reviewForm.title = ident.title
     if (ident.year) reviewForm.year = ident.year
     if (ident.series_name) reviewForm.series_name = ident.series_name
-    // 目标：跑出来的库 / 路径回填到 manual 字段，方便用户切到 manual 模式直接用
+    // 目标：回填到 manual 字段 + 同步更新 auto 模式的预览显示
     if (target.target_library_id) reviewForm.target_library_id = target.target_library_id
     if (target.target_path) reviewForm.target_path = target.target_path
+    // auto 模式的"目标库""目标路径"读自 reviewTarget.dispatch，需要同步刷新
+    if (reviewTarget.value?.dispatch) {
+      if (target.library_name) reviewTarget.value.dispatch.target_library_name = target.library_name
+      if (target.target_path) reviewTarget.value.dispatch.target_path = target.target_path
+    }
     const conf = ident.confidence
     ElMessage.success(
       `识别结果：${ident.media_type || '?'} / ${ident.title || '?'} `
