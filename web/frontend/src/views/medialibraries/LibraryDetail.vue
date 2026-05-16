@@ -2729,7 +2729,7 @@ body:has(.lib-detail-root) .app-main {
       gap: 8px;
 
       .lib-icon {
-        color: #6366f1;
+        color: var(--jt-brand);
       }
     }
   }
@@ -2768,7 +2768,7 @@ body:has(.lib-detail-root) .app-main {
 
 .cache-hint {
   margin-left: 6px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   font-size: 12px;
   font-weight: normal;
 }
@@ -2787,7 +2787,7 @@ body:has(.lib-detail-root) .app-main {
       gap: 6px;
       padding: 2px 0;
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
       line-height: 1.6;
       white-space: nowrap;
       overflow: hidden;
@@ -2798,8 +2798,8 @@ body:has(.lib-detail-root) .app-main {
         text-overflow: ellipsis;
       }
 
-      .ok { color: #10b981; }
-      .fail { color: #ef4444; }
+      .ok { color: var(--jt-success); }
+      .fail { color: var(--jt-danger); }
     }
   }
 }
@@ -2832,28 +2832,28 @@ body:has(.lib-detail-root) .app-main {
       justify-content: space-between;
       gap: 8px;
       padding: 8px 12px;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
+      background: var(--jt-fill-light);
+      border: 1px solid var(--jt-card-border);
       border-radius: 6px;
       transition: border-color 0.15s, transform 0.15s;
 
       &:hover {
-        border-color: #c7d2fe;
+        border-color: var(--jt-brand-light-7);
         transform: translateY(-1px);
       }
 
       &.warn {
-        border-color: #fca5a5;
-        background: #fef2f2;
+        border-color: var(--jt-danger-border);
+        background: var(--jt-danger-tint);
 
         .stat-value {
-          color: #ef4444;
+          color: var(--jt-danger);
         }
       }
 
       .stat-label {
         font-size: 12px;
-        color: #64748b;
+        color: var(--jt-text-secondary);
         line-height: 1.2;
         white-space: nowrap;
         flex-shrink: 0;
@@ -2862,7 +2862,7 @@ body:has(.lib-detail-root) .app-main {
       .stat-value {
         font-size: 18px;
         font-weight: 700;
-        color: #0f172a;
+        color: var(--jt-text-primary);
         line-height: 1.2;
         text-align: right;
         white-space: nowrap;
@@ -2871,7 +2871,7 @@ body:has(.lib-detail-root) .app-main {
 
         small {
           font-size: 11px;
-          color: #64748b;
+          color: var(--jt-text-secondary);
           margin-left: 1px;
           font-weight: 400;
         }
@@ -2906,8 +2906,8 @@ body:has(.lib-detail-root) .app-main {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: #fff;
-  border: 1px solid var(--el-card-border-color, #e4e7ed);
+  background: var(--jt-card-bg);
+  border: 1px solid var(--el-card-border-color, var(--jt-card-border));
   border-radius: var(--el-card-border-radius, 4px) var(--el-card-border-radius, 4px) 0 0;
   padding: 12px 20px;
   margin-bottom: 0;
@@ -2921,11 +2921,11 @@ body:has(.lib-detail-root) .app-main {
 
     .switch-label {
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
     }
 
     .hint-icon {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       cursor: help;
       font-size: 14px;
     }
@@ -2940,7 +2940,7 @@ body:has(.lib-detail-root) .app-main {
 
     .sort-label {
       font-size: 13px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       margin-right: 4px;
     }
 
@@ -2950,21 +2950,21 @@ body:has(.lib-detail-root) .app-main {
       gap: 2px;
       padding: 4px 10px;
       font-size: 12px;
-      color: #475569;
+      color: var(--jt-text-regular);
       background: transparent;
-      border: 1px solid #e2e8f0;
+      border: 1px solid var(--jt-card-border);
       border-radius: 14px;
       cursor: pointer;
       transition: all 0.15s;
 
       &:hover {
-        border-color: #c7d2fe;
-        color: #4f46e5;
+        border-color: var(--jt-brand-light-7);
+        color: var(--jt-brand-dark);
       }
 
       &.active {
-        background: #6366f1;
-        border-color: #6366f1;
+        background: var(--jt-brand);
+        border-color: var(--jt-brand);
         color: #fff;
         font-weight: 500;
 
@@ -2973,11 +2973,10 @@ body:has(.lib-detail-root) .app-main {
         }
       }
 
-      // filter-chip：跟 sort-chip 同款胶囊形，激活态琥珀色（过滤器开启状态区分）
       &.filter-chip {
         &.active {
-          background: #f59e0b;
-          border-color: #f59e0b;
+          background: var(--jt-warning);
+          border-color: var(--jt-warning);
           color: #fff;
         }
         .filter-check {
@@ -2987,9 +2986,8 @@ body:has(.lib-detail-root) .app-main {
       }
     }
 
-    // sort chip 和 filter chip 之间的分隔点
     .filter-divider {
-      color: #cbd5e1;
+      color: var(--jt-text-muted);
       margin: 0 2px;
       user-select: none;
     }
@@ -3044,9 +3042,9 @@ body:has(.lib-detail-root) .app-main {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #f1f5f9;
+      background: var(--jt-divider-light);
       border-radius: 3px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-size: 11px;
     }
   }
@@ -3080,7 +3078,7 @@ body:has(.lib-detail-root) .app-main {
     transition: color 0.15s;
 
     &:hover {
-      color: #1d9e75;
+      color: var(--jt-brand);
       text-decoration: underline;
     }
   }
@@ -3091,16 +3089,15 @@ body:has(.lib-detail-root) .app-main {
     font-weight: 500;
   }
 
-  // 演员图：不完整 → 红色加粗，完整 → 正常
   .actor-incomplete {
-    color: #ef4444;
+    color: var(--jt-danger);
     font-weight: 600;
   }
   .actor-ok {
-    color: #16a34a;
+    color: var(--jt-success);
     font-weight: 500;
   }
-  .muted { color: #94a3b8; }
+  .muted { color: var(--jt-text-muted); }
 
   // 统计卡设置 popover：checkbox 列表
   :deep(.stats-toggle-list) {
@@ -3110,7 +3107,7 @@ body:has(.lib-detail-root) .app-main {
   }
   :deep(.stats-toggle-title) {
     font-size: 12px;
-    color: #909399;
+    color: var(--jt-text-muted);
     margin-bottom: 4px;
   }
 
@@ -3123,18 +3120,17 @@ body:has(.lib-detail-root) .app-main {
 
     .count-sub {
       font-size: 12px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
     }
   }
 
-  // 评分：统一星标颜色，不分档
   .rating {
     display: inline-flex;
     align-items: center;
     gap: 3px;
     font-weight: 600;
     font-size: 13px;
-    color: #f59e0b;  // 金黄色（star 的语义色）
+    color: var(--jt-warning);
 
     .el-icon { font-size: 12px; }
   }
@@ -3171,17 +3167,16 @@ body:has(.lib-detail-root) .app-main {
     padding-left: 16px;
   }
   :deep(.row-content .hdr-spacer) { width: 22px; }
-  :deep(.row-content .hdr-label) { font-weight: 500; color: #303133; }
+  :deep(.row-content .hdr-label) { font-weight: 500; color: var(--jt-text-primary); }
   :deep(.row-content .hdr-label--title) { margin-left: 88px; }
 
-  // chevron：22×22 绿色圆按钮，▼ 由 ::before 画
   :deep(.row-chevron) {
     flex-shrink: 0;
     width: 22px;
     height: 22px;
     border-radius: 50%;
     border: none;
-    background: #1d9e75;
+    background: var(--jt-success);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -3189,7 +3184,6 @@ body:has(.lib-detail-root) .app-main {
     transition: transform 0.25s ease, background 0.2s;
     padding: 0;
   }
-  // 默认（折叠态）：▶ 指右 —— 用 border-left 染色画右指三角
   :deep(.row-chevron::before) {
     content: '';
     width: 0;
@@ -3197,9 +3191,9 @@ body:has(.lib-detail-root) .app-main {
     border-top: 5px solid transparent;
     border-bottom: 5px solid transparent;
     border-left: 6px solid #fff;
-    margin-left: 2px;  // 视觉居中微调（三角偏左 1-2px 看着才居中）
+    margin-left: 2px;
   }
-  :deep(.row-chevron:hover) { background: #0f6e56; }
+  :deep(.row-chevron:hover) { background: var(--jt-brand-dark); }
   // 展开态：旋转 90° 顺时针 → ▼ 指下
   :deep(.row-chevron--expanded) { transform: rotate(90deg); }
 
@@ -3238,7 +3232,7 @@ body:has(.lib-detail-root) .app-main {
     }
     .sub-lang-more {
       font-size: 12px;
-      color: #6366f1;
+      color: var(--jt-brand);
       cursor: help;
       padding: 0 4px;
     }
@@ -3264,7 +3258,7 @@ body:has(.lib-detail-root) .app-main {
     }
     .genre-more {
       font-size: 12px;
-      color: #6366f1;
+      color: var(--jt-brand);
       cursor: help;
       padding: 0 4px;
     }
@@ -3281,24 +3275,23 @@ body:has(.lib-detail-root) .app-main {
     line-height: 14px;
     border: 1px solid;
 
-    &.sub-cov-good { color: #166534; border-color: #86efac; background: #f0fdf4; }
-    &.sub-cov-warn { color: #b45309; border-color: #fcd34d; background: #fffbeb; }
-    &.sub-cov-bad  { color: #b91c1c; border-color: #fca5a5; background: #fef2f2; }
+    &.sub-cov-good { color: var(--jt-success-text); border-color: var(--jt-success-border); background: var(--jt-success-tint); }
+    &.sub-cov-warn { color: var(--jt-warning-text); border-color: var(--jt-warning-border); background: var(--jt-warning-tint); }
+    &.sub-cov-bad  { color: var(--jt-danger-text); border-color: var(--jt-danger-border); background: var(--jt-danger-tint); }
   }
 
-  // TMDB 详情页链接
   .tmdb-link {
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    color: #0ea5e9;
+    color: var(--jt-link);
     text-decoration: none;
     font-size: 12px;
     font-family: ui-monospace, monospace;
     transition: color 0.15s;
 
     &:hover {
-      color: #0284c7;
+      color: var(--jt-link-hover);
       text-decoration: underline;
     }
 
@@ -3329,8 +3322,8 @@ body:has(.lib-detail-root) .app-main {
     width: $grid-card-w;
     display: flex;
     flex-direction: column;
-    background: #fff;
-    border: 1px solid #f1f5f9;
+    background: var(--jt-card-bg);
+    border: 1px solid var(--jt-divider-light);
     border-radius: 8px;
     overflow: hidden;
     cursor: pointer;
@@ -3352,7 +3345,7 @@ body:has(.lib-detail-root) .app-main {
       &:hover { transform: none; box-shadow: none; }
 
       .sk-block, .sk-line {
-        background: linear-gradient(90deg, #eef2f6 0%, #f7f9fb 50%, #eef2f6 100%);
+        background: linear-gradient(90deg, var(--jt-skeleton-from) 0%, var(--jt-skeleton-to) 50%, var(--jt-skeleton-from) 100%);
         background-size: 800px 100%;
         animation: shimmer 1.4s linear infinite;
         border-radius: 3px;
@@ -3378,9 +3371,9 @@ body:has(.lib-detail-root) .app-main {
   .grid-poster-wrap {
     position: relative;
     width: 100%;
-    height: $grid-poster-h;     // 固定高，不依赖 aspect-ratio
-    flex: 0 0 $grid-poster-h;   // 防止被 flex column 父级压缩 / 拉伸
-    background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+    height: $grid-poster-h;
+    flex: 0 0 $grid-poster-h;
+    background: linear-gradient(135deg, var(--jt-card-border), var(--jt-divider));
   }
   .grid-poster {
     width: 100%;
@@ -3401,7 +3394,7 @@ body:has(.lib-detail-root) .app-main {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 24px;
     font-weight: 600;
-    color: #64748b;
+    color: var(--jt-text-secondary);
   }
   .grid-health-dot {
     position: absolute;
@@ -3412,8 +3405,8 @@ body:has(.lib-detail-root) .app-main {
     border-radius: 50%;
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
 
-    &--error   { background: #ef4444; }
-    &--warning { background: #f59e0b; }
+    &--error   { background: var(--jt-danger); }
+    &--warning { background: var(--jt-warning); }
   }
   // 海报右上角的 jellyfin 评分胶囊（5 角星 + 数字）—— 点击展开多维评分
   .grid-rating {
@@ -3459,14 +3452,14 @@ body:has(.lib-detail-root) .app-main {
   .grid-title {
     font-size: 14px;
     font-weight: 500;
-    color: #1e293b;
+    color: var(--jt-text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .grid-year {
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
 
   // 健康单元格：双行布局（第一行圆点+错误码，第二行刮削按钮）
@@ -3513,38 +3506,37 @@ body:has(.lib-detail-root) .app-main {
     transition: background 0.15s, border-color 0.15s;
 
     &--primary {
-      color: #4f46e5;
-      border-color: #c7d2fe;
-      background: #eef2ff;
+      color: var(--jt-brand-dark);
+      border-color: var(--jt-brand-light-7);
+      background: var(--jt-brand-light-9);
 
       &:hover {
-        background: #6366f1;
-        border-color: #6366f1;
+        background: var(--jt-brand);
+        border-color: var(--jt-brand);
         color: #fff;
       }
     }
 
     &--danger {
-      color: #b91c1c;
-      border-color: #fecaca;
-      background: #fef2f2;
+      color: var(--jt-danger-text);
+      border-color: var(--jt-danger-border);
+      background: var(--jt-danger-tint);
 
       &:hover {
-        background: #ef4444;
-        border-color: #ef4444;
+        background: var(--jt-danger);
+        border-color: var(--jt-danger);
         color: #fff;
       }
     }
 
-    // 中性变体（用于"复制路径"这种非破坏性操作）
     &--ghost {
-      color: #475569;
-      border-color: #e2e8f0;
-      background: #f8fafc;
+      color: var(--jt-text-regular);
+      border-color: var(--jt-card-border);
+      background: var(--jt-fill-light);
 
       &:hover {
-        background: #475569;
-        border-color: #475569;
+        background: var(--jt-text-regular);
+        border-color: var(--jt-text-regular);
         color: #fff;
       }
     }
@@ -3562,7 +3554,7 @@ body:has(.lib-detail-root) .app-main {
       min-width: 0;
       font-family: ui-monospace, monospace;
       font-size: 12px;
-      color: #475569;
+      color: var(--jt-text-regular);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -3572,10 +3564,10 @@ body:has(.lib-detail-root) .app-main {
       flex-shrink: 0;
       padding: 0 4px;
       height: 22px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
 
       &:hover {
-        color: #4f46e5;
+        color: var(--jt-brand-dark);
       }
       .el-icon {
         font-size: 14px;
@@ -3593,19 +3585,18 @@ body:has(.lib-detail-root) .app-main {
       font-size: 11px;
       line-height: 1.5;
       border-radius: 8px;
-      background: #fef2f2;
-      color: #b91c1c;
-      border: 1px solid #fecaca;
+      background: var(--jt-danger-tint);
+      color: var(--jt-danger-text);
+      border: 1px solid var(--jt-danger-border);
       white-space: nowrap;
 
-      // warning 类用橙色
       &.code-short_runtime,
       &.code-sample_path,
       &.code-empty_series,
       &.code-nested_main_file {
-        background: #fef3c7;
-        color: #b45309;
-        border-color: #fde68a;
+        background: var(--jt-warning-tint);
+        color: var(--jt-warning-text);
+        border-color: var(--jt-warning-border);
       }
     }
   }
@@ -3618,9 +3609,9 @@ body:has(.lib-detail-root) .app-main {
     border-radius: 50%;
     cursor: help;
 
-    &.level-ok      { background: #d1fae5; border: 1px solid #6ee7b7; }
-    &.level-warning { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18); }
-    &.level-error   { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.20); }
+    &.level-ok      { background: var(--jt-success-tint); border: 1px solid var(--jt-success-border); }
+    &.level-warning { background: var(--jt-warning); box-shadow: 0 0 0 3px rgba(var(--jt-warning-rgb), 0.18); }
+    &.level-error   { background: var(--jt-danger); box-shadow: 0 0 0 3px rgba(var(--jt-danger-rgb), 0.20); }
   }
 
 }
@@ -3643,10 +3634,10 @@ body:has(.lib-detail-root) .app-main {
 
 // 健康有问题的行：hover 时浅色高亮（仅视觉提示，不可点击）
 :deep(.row-health-error:hover td) {
-  background-color: #fef2f2 !important;
+  background-color: var(--jt-danger-tint) !important;
 }
 :deep(.row-health-warning:hover td) {
-  background-color: #fffbeb !important;
+  background-color: var(--jt-warning-tint) !important;
 }
 
 // 让选择列的复选框更显眼：box 放大到 18×18 + 2px 边框 + 紫色高亮
@@ -3656,27 +3647,26 @@ body:has(.lib-detail-root) .app-main {
   .el-checkbox__inner {
     width: 18px;
     height: 18px;
-    border-color: #94a3b8;
+    border-color: var(--jt-text-muted);
     border-width: 2px;
     border-radius: 3px;
   }
 
   .el-checkbox__input.is-checked .el-checkbox__inner,
   .el-checkbox__input.is-indeterminate .el-checkbox__inner {
-    background-color: #6366f1;
-    border-color: #6366f1;
+    background-color: var(--jt-brand);
+    border-color: var(--jt-brand);
   }
 
-  // 表头全选框 hover 时颜色更明显
   .el-checkbox__inner:hover {
-    border-color: #6366f1;
+    border-color: var(--jt-brand);
   }
 }
 
 .loading-block, .error-block {
   padding: 40px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
 
   .spin {
     animation: spin 1.2s linear infinite;
@@ -3688,18 +3678,18 @@ body:has(.lib-detail-root) .app-main {
 .dup-path-pick {
   margin-bottom: 12px;
   padding: 8px 12px;
-  background: #f8fafc;
+  background: var(--jt-fill-light);
   border-radius: 4px;
 
   .info-ic {
     margin-left: 4px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     cursor: help;
   }
 }
 
 .dup-pick-label {
-  color: #475569;
+  color: var(--jt-text-regular);
   font-size: 13px;
   margin-right: 8px;
 }
@@ -3729,7 +3719,7 @@ body:has(.lib-detail-root) .app-main {
   }
 
   .dup-group-sub {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3737,7 +3727,7 @@ body:has(.lib-detail-root) .app-main {
   }
 
   .dup-group-count {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 12px;
     white-space: nowrap;
     flex-shrink: 0;
@@ -3756,9 +3746,9 @@ body:has(.lib-detail-root) .app-main {
   flex-direction: column;
   gap: 10px;
   padding: 24px 20px;
-  background: #f8fafc;
+  background: var(--jt-fill-light);
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
 
   .dup-progress-head {
     display: flex;
@@ -3767,7 +3757,7 @@ body:has(.lib-detail-root) .app-main {
   }
   .dup-progress-msg {
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3778,7 +3768,7 @@ body:has(.lib-detail-root) .app-main {
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3802,7 +3792,7 @@ body:has(.lib-detail-root) .app-main {
     align-items: start;
     gap: 12px;
     padding: 10px 4px;
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid var(--jt-divider-light);
     cursor: pointer;
     transition: background 0.1s ease;
     margin: 0;
@@ -3812,7 +3802,7 @@ body:has(.lib-detail-root) .app-main {
     }
 
     &:hover {
-      background: #f8fafc;
+      background: var(--jt-fill-light);
     }
 
     .file-radio {
@@ -3840,7 +3830,7 @@ body:has(.lib-detail-root) .app-main {
     .file-name {
       font-weight: 500;
       font-size: 13px;
-      color: #1e293b;
+      color: var(--jt-text-primary);
       word-break: break-word;
       overflow-wrap: anywhere;       // 长 .release.tag 串也能在任意位置断
       line-height: 1.4;
@@ -3849,7 +3839,7 @@ body:has(.lib-detail-root) .app-main {
     }
 
     .file-path {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-size: 12px;
       word-break: break-all;
       line-height: 1.4;
@@ -3865,7 +3855,7 @@ body:has(.lib-detail-root) .app-main {
     }
 
     .version-label {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-size: 12px;
       font-weight: normal;
       margin-left: 4px;
@@ -3878,11 +3868,9 @@ body:has(.lib-detail-root) .app-main {
   align-items: center;
   gap: 12px;
   padding: 12px 4px 4px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--jt-divider-light);
   margin-top: 4px;
 
-  // 强化"按钮感"：outlined plain 风格（红边 + 浅底）跟旁边实色填充的 el-tag 视觉拉开；
-  // 再加内边距/粗体/hover 反馈让"可点击"信号更明显
   .dup-delete-btn {
     padding-inline: 18px;
     font-weight: 600;
@@ -3903,7 +3891,7 @@ body:has(.lib-detail-root) .app-main {
   }
 
   .dup-group-hint {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 12px;
   }
 }

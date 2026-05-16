@@ -1108,7 +1108,7 @@ onBeforeUnmount(_detachRuntime)
 .loading-tip {
   margin-left: 12px;
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   font-weight: normal;
   display: inline-flex;
   align-items: center;
@@ -1137,10 +1137,10 @@ onBeforeUnmount(_detachRuntime)
   gap: 16px;
   margin: 0 -20px 16px;
   padding: 8px 20px 0;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(var(--jt-toolbar-bg-rgb, 255, 255, 255), 0.7);
   backdrop-filter: saturate(180%) blur(14px);
   -webkit-backdrop-filter: saturate(180%) blur(14px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--jt-divider-light);
 
   .source-tabs {
     flex: 0 0 auto;
@@ -1176,7 +1176,7 @@ onBeforeUnmount(_detachRuntime)
   margin: 12px 0;
 
   .end-tip {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 13px;
     letter-spacing: 1px;
   }
@@ -1198,11 +1198,10 @@ onBeforeUnmount(_detachRuntime)
   pointer-events: none;
   animation: fade-in 0.2s ease;
 
-  // shimmer 渐变 = 浅灰 + 反光带从左滑到右
   $shimmer-bg: linear-gradient(90deg,
-    #eef2f6 0%,
-    #f7f9fb 50%,
-    #eef2f6 100%
+    var(--jt-skeleton-from) 0%,
+    var(--jt-skeleton-to) 50%,
+    var(--jt-skeleton-from) 100%
   );
 
   // 通用 shimmer 块 + 线
@@ -1272,9 +1271,8 @@ onBeforeUnmount(_detachRuntime)
   content-visibility: auto;
   contain-intrinsic-size: 240px 490px;
 
-  // el-image 容器自身：在图片到达前用浅灰渐变占位，比白色更明显地表达"图片在路上"
   .poster :deep(.el-image) {
-    background: linear-gradient(135deg, #eef2f6 0%, #d8dee6 100%);
+    background: linear-gradient(135deg, var(--jt-skeleton-from) 0%, var(--jt-card-border) 100%);
   }
 
   // 图片真正加载完成（el-image__inner 进 DOM）时淡入；
@@ -1363,8 +1361,8 @@ onBeforeUnmount(_detachRuntime)
     .no-poster {
       width: 100%;
       aspect-ratio: 2/3;
-      background: #f5f7fa;
-      color: #909399;
+      background: var(--jt-fill-light);
+      color: var(--jt-text-muted);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1508,7 +1506,7 @@ onBeforeUnmount(_detachRuntime)
 
       &.clickable {
         cursor: pointer;
-        &:hover { color: #6366f1; }
+        &:hover { color: var(--jt-brand); }
       }
     }
 
@@ -1539,7 +1537,7 @@ onBeforeUnmount(_detachRuntime)
       .meta-placeholder {
         flex: 1 1 auto;
       }
-      .year { color: #909399; font-size: 12px; flex: 0 0 auto; }
+      .year { color: var(--jt-text-muted); font-size: 12px; flex: 0 0 auto; }
     }
 
     .ratings-row {

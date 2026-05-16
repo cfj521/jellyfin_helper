@@ -361,14 +361,14 @@ const formatTime = (t) => formatLocalTime(t)
       flex: 1;
 
       .task-id {
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         font-family: monospace;
         font-size: 13px;
       }
       .task-name {
         font-size: 18px;
         font-weight: 600;
-        color: #1e293b;
+        color: var(--jt-text-primary);
         margin-top: 2px;
       }
     }
@@ -380,24 +380,24 @@ const formatTime = (t) => formatLocalTime(t)
     gap: 14px;
     margin-top: 18px;
     padding-top: 16px;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--jt-card-border);
   }
   .meta-item {
     .meta-label {
       font-size: 12px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       margin-bottom: 4px;
     }
     .meta-value {
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
       word-break: break-all;
     }
     .meta-value.polling {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      color: #409eff;
+      color: var(--jt-link);
     }
   }
 }
@@ -407,7 +407,7 @@ const formatTime = (t) => formatLocalTime(t)
   align-items: baseline;
   gap: 10px;
 
-  .muted { color: #94a3b8; font-size: 12px; }
+  .muted { color: var(--jt-text-muted); font-size: 12px; }
 }
 
 // 当前进度（运行中实时变化的 message 文本）
@@ -417,23 +417,23 @@ const formatTime = (t) => formatLocalTime(t)
   gap: 8px;
   margin-top: 12px;
   padding: 10px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--jt-fill-light);
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   font-size: 13px;
 
   &.is-running {
-    background: #eff6ff;
-    border-color: #bfdbfe;
+    background: var(--jt-brand-light-9);
+    border-color: var(--jt-brand-light-7);
   }
 
   .progress-label {
-    color: #64748b;
+    color: var(--jt-text-secondary);
     font-weight: 500;
     flex-shrink: 0;
   }
   .progress-text {
-    color: #1e293b;
+    color: var(--jt-text-primary);
     word-break: break-all;
   }
 }
@@ -451,12 +451,12 @@ const formatTime = (t) => formatLocalTime(t)
 
     .suggest-id {
       font-family: monospace;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       flex-shrink: 0;
     }
     .suggest-type {
       font-size: 12px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       flex-shrink: 0;
     }
     .suggest-desc {
@@ -464,7 +464,7 @@ const formatTime = (t) => formatLocalTime(t)
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: #475569;
+      color: var(--jt-text-regular);
       font-size: 13px;
     }
   }

@@ -406,18 +406,18 @@ onMounted(loadAll)
   padding: 0 12px;
   margin-right: 4px;
   font-size: 12px;
-  color: #475569;
+  color: var(--jt-text-regular);
   white-space: nowrap;
   cursor: help;
   text-decoration: none;
 
   .el-icon {
-    color: #00a4dc;  // Jellyfin 品牌蓝
+    color: var(--jt-link);
     font-size: 14px;
   }
 
   .server-name {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
 
   &.link {
@@ -425,13 +425,13 @@ onMounted(loadAll)
     transition: color 0.15s ease;
 
     &:hover {
-      color: #00a4dc;
-      .server-name { color: #00a4dc; }
+      color: var(--jt-link);
+      .server-name { color: var(--jt-link); }
     }
 
     .ext-icon {
       font-size: 11px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       margin-left: 2px;
     }
   }
@@ -453,7 +453,7 @@ onMounted(loadAll)
   }
 
   &.lib-inaccessible {
-    outline: 2px solid #f56c6c;
+    outline: 2px solid var(--jt-danger);
     outline-offset: -2px;
   }
 
@@ -507,18 +507,17 @@ onMounted(loadAll)
 
     .lib-name {
       font-weight: 700;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       font-size: 17px;
-      // text-shadow 模拟描边：4 个方向各 1px 反色（深色字 → 白边）
       text-shadow:
-        -1px -1px 0 #fff,
-         1px -1px 0 #fff,
-        -1px  1px 0 #fff,
-         1px  1px 0 #fff,
-         0    -1px 0 #fff,
-         0     1px 0 #fff,
-        -1px  0   0 #fff,
-         1px  0   0 #fff;
+        -1px -1px 0 var(--jt-card-bg),
+         1px -1px 0 var(--jt-card-bg),
+        -1px  1px 0 var(--jt-card-bg),
+         1px  1px 0 var(--jt-card-bg),
+         0    -1px 0 var(--jt-card-bg),
+         0     1px 0 var(--jt-card-bg),
+        -1px  0   0 var(--jt-card-bg),
+         1px  0   0 var(--jt-card-bg);
     }
   }
 
@@ -536,13 +535,13 @@ onMounted(loadAll)
     min-width: 0;
 
     &.placeholder {
-      color: #475569;
+      color: var(--jt-text-regular);
       justify-content: center;
       gap: 6px;
     }
     &.error {
-      color: #f56c6c;
-      background: rgba(254, 240, 240, 0.92);
+      color: var(--jt-danger);
+      background: var(--jt-danger-tint);
     }
 
     .stat-cell {
@@ -555,14 +554,14 @@ onMounted(loadAll)
       .stat-label,
       .stat-value {
         text-shadow:
-          -1px 0 0 #fff,
-           1px 0 0 #fff,
-           0 -1px 0 #fff,
-           0  1px 0 #fff;
+          -1px 0 0 var(--jt-card-bg),
+           1px 0 0 var(--jt-card-bg),
+           0 -1px 0 var(--jt-card-bg),
+           0  1px 0 var(--jt-card-bg);
       }
-      .stat-label { color: #475569; }
+      .stat-label { color: var(--jt-text-regular); }
       .stat-value {
-        color: #0f172a;
+        color: var(--jt-text-primary);
         font-weight: 600;
       }
     }
@@ -606,16 +605,15 @@ onMounted(loadAll)
     }
   }
 
-  // 没封面的卡片：纯白底，去掉所有局部蒙版和描边（白底上无意义）
   &:not(.has-cover) {
-    .card-content { background: #fff; }
+    .card-content { background: var(--jt-card-bg); }
     .lib-stats { background: transparent; backdrop-filter: none; }
     .card-header .lib-name { text-shadow: none; }
     .stat-cell .stat-label,
     .stat-cell .stat-value { text-shadow: none; }
     .rescan-btn {
-      color: #f59e0b;
-      .el-icon { color: #f59e0b; filter: none; }
+      color: var(--jt-warning);
+      .el-icon { color: var(--jt-warning); filter: none; }
     }
   }
 }

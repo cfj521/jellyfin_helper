@@ -508,7 +508,7 @@ onUnmounted(() => {
 
 .detail-body {
   padding: 32px;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
 }
 
 .section {
@@ -518,9 +518,9 @@ onUnmounted(() => {
     margin: 0 0 16px;
     font-size: 18px;
     font-weight: 600;
-    color: #0f172a;
+    color: var(--jt-text-primary);
     padding-bottom: 8px;
-    border-bottom: 2px solid #6366f1;
+    border-bottom: 2px solid var(--jt-brand);
     display: inline-block;
   }
 }
@@ -541,14 +541,14 @@ onUnmounted(() => {
       width: 100%;
       aspect-ratio: 2/3;
       border-radius: 6px;
-      background: #e2e8f0;
+      background: var(--jt-divider-light);
 
       &.no-img {
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 28px;
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         font-weight: 600;
       }
     }
@@ -557,7 +557,7 @@ onUnmounted(() => {
       margin-top: 6px;
       font-size: 13px;
       font-weight: 500;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -565,7 +565,7 @@ onUnmounted(() => {
 
     .cast-char {
       font-size: 12px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -625,7 +625,7 @@ onUnmounted(() => {
     .video-name {
       margin-top: 6px;
       font-size: 13px;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -634,7 +634,7 @@ onUnmounted(() => {
 
     .video-type {
       font-size: 11px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
     }
   }
 }
@@ -664,11 +664,11 @@ onUnmounted(() => {
       transition: box-shadow 0.2s;
 
       &.no-img {
-        background: #e2e8f0;
+        background: var(--jt-divider-light);
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         font-size: 12px;
       }
     }
@@ -677,7 +677,7 @@ onUnmounted(() => {
       margin-top: 6px;
       font-size: 13px;
       font-weight: 500;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -685,7 +685,7 @@ onUnmounted(() => {
 
     .rec-meta {
       font-size: 11px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       display: flex;
       align-items: center;
       gap: 4px;

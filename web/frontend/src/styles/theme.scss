@@ -28,6 +28,7 @@
   --jt-card-border: #e2e8f0;
   --jt-card-header-from: #fafbfc;
   --jt-fill-light: #f8fafc;
+  --jt-toolbar-bg-rgb: 241, 245, 249;
   --jt-divider: #e2e8f0;
   --jt-divider-light: #f1f5f9;
 
@@ -43,6 +44,22 @@
   --jt-danger: #ef4444;
   --jt-danger-rgb: 239, 68, 68;
   --jt-info: #6b7280;
+
+  --jt-success-tint: #f0fdf4;
+  --jt-success-text: #166534;
+  --jt-success-border: #86efac;
+  --jt-warning-tint: #fffbeb;
+  --jt-warning-text: #b45309;
+  --jt-warning-border: #fcd34d;
+  --jt-danger-tint: #fef2f2;
+  --jt-danger-text: #b91c1c;
+  --jt-danger-border: #fecaca;
+  --jt-brand-light-7: #c7d2fe;
+  --jt-brand-light-9: #eef2ff;
+  --jt-link: #0ea5e9;
+  --jt-link-hover: #0284c7;
+  --jt-skeleton-from: #eef2f6;
+  --jt-skeleton-to: #f7f9fb;
 
   --jt-shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04);
   --jt-shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
@@ -106,6 +123,7 @@
   --jt-card-bg: #1f2937;
   --jt-card-border: #374151;
   --jt-card-header-from: #283548;
+  --jt-toolbar-bg-rgb: 17, 24, 39;
   --jt-fill-light: #283548;
   --jt-divider: #374151;
   --jt-divider-light: #1f2937;
@@ -122,6 +140,22 @@
   --jt-danger: #f87171;
   --jt-danger-rgb: 248, 113, 113;
   --jt-info: #9ca3af;
+
+  --jt-success-tint: rgba(52, 211, 153, 0.1);
+  --jt-success-text: #86efac;
+  --jt-success-border: rgba(52, 211, 153, 0.3);
+  --jt-warning-tint: rgba(251, 191, 36, 0.1);
+  --jt-warning-text: #fcd34d;
+  --jt-warning-border: rgba(251, 191, 36, 0.3);
+  --jt-danger-tint: rgba(248, 113, 113, 0.1);
+  --jt-danger-text: #fca5a5;
+  --jt-danger-border: rgba(248, 113, 113, 0.3);
+  --jt-brand-light-7: #3730a3;
+  --jt-brand-light-9: rgba(129, 140, 248, 0.1);
+  --jt-link: #38bdf8;
+  --jt-link-hover: #7dd3fc;
+  --jt-skeleton-from: #283548;
+  --jt-skeleton-to: #374151;
 
   --jt-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
   --jt-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -214,6 +248,22 @@
   --jt-danger: #ef4444;
   --jt-danger-rgb: 239, 68, 68;
   --jt-info: #6b7280;
+
+  --jt-success-tint: #f0fdf4;
+  --jt-success-text: #166534;
+  --jt-success-border: #86efac;
+  --jt-warning-tint: #fffbeb;
+  --jt-warning-text: #b45309;
+  --jt-warning-border: #fcd34d;
+  --jt-danger-tint: #fef2f2;
+  --jt-danger-text: #b91c1c;
+  --jt-danger-border: #fecaca;
+  --jt-brand-light-7: #a7f3d0;
+  --jt-brand-light-9: #ecfdf5;
+  --jt-link: #0ea5e9;
+  --jt-link-hover: #0284c7;
+  --jt-skeleton-from: #eef2f6;
+  --jt-skeleton-to: #f7f9fb;
 
   --jt-shadow-sm: 0 1px 3px rgba(4, 120, 87, 0.06);
   --jt-shadow-md: 0 4px 16px rgba(4, 120, 87, 0.10);

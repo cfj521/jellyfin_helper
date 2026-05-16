@@ -527,7 +527,7 @@
             </el-form-item>
 
             <el-divider content-position="left">
-              <span style="font-size: 13px; color: #64748b">搜索偏好</span>
+              <span style="font-size: 13px; color: var(--jt-text-secondary)">搜索偏好</span>
             </el-divider>
 
             <el-form-item label="关键字 chip">
@@ -2076,14 +2076,14 @@ onBeforeRouteLeave(async () => {
 
 .config-tabs {
   margin-top: 20px;
-  background: #fff;
+  background: var(--jt-card-bg);
   border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--jt-shadow-sm);
   min-height: 600px;
 
   :deep(.el-tabs__nav-wrap) {
     padding-top: 16px;
-    background: #f8fafc;
+    background: var(--jt-fill-light);
     border-radius: 8px 0 0 8px;
   }
 
@@ -2168,7 +2168,7 @@ onBeforeRouteLeave(async () => {
 
 .logs-meta {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   margin-bottom: 6px;
 }
 
@@ -2190,9 +2190,9 @@ onBeforeRouteLeave(async () => {
 .form-hint {
   margin-top: 4px;
   font-size: 12px;
-  color: #909399;
+  color: var(--jt-text-muted);
 
-  a { color: #6366f1; }
+  a { color: var(--jt-brand); }
 }
 
 // 表单项里跟在控件后面的 form-hint（任何标签 span / div / p）：
@@ -2214,7 +2214,7 @@ onBeforeRouteLeave(async () => {
   display: block;
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   word-break: break-all;
   line-height: 1.4;
 }
@@ -2227,27 +2227,27 @@ onBeforeRouteLeave(async () => {
   margin: 16px 0 12px;
 
   .stat-cell {
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
     padding: 12px;
     text-align: center;
-    background: #fafbfc;
+    background: var(--jt-fill-light);
 
     .stat-num {
       font-size: 22px;
       font-weight: 600;
-      color: #334155;
+      color: var(--jt-text-regular);
       line-height: 1.2;
     }
     .stat-label {
       font-size: 12px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       margin-top: 4px;
     }
 
-    &.ok    { background: rgba(34, 197, 94, 0.08); border-color: rgba(34, 197, 94, 0.3); .stat-num { color: #16a34a; } }
-    &.pending { background: rgba(99, 102, 241, 0.08); border-color: rgba(99, 102, 241, 0.3); .stat-num { color: #6366f1; } }
-    &.miss  { background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.3); .stat-num { color: #d97706; } }
+    &.ok    { background: var(--jt-success-tint); border-color: var(--jt-success-border); .stat-num { color: var(--jt-success); } }
+    &.pending { background: rgba(var(--jt-brand-rgb), 0.08); border-color: rgba(var(--jt-brand-rgb), 0.3); .stat-num { color: var(--jt-brand); } }
+    &.miss  { background: var(--jt-warning-tint); border-color: var(--jt-warning-border); .stat-num { color: var(--jt-warning); } }
   }
 }
 
@@ -2256,20 +2256,20 @@ onBeforeRouteLeave(async () => {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: #f0f9ff;
-  border-left: 3px solid #6366f1;
+  background: var(--jt-brand-light-9);
+  border-left: 3px solid var(--jt-brand);
   border-radius: 4px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   margin-bottom: 10px;
 
   .spin {
     animation: spin 1.5s linear infinite;
-    color: #6366f1;
+    color: var(--jt-brand);
   }
   .run-counts {
     margin-left: auto;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 12px;
   }
 }
@@ -2282,10 +2282,10 @@ onBeforeRouteLeave(async () => {
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  background: rgba(239, 68, 68, 0.08);
-  border-left: 3px solid #ef4444;
+  background: var(--jt-danger-tint);
+  border-left: 3px solid var(--jt-danger);
   border-radius: 4px;
-  color: #b91c1c;
+  color: var(--jt-danger-text);
   font-size: 13px;
   margin-bottom: 10px;
 }
@@ -2308,7 +2308,7 @@ onBeforeRouteLeave(async () => {
 
   .lang-label {
     font-size: 14px;
-    color: #606266;
+    color: var(--jt-text-regular);
     font-weight: 500;
     margin-bottom: 8px;
   }
@@ -2330,7 +2330,7 @@ onBeforeRouteLeave(async () => {
 
 .sub-section-title {
   font-weight: 500;
-  color: #475569;
+  color: var(--jt-text-regular);
 }
 
 // 调试开关 block：跟路径映射同款风格，避免在视觉上跳跃
@@ -2344,7 +2344,7 @@ onBeforeRouteLeave(async () => {
 
     .switch-label {
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
       font-weight: 500;
     }
     .form-hint {
@@ -2365,7 +2365,7 @@ onBeforeRouteLeave(async () => {
 
     .switch-label {
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
       font-weight: 500;
     }
 
@@ -2374,8 +2374,8 @@ onBeforeRouteLeave(async () => {
       flex: 1;
 
       code {
-        background: rgba(99, 102, 241, 0.1);
-        color: #4f46e5;
+        background: rgba(var(--jt-brand-rgb), 0.1);
+        color: var(--jt-brand-dark);
         padding: 1px 4px;
         border-radius: 3px;
         font-size: 11px;
@@ -2385,11 +2385,11 @@ onBeforeRouteLeave(async () => {
 
   .empty-rules {
     text-align: center;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 12px;
     padding: 16px;
-    background: #f8fafc;
-    border: 1px dashed #cbd5e1;
+    background: var(--jt-fill-light);
+    border: 1px dashed var(--jt-card-border);
     border-radius: 4px;
   }
 
@@ -2417,7 +2417,7 @@ onBeforeRouteLeave(async () => {
       }
 
       .arrow-icon {
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         flex-shrink: 0;
       }
     }
@@ -2434,14 +2434,14 @@ onBeforeRouteLeave(async () => {
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--jt-fill-light);
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
     transition: all 0.2s;
 
     &.disabled {
       opacity: 0.6;
-      background: #f1f5f9;
+      background: var(--jt-divider-light);
     }
 
     .el-input {
@@ -2454,8 +2454,8 @@ onBeforeRouteLeave(async () => {
 .llm-test-result {
   margin-left: 12px;
   font-size: 12px;
-  &.ok { color: #10b981; }
-  &.fail { color: #ef4444; }
+  &.ok { color: var(--jt-success); }
+  &.fail { color: var(--jt-danger); }
 }
 .badge.tools-badge {
   background: #e0e7ff;
@@ -2476,11 +2476,11 @@ onBeforeRouteLeave(async () => {
 
 // ---- 流水线规则卡（双列布局，每条规则一个紧凑 row） ----
 .dispatch-rule-row {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   padding: 10px 14px 0;
   margin-bottom: 12px;
-  background: #f8fafc;
+  background: var(--jt-fill-light);
 
   .dispatch-rule-head {
     display: flex;
@@ -2488,7 +2488,7 @@ onBeforeRouteLeave(async () => {
     gap: 8px;
     margin-bottom: 6px;
     padding-bottom: 6px;
-    border-bottom: 1px dashed #e2e8f0;
+    border-bottom: 1px dashed var(--jt-card-border);
 
     .mt-icon {
       font-size: 16px;
@@ -2500,14 +2500,14 @@ onBeforeRouteLeave(async () => {
     }
     .mt-label {
       font-weight: 600;
-      color: #1e293b;
+      color: var(--jt-text-primary);
       font-size: 13px;
     }
     .mt-tag {
       font-size: 11px;
       font-family: ui-monospace, SFMono-Regular, monospace;
-      color: #64748b;
-      background: #e2e8f0;
+      color: var(--jt-text-secondary);
+      background: var(--jt-divider-light);
       padding: 1px 6px;
       border-radius: 3px;
     }
@@ -2525,16 +2525,16 @@ onBeforeRouteLeave(async () => {
   gap: 6px;
   margin-top: 8px;
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
   border-radius: 4px;
   font-size: 12px;
-  color: #475569;
+  color: var(--jt-text-regular);
 
-  strong { color: #1e293b; }
+  strong { color: var(--jt-text-primary); }
   code {
     padding: 1px 6px;
-    background: #fff;
-    border: 1px solid #cbd5e1;
+    background: var(--jt-card-bg);
+    border: 1px solid var(--jt-card-border);
     border-radius: 3px;
     font-family: ui-monospace, SFMono-Regular, monospace;
     font-size: 11px;

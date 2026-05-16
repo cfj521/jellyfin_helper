@@ -397,12 +397,12 @@ onUnmounted(() => stopPolling())
 }
 
 .text-muted {
-  color: #909399;
+  color: var(--jt-text-muted);
 }
 
 .form-tip {
   margin-left: 10px;
-  color: #909399;
+  color: var(--jt-text-muted);
   font-size: 12px;
 }
 </style>

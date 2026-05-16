@@ -1194,7 +1194,7 @@ const ADULT_ACTIONS = {
     level: 'danger',
     text: `
       <p style="margin:0 0 8px">将<b>清空当前库</b>所有 AdultItem 的识别 + 刮削数据：</p>
-      <ul style="margin:0 0 8px;padding-left:20px;color:#475569;font-size:13px">
+      <ul style="margin:0 0 8px;padding-left:20px;color:var(--jt-text-regular);font-size:13px">
         <li>番号、标题、女优、标签、厂商、导演 等元数据</li>
         <li>本地封面 / NFO 路径记录（DB 字段；磁盘文件不动）</li>
         <li>排除 / 冷却 / 失败计数 / 手动覆盖等状态</li>
@@ -1437,8 +1437,8 @@ onUnmounted(() => {
     flex-direction: column;
     gap: 8px;
     padding: 10px 14px;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-    border: 1px solid #e2e8f0;
+    background: linear-gradient(135deg, var(--jt-fill-light) 0%, var(--jt-divider-light) 100%);
+    border: 1px solid var(--jt-card-border);
     border-radius: 8px;
     margin-bottom: 16px;
 
@@ -1447,9 +1447,9 @@ onUnmounted(() => {
       align-items: center;
       gap: 8px;
       font-size: 13px;
-      color: #475569;
+      color: var(--jt-text-regular);
 
-      .scope-icon { color: #6366f1; }
+      .scope-icon { color: var(--jt-brand); }
       .scope-label { font-weight: 500; }
     }
 
@@ -1483,7 +1483,7 @@ onUnmounted(() => {
 
       .switch-label {
         font-size: 13px;
-        color: #475569;
+        color: var(--jt-text-regular);
         white-space: nowrap;
       }
 
@@ -1491,7 +1491,7 @@ onUnmounted(() => {
       &.disabled {
         opacity: 0.5;
         cursor: not-allowed;
-        .switch-label { color: #94a3b8; }
+        .switch-label { color: var(--jt-text-muted); }
       }
     }
   }
@@ -1527,7 +1527,7 @@ onUnmounted(() => {
     gap: 6px;
     padding: 2px 0;
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
     line-height: 1.6;
     white-space: nowrap;
     overflow: hidden;
@@ -1537,8 +1537,8 @@ onUnmounted(() => {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .ok { color: #10b981; }
-    .fail { color: #ef4444; }
+    .ok { color: var(--jt-success); }
+    .fail { color: var(--jt-danger); }
   }
 
   // ---- stats-grid ----
@@ -1557,23 +1557,23 @@ onUnmounted(() => {
       justify-content: space-between;
       gap: 8px;
       padding: 8px 12px;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
+      background: var(--jt-fill-light);
+      border: 1px solid var(--jt-card-border);
       border-radius: 6px;
       transition: border-color 0.15s, transform 0.15s;
 
       &:hover {
-        border-color: #c7d2fe;
+        border-color: var(--jt-brand-light-7);
         transform: translateY(-1px);
       }
       &.warn {
-        border-color: #fca5a5;
-        background: #fef2f2;
-        .stat-value { color: #ef4444; }
+        border-color: var(--jt-danger-border);
+        background: var(--jt-danger-tint);
+        .stat-value { color: var(--jt-danger); }
       }
       .stat-label {
         font-size: 12px;
-        color: #64748b;
+        color: var(--jt-text-secondary);
         line-height: 1.2;
         white-space: nowrap;
         flex-shrink: 0;
@@ -1581,11 +1581,11 @@ onUnmounted(() => {
       .stat-value {
         font-size: 17px;
         font-weight: 700;
-        color: #0f172a;
+        color: var(--jt-text-primary);
         line-height: 1.2;
         text-align: right;
         white-space: nowrap;
-        small { font-size: 11px; color: #94a3b8; font-weight: 500; }
+        small { font-size: 11px; color: var(--jt-text-muted); font-weight: 500; }
       }
     }
   }
@@ -1593,9 +1593,9 @@ onUnmounted(() => {
   .loading-block {
     padding: 14px;
     text-align: center;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 13px;
-    .spin { animation: spin 1.5s linear infinite; color: #6366f1; margin-right: 6px; }
+    .spin { animation: spin 1.5s linear infinite; color: var(--jt-brand); margin-right: 6px; }
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1605,8 +1605,8 @@ onUnmounted(() => {
     position: sticky;
     top: 0;
     z-index: 5;
-    background: #fff;
-    border: 1px solid var(--el-card-border-color, #e4e7ed);
+    background: var(--jt-card-bg);
+    border: 1px solid var(--el-card-border-color, var(--jt-card-border));
     border-radius: var(--el-card-border-radius, 4px) var(--el-card-border-radius, 4px) 0 0;
     padding: 12px 20px;
     margin-bottom: 0;
@@ -1638,7 +1638,7 @@ onUnmounted(() => {
 
       .switch-label {
         font-size: 13px;
-        color: #475569;
+        color: var(--jt-text-regular);
         white-space: nowrap;
       }
 
@@ -1646,7 +1646,7 @@ onUnmounted(() => {
       &.disabled {
         opacity: 0.5;
         cursor: not-allowed;
-        .switch-label { color: #94a3b8; }
+        .switch-label { color: var(--jt-text-muted); }
       }
     }
   }
@@ -1674,7 +1674,7 @@ onUnmounted(() => {
 
     .sort-label {
       font-size: 13px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       margin-right: 4px;
     }
 
@@ -1684,21 +1684,21 @@ onUnmounted(() => {
       gap: 2px;
       padding: 4px 10px;
       font-size: 12px;
-      color: #475569;
+      color: var(--jt-text-regular);
       background: transparent;
-      border: 1px solid #e2e8f0;
+      border: 1px solid var(--jt-card-border);
       border-radius: 14px;
       cursor: pointer;
       transition: all 0.15s;
 
       &:hover {
-        border-color: #c7d2fe;
-        color: #4f46e5;
+        border-color: var(--jt-brand-light-7);
+        color: var(--jt-brand-dark);
       }
 
       &.active {
-        background: #6366f1;
-        border-color: #6366f1;
+        background: var(--jt-brand);
+        border-color: var(--jt-brand);
         color: #fff;
         font-weight: 500;
 
@@ -1710,8 +1710,8 @@ onUnmounted(() => {
       // filter-chip：激活态琥珀色区分语义（多选过滤 vs 单选排序）
       &.filter-chip {
         &.active {
-          background: #f59e0b;
-          border-color: #f59e0b;
+          background: var(--jt-warning);
+          border-color: var(--jt-warning);
           color: #fff;
         }
         &.disabled,
@@ -1719,8 +1719,8 @@ onUnmounted(() => {
           opacity: 0.4;
           cursor: not-allowed;
           &:hover {
-            border-color: #e2e8f0;
-            color: #475569;
+            border-color: var(--jt-card-border);
+            color: var(--jt-text-regular);
           }
         }
         .filter-check {
@@ -1731,7 +1731,7 @@ onUnmounted(() => {
     }
 
     .filter-divider {
-      color: #cbd5e1;
+      color: var(--jt-card-border);
       margin: 0 2px;
       user-select: none;
     }
@@ -1757,13 +1757,13 @@ onUnmounted(() => {
     width: $grid-card-w;
     display: flex;
     flex-direction: column;
-    background: #fff;
+    background: var(--jt-card-bg);
     border-radius: 8px;
     overflow: hidden;
     cursor: pointer;
     transition: transform 0.15s ease, box-shadow 0.15s ease;
-    border: 1px solid #f1f5f9;
-    // 跳过视口外卡片的渲染（详见 LibraryDetail 同名块注释）
+    border: 1px solid var(--jt-divider-light);
+    // 跳过视口外卡片的渲染（详见 LibraryDetail 同名��注释）
     content-visibility: auto;
     contain-intrinsic-size: #{$grid-card-w} 240px;
 
@@ -1773,7 +1773,7 @@ onUnmounted(() => {
     }
 
     &--excluded { opacity: 0.55; }
-    &--cooling  { background: #faf5ff; }
+    &--cooling  { background: rgba(139, 92, 246, 0.06); }
 
     // 骨架卡片：wanted 推进但池子还没补到时撑出占位行（Trending 同款 shimmer）
     &.grid-card--skeleton {
@@ -1782,7 +1782,7 @@ onUnmounted(() => {
       &:hover { transform: none; box-shadow: none; }
 
       .sk-block, .sk-line {
-        background: linear-gradient(90deg, #eef2f6 0%, #f7f9fb 50%, #eef2f6 100%);
+        background: linear-gradient(90deg, var(--jt-skeleton-from) 0%, var(--jt-skeleton-to) 50%, var(--jt-skeleton-from) 100%);
         background-size: 800px 100%;
         animation: shimmer 1.4s linear infinite;
         border-radius: 3px;
@@ -1811,7 +1811,7 @@ onUnmounted(() => {
     width: 100%;
     height: $grid-poster-h;       // 固定高，不依赖 aspect-ratio
     flex: 0 0 $grid-poster-h;     // 不被 flex column 父级压缩 / 拉伸
-    background: #f1f5f9;
+    background: var(--jt-fill-light);
 
     :deep(.adult-poster) {
       width: 100%;
@@ -1871,7 +1871,7 @@ onUnmounted(() => {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
     font-weight: 600;
-    color: #4f46e5;
+    color: var(--jt-brand-dark);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1880,7 +1880,7 @@ onUnmounted(() => {
 
   .grid-title {
     font-size: 14px;
-    color: #1e293b;
+    color: var(--jt-text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1901,12 +1901,12 @@ onUnmounted(() => {
       flex-shrink: 0;
     }
 
-    &--green    { color: #16a34a; .grid-health-dot { background: #16a34a; } }
-    &--yellow   { color: #d97706; .grid-health-dot { background: #f59e0b; } }
-    &--gray     { color: #64748b; .grid-health-dot { background: #94a3b8; } }
-    &--red      { color: #dc2626; .grid-health-dot { background: #ef4444; } font-weight: 500; }
+    &--green    { color: var(--jt-success); .grid-health-dot { background: var(--jt-success); } }
+    &--yellow   { color: var(--jt-warning); .grid-health-dot { background: var(--jt-warning); } }
+    &--gray     { color: var(--jt-text-secondary); .grid-health-dot { background: var(--jt-text-muted); } }
+    &--red      { color: var(--jt-danger); .grid-health-dot { background: var(--jt-danger); } font-weight: 500; }
     &--cooldown { color: #7c3aed; .grid-health-dot { background: #8b5cf6; } font-weight: 500; }
-    &--excluded { color: #475569; .grid-health-dot { background: #1e293b; } font-weight: 500; }
+    &--excluded { color: var(--jt-text-regular); .grid-health-dot { background: var(--jt-text-primary); } font-weight: 500; }
   }
 
   // 有/无码 badge：粉色（无码）/ 绿色（有码）/ 灰色（未识别）
@@ -1932,9 +1932,9 @@ onUnmounted(() => {
       border: 1px solid #bbf7d0;
     }
     &--unknown {
-      background: #f1f5f9;
-      color: #94a3b8;
-      border: 1px dashed #cbd5e1;
+      background: var(--jt-fill-light);
+      color: var(--jt-text-muted);
+      border: 1px dashed var(--jt-card-border);
     }
   }
   // 触发器：跟普通 badge 视觉一致 + cursor 提示可点
@@ -1974,10 +1974,10 @@ onUnmounted(() => {
       flex-shrink: 0;
       padding: 0 4px;
       height: 22px;
-      color: #94a3b8;
+      color: var(--jt-text-muted);
 
       &:hover {
-        color: #4f46e5;
+        color: var(--jt-brand-dark);
       }
       .el-icon {
         font-size: 14px;
@@ -1985,12 +1985,12 @@ onUnmounted(() => {
     }
   }
 
-  .muted { color: #94a3b8; }
+  .muted { color: var(--jt-text-muted); }
   // 与普通库 LibraryDetail 同款：等宽字体路径展示
   .mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
-    color: #475569;
+    color: var(--jt-text-regular);
   }
 
   :deep(.el-table .row-excluded) {
@@ -2013,18 +2013,18 @@ onUnmounted(() => {
     .el-checkbox__inner {
       width: 18px;
       height: 18px;
-      border-color: #94a3b8;
+      border-color: var(--jt-text-muted);
       border-width: 2px;
       border-radius: 3px;
-      background: #fff;
+      background: var(--jt-card-bg);
     }
     .el-checkbox__inner:hover {
-      border-color: #6366f1;
+      border-color: var(--jt-brand);
     }
     .el-checkbox__input.is-checked .el-checkbox__inner,
     .el-checkbox__input.is-indeterminate .el-checkbox__inner {
-      background-color: #6366f1;
-      border-color: #6366f1;
+      background-color: var(--jt-brand);
+      border-color: var(--jt-brand);
     }
   }
 
@@ -2038,40 +2038,40 @@ onUnmounted(() => {
 //     el-dialog 默认 append-to-body 后样式作用不到 scoped 选择器内部需要的层级）
 .confirm-scope {
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
   border-radius: 4px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   font-weight: 500;
   margin-bottom: 12px;
 }
 .confirm-text {
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   line-height: 1.7;
   margin-bottom: 14px;
 
   :deep(p) { margin: 0 0 6px; }
-  :deep(ul) { margin: 0 0 8px; padding-left: 20px; font-size: 13px; color: #475569; }
-  :deep(b)  { color: #0f172a; }
+  :deep(ul) { margin: 0 0 8px; padding-left: 20px; font-size: 13px; color: var(--jt-text-regular); }
+  :deep(b)  { color: var(--jt-text-primary); }
 }
 
 .dry-run-row {
   margin-top: 14px;
   padding: 10px 12px;
-  background: #fefce8;
-  border: 1px dashed #fde047;
+  background: var(--jt-warning-tint);
+  border: 1px dashed var(--jt-warning-border);
   border-radius: 6px;
 
   .dry-run-label {
     font-weight: 500;
-    color: #854d0e;
+    color: var(--jt-warning-text);
   }
   .dry-run-hint {
     margin-top: 4px;
     margin-left: 24px;
     font-size: 12px;
-    color: #a16207;
+    color: var(--jt-warning-text);
     line-height: 1.5;
   }
 }
@@ -2106,10 +2106,10 @@ onUnmounted(() => {
       }
     }
     &--auto {
-      color: #475569;
+      color: var(--jt-text-regular);
       &:not(.is-disabled):hover, &:not(.is-disabled):focus {
-        background: #f1f5f9;
-        color: #475569;
+        background: var(--jt-fill-light);
+        color: var(--jt-text-regular);
       }
     }
   }
