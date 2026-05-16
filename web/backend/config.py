@@ -240,7 +240,7 @@ class Settings(BaseSettings):
     qbittorrent_host: str = _yaml_config.get('qbittorrent', {}).get('host', 'http://192.168.89.6')
     qbittorrent_username: str = _yaml_config.get('qbittorrent', {}).get('username', 'admin')
     qbittorrent_password: str = _yaml_config.get('qbittorrent', {}).get('password', 'Colex!51')
-    qbittorrent_download_path: str = _yaml_config.get('qbittorrent', {}).get('download_path', '/downloads')
+    qbittorrent_download_path: str = _yaml_config.get('dispatch', {}).get('download_path', '/downloads')
 
     # qBittorrent 配额 + 做种策略（嵌套 pydantic models，见 web/backend/config_models.py）
     # yaml 段：qbittorrent.quota / qbittorrent.seeding
@@ -392,7 +392,6 @@ class Settings(BaseSettings):
                 "host": self.qbittorrent_host,
                 "username": self.qbittorrent_username,
                 "password": self.qbittorrent_password,
-                "download_path": self.qbittorrent_download_path,
             },
             "adult": {
                 "enabled": self.adult_enabled,

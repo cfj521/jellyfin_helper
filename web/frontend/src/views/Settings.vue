@@ -1044,7 +1044,7 @@
                 </el-form-item>
 
                 <el-form-item label="下载目录">
-                  <el-input v-model="form.qbittorrent.download_path" placeholder="X:/downloads 或 /downloads" />
+                  <el-input v-model="form.dispatch.download_path" placeholder="X:/downloads 或 /downloads" />
                   <span class="form-hint">
                     <strong>仅用于后端配额监视</strong>（shutil.disk_usage），写**后端能直接 stat 到的路径**。
                     qB 加种子用它自己的默认下载路径，跟这里无关。
@@ -1543,7 +1543,7 @@ const blank = () => ({
     ],
   },
   jackett: { host: '', api_key: '', search_keywords: [], default_keywords: '' },
-  qbittorrent: { host: '', username: '', password: '', download_path: '/downloads' },
+  qbittorrent: { host: '', username: '', password: '' },
   // 外部命令行工具路径（启动时注入到 PATH 前缀）
   tools: {
     ffmpeg_dir: '',
@@ -1565,6 +1565,7 @@ const blank = () => ({
   // file_template 由 organizer 内置；move_mode 由全局 default_move_mode 统一）
   dispatch: {
     enabled: true,
+    download_path: '/download',
     poll_interval_seconds: 30,
     adopt_interval_seconds: 300,
     trash_interval_seconds: 86400,
