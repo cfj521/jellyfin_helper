@@ -4,7 +4,7 @@ const STORAGE_KEY = 'jt-theme'
 
 const THEMES = [
   { key: 'default', name: '浅色', color: '#6366f1' },
-  { key: 'dark',    name: '深色', color: '#818cf8' },
+  { key: 'dark',    name: '深色', color: '#334155' },
   { key: 'emerald', name: '翡翠', color: '#10b981' },
 ]
 
