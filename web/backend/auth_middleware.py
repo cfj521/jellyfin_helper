@@ -35,12 +35,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        # 检查 Authorization header
+        # 检查 Authorization header；SSE（EventSource）不支持自定义 header，
+        # 允许通过 ?token=xxx 查询参数传递 JWT
         auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        else:
+            token = request.query_params.get("token", "")
+        if not token:
             return JSONResponse(status_code=401, content={"detail": "未登录"})
-
-        token = auth_header[7:]
         payload = _decode_token(token)
         if not payload:
             return JSONResponse(status_code=401, content={"detail": "登录已过期"})
