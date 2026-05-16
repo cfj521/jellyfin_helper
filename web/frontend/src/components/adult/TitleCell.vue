@@ -41,10 +41,10 @@ defineProps({
       transition: color 0.15s;
     }
     &:hover .title-line {
-      color: #6366f1;
+      color: var(--jt-brand);
     }
     &:hover .code {
-      color: #4f46e5;
+      color: var(--jt-brand-dark);
     }
   }
 
@@ -67,14 +67,14 @@ defineProps({
   .title-line {
     font-size: 13px;
     line-height: 1.4;
-    color: #1e293b;
+    color: var(--jt-text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
 
-    .muted { color: #94a3b8; }
+    .muted { color: var(--jt-text-muted); }
   }
 }
 </style>

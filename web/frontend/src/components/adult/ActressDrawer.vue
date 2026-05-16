@@ -212,25 +212,25 @@ const onClosed = () => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 0;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--jt-card-border);
   margin-bottom: 16px;
 
   h3 {
     margin: 0;
     font-size: 16px;
-    color: #1e293b;
+    color: var(--jt-text-primary);
   }
 }
 
 .unresolved, .loading-block, .error-block {
   padding: 30px 0;
   text-align: center;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
 
   .hint {
     font-size: 13px;
     line-height: 1.5;
-    color: #64748b;
+    color: var(--jt-text-secondary);
     margin: 4px 0 0;
   }
 }
@@ -241,7 +241,7 @@ const onClosed = () => {
   justify-content: center;
   gap: 8px;
   font-size: 13px;
-  .spin { animation: spin 1.4s linear infinite; color: #6366f1; }
+  .spin { animation: spin 1.4s linear infinite; color: var(--jt-brand); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -249,9 +249,9 @@ const onClosed = () => {
   display: flex;
   gap: 14px;
   padding: 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
   border-radius: 8px;
-  background: #fafbfc;
+  background: var(--jt-fill-light);
 
   .avatar {
     width: 96px;
@@ -259,7 +259,7 @@ const onClosed = () => {
     flex-shrink: 0;
     border-radius: 50%;
     overflow: hidden;
-    background: #e2e8f0;
+    background: var(--jt-card-border);
   }
   .avatar-fallback {
     display: flex;
@@ -277,8 +277,8 @@ const onClosed = () => {
     gap: 4px;
     min-width: 0;
   }
-  .primary-name { font-size: 18px; font-weight: 600; color: #0f172a; }
-  .sub-name { font-size: 13px; color: #64748b; }
+  .primary-name { font-size: 18px; font-weight: 600; color: var(--jt-text-primary); }
+  .sub-name { font-size: 13px; color: var(--jt-text-secondary); }
   .sub-name.en { font-style: italic; }
   .meta {
     margin-top: 4px;
@@ -286,7 +286,7 @@ const onClosed = () => {
     flex-wrap: wrap;
     gap: 8px;
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
 }
 
@@ -299,7 +299,7 @@ const onClosed = () => {
 
   .row-label {
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     margin-right: 6px;
     flex-shrink: 0;
   }
@@ -310,7 +310,7 @@ const onClosed = () => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #6366f1;
+  color: var(--jt-brand);
   font-size: 13px;
   text-decoration: none;
 
@@ -324,7 +324,7 @@ const onClosed = () => {
 
   .works-header {
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
     font-weight: 500;
     display: flex;
     align-items: center;
@@ -343,14 +343,14 @@ const onClosed = () => {
   display: flex;
   gap: 10px;
   padding: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
 
   &:hover {
     border-color: #c7d2fe;
-    box-shadow: 0 1px 3px rgba(99, 102, 241, 0.1);
+    box-shadow: 0 1px 3px rgba(var(--jt-brand-rgb), 0.1);
   }
 }
 
@@ -359,7 +359,7 @@ const onClosed = () => {
   aspect-ratio: 16 / 9;
   border-radius: 4px;
   flex-shrink: 0;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
 }
 .work-cover-ph {
   display: flex;
@@ -368,8 +368,8 @@ const onClosed = () => {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 11px;
   font-weight: 600;
-  color: #64748b;
-  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+  color: var(--jt-text-secondary);
+  background: var(--jt-fill-light);
 }
 
 .work-info {
@@ -387,14 +387,14 @@ const onClosed = () => {
   }
   .work-title {
     font-size: 13px;
-    color: #1e293b;
+    color: var(--jt-text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .work-meta {
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     margin-top: 2px;
   }
 }

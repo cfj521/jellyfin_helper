@@ -107,11 +107,11 @@ const onConfirm = () => {
 .dialog-body {
   .lead {
     margin: 0 0 16px;
-    color: #475569;
+    color: var(--jt-text-regular);
 
     .lib-name-inline {
       font-weight: 600;
-      color: #6366f1;
+      color: var(--jt-brand);
       margin: 0 4px;
     }
   }
@@ -128,19 +128,19 @@ const onConfirm = () => {
     margin-right: 0 !important;
     height: auto !important;
     padding: 12px 14px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
     transition: all 0.2s;
     align-items: flex-start !important;
 
     &:hover {
       border-color: #c7d2fe;
-      background: #f8fafc;
+      background: var(--jt-fill-light);
     }
 
     &.is-checked {
-      border-color: #6366f1;
-      background: rgba(99, 102, 241, 0.06);
+      border-color: var(--jt-brand);
+      background: rgba(var(--jt-brand-rgb), 0.06);
     }
 
     :deep(.el-radio__label) {
@@ -155,14 +155,14 @@ const onConfirm = () => {
     .mode-title {
       font-size: 14px;
       font-weight: 600;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       line-height: 1.4;
     }
 
     .mode-hint {
       margin-top: 4px;
       font-size: 12px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
       line-height: 1.5;
       white-space: normal;
     }

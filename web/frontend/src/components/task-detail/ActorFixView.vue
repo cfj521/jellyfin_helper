@@ -103,5 +103,5 @@ const activeTab = ref(
 </script>
 
 <style scoped>
-.muted { color: #94a3b8; }
+.muted { color: var(--jt-text-muted); }
 </style>

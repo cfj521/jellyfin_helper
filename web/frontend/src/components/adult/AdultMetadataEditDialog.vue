@@ -351,14 +351,14 @@ const save = async () => {
     }
     .meta-source {
       font-size: 11px;
-      color: #94a3b8;
-      background: #e2e8f0;
+      color: var(--jt-text-muted);
+      background: var(--jt-card-border);
       padding: 1px 6px;
       border-radius: 3px;
     }
   }
   .meta-path {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 11px;
     margin-bottom: 14px;
     font-family: ui-monospace, SFMono-Regular, monospace;
@@ -369,7 +369,7 @@ const save = async () => {
 .form-hint {
   margin-left: 8px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--jt-text-muted);
 }
 
 // footer 左右分栏：危险按钮在左，常规操作在右
@@ -396,8 +396,8 @@ const save = async () => {
     flex-shrink: 0;
     border-radius: 4px;
     overflow: hidden;
-    background: #f1f5f9;
-    border: 1px solid #e2e8f0;
+    background: var(--jt-fill-light);
+    border: 1px solid var(--jt-card-border);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -409,7 +409,7 @@ const save = async () => {
       display: block;
     }
     .cover-ph {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-size: 12px;
     }
   }

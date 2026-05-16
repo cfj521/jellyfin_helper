@@ -53,8 +53,8 @@ defineEmits(['update:modelValue'])
   align-items: center;
   gap: 6px;
   padding: 4px;
-  background: #fafafa;
-  border: 1px solid #e2e8f0;
+  background: var(--jt-fill-light);
+  border: 1px solid var(--jt-card-border);
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   user-select: none;
@@ -68,7 +68,7 @@ defineEmits(['update:modelValue'])
     padding: 0;
     border: none;
     background: transparent;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.15s ease;
@@ -85,7 +85,7 @@ defineEmits(['update:modelValue'])
     }
 
     &:hover:not(.active) {
-      color: #475569;
+      color: var(--jt-text-regular);
     }
 
     &.active {

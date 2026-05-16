@@ -86,7 +86,7 @@ const onClick = (name) => {
 
   &.resolvable:hover {
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.25);
+    box-shadow: 0 2px 4px rgba(var(--jt-brand-rgb), 0.25);
   }
 }
 
@@ -98,8 +98,8 @@ const onClick = (name) => {
   padding: 0 8px;
   height: 22px;
   font-size: 12px;
-  color: #6366f1;
-  background: #eef2ff;
+  color: var(--jt-brand);
+  background: var(--jt-brand-light-9);
   border: 1px dashed #c7d2fe;
   border-radius: 11px;
   cursor: pointer;
@@ -116,14 +116,14 @@ const onClick = (name) => {
   }
 }
 .chip-collapse {
-  background: #f1f5f9;
-  color: #64748b;
-  border-color: #e2e8f0;
+  background: var(--jt-fill-light);
+  color: var(--jt-text-secondary);
+  border-color: var(--jt-card-border);
 
   &:hover {
-    background: #e2e8f0;
+    background: var(--jt-card-border);
   }
 }
 
-.muted { color: #94a3b8; }
+.muted { color: var(--jt-text-muted); }
 </style>

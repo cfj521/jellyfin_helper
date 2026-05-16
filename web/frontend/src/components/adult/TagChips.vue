@@ -58,14 +58,14 @@ const hiddenCount = computed(() => Math.max(0, props.tags.length - props.max))
 }
 .more-chip {
   cursor: pointer;
-  background: #eff6ff;
-  color: #2563eb;
-  &:hover { background: #dbeafe; }
+  background: var(--jt-brand-light-9);
+  color: var(--jt-brand);
+  &:hover { background: var(--jt-brand-light-9); }
 }
 .popover-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
-.muted { color: #94a3b8; }
+.muted { color: var(--jt-text-muted); }
 </style>

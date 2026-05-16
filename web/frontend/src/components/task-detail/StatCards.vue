@@ -34,14 +34,14 @@ defineProps({
 }
 .stat-card {
   padding: 12px 16px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--jt-card-bg);
+  border: 1px solid var(--jt-card-border);
   border-left: 4px solid;
   border-radius: 6px;
 
   .stat-label {
     font-size: 12px;
-    color: #64748b;
+    color: var(--jt-text-secondary);
     margin-bottom: 6px;
   }
   .stat-value {
@@ -52,13 +52,13 @@ defineProps({
   .stat-suffix {
     font-size: 13px;
     font-weight: normal;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     margin-left: 4px;
   }
   .stat-tip {
     margin-top: 4px;
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
   }
 }
 </style>

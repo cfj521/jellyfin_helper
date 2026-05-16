@@ -233,9 +233,9 @@ const cards = computed(() => {
   .title { font-weight: 500; }
 }
 
-.muted { color: #94a3b8; }
-.code { color: #6366f1; font-weight: 600; font-family: monospace; }
-.error-msg { color: #ef4444; font-size: 12px; line-height: 1.5; }
+.muted { color: var(--jt-text-muted); }
+.code { color: var(--jt-brand); font-weight: 600; font-family: monospace; }
+.error-msg { color: var(--jt-danger); font-size: 12px; line-height: 1.5; }
 
 .result-cell {
   display: flex;
@@ -246,7 +246,7 @@ const cards = computed(() => {
 .success-cell {
   .title-line {
     font-size: 13px;
-    color: #1e293b;
+    color: var(--jt-text-primary);
     line-height: 1.4;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -270,20 +270,20 @@ const cards = computed(() => {
   user-select: none;
 
   &.chip-ok {
-    background: rgba(34, 197, 94, 0.12);
-    color: #16a34a;
+    background: var(--jt-success-tint);
+    color: var(--jt-success-text);
   }
   &.chip-no {
-    background: #f1f5f9;
-    color: #94a3b8;
+    background: var(--jt-fill-light);
+    color: var(--jt-text-muted);
   }
   &.chip-warn {
-    background: rgba(245, 158, 11, 0.12);
-    color: #d97706;
+    background: var(--jt-warning-tint);
+    color: var(--jt-warning-text);
   }
   &.chip-source {
-    background: rgba(99, 102, 241, 0.1);
-    color: #6366f1;
+    background: rgba(var(--jt-brand-rgb), 0.1);
+    color: var(--jt-brand);
     font-family: ui-monospace, monospace;
   }
 }

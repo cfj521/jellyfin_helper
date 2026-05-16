@@ -133,7 +133,7 @@ const _extractTitle = (magnet) => {
 
 <style lang="scss" scoped>
 .hint {
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   font-size: 12px;
   line-height: 1.6;
   margin: 4px 0 0;

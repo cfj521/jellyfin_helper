@@ -236,8 +236,8 @@ const statusTagType = (s) => {
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--jt-fill-light);
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   margin-bottom: 14px;
 }
@@ -250,7 +250,7 @@ const statusTagType = (s) => {
   .phase-icon {
     width: 28px; height: 28px;
     border-radius: 50%;
-    background: #6366f1;
+    background: var(--jt-brand);
     color: #fff;
     display: flex; align-items: center; justify-content: center;
     font-weight: 600;
@@ -258,7 +258,7 @@ const statusTagType = (s) => {
     flex-shrink: 0;
   }
   .phase-title { font-weight: 600; font-size: 13px; }
-  .phase-detail { font-size: 12px; color: #64748b; margin-top: 2px; }
+  .phase-detail { font-size: 12px; color: var(--jt-text-secondary); margin-top: 2px; }
 }
 .phase-divider { height: 30px; }
 
@@ -267,8 +267,8 @@ const statusTagType = (s) => {
 }
 .video-name, .sub-name { word-break: break-all; font-weight: 500; }
 .video-path { font-size: 11px; margin-top: 2px; word-break: break-all; }
-.muted { color: #94a3b8; font-size: 12px; }
-.ok-mark { color: #10b981; }
+.muted { color: var(--jt-text-muted); font-size: 12px; }
+.ok-mark { color: var(--jt-success); }
 .lang-chip {
   margin-right: 4px;
   margin-bottom: 2px;

@@ -390,15 +390,15 @@ const computeBaseMissing = (v) => {
   }
   .title { font-weight: 500; }
 }
-.muted { color: #94a3b8; font-size: 12px; }
-.ok-mark { color: #10b981; font-weight: bold; }
+.muted { color: var(--jt-text-muted); font-size: 12px; }
+.ok-mark { color: var(--jt-success); font-weight: bold; }
 
 .placeholder {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 24px;
-  color: #64748b;
+  color: var(--jt-text-secondary);
   font-size: 13px;
   justify-content: center;
 }
@@ -438,10 +438,10 @@ const computeBaseMissing = (v) => {
 .anno-tip {
   margin-bottom: 14px;
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
   border-radius: 4px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   word-break: break-all;
 }
 </style>

@@ -225,7 +225,7 @@ const onClosed = () => {
 
 <style lang="scss" scoped>
 .identify-dialog .hint {
-  color: #94a3b8;
+  color: var(--jt-text-muted);
   font-size: 12px;
   margin-left: 8px;
 }
@@ -233,12 +233,12 @@ const onClosed = () => {
 .current-info {
   margin-bottom: 14px;
   padding: 10px 12px;
-  background: #f8fafc;
-  border-left: 3px solid #6366f1;
+  background: var(--jt-fill-light);
+  border-left: 3px solid var(--jt-brand);
   border-radius: 4px;
   font-size: 13px;
 
-  .info-label { color: #64748b; margin-bottom: 4px; font-size: 12px; }
+  .info-label { color: var(--jt-text-secondary); margin-bottom: 4px; font-size: 12px; }
   .info-row {
     display: flex;
     align-items: center;
@@ -251,11 +251,11 @@ const onClosed = () => {
       color: #0369a1;
       &.missing { color: #dc2626; }
     }
-    .info-title { color: #0f172a; font-weight: 500; }
+    .info-title { color: var(--jt-text-primary); font-weight: 500; }
     .info-source {
       font-size: 11px;
-      color: #94a3b8;
-      background: #e2e8f0;
+      color: var(--jt-text-muted);
+      background: var(--jt-card-border);
       padding: 1px 6px;
       border-radius: 3px;
     }
@@ -263,20 +263,20 @@ const onClosed = () => {
   .info-actors {
     margin-top: 4px;
     font-size: 12px;
-    color: #475569;
+    color: var(--jt-text-regular);
 
     .info-actors-label {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-size: 11px;
       margin-right: 6px;
     }
     .info-actors-empty {
-      color: #94a3b8;
+      color: var(--jt-text-muted);
       font-style: italic;
     }
   }
   .info-path {
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 11px;
     margin-top: 4px;
     font-family: ui-monospace, SFMono-Regular, monospace;
@@ -289,7 +289,7 @@ const onClosed = () => {
 
   .candidates-header {
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
     margin-bottom: 8px;
   }
 
@@ -306,20 +306,20 @@ const onClosed = () => {
   align-items: flex-start;
   gap: 12px;
   padding: 10px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--jt-card-bg);
+  border: 1px solid var(--jt-card-border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
 
   &:hover {
     border-color: #c7d2fe;
-    background: #f5f3ff;
+    background: var(--jt-brand-light-9);
   }
   &.active {
-    border-color: #6366f1;
-    background: #eef2ff;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    border-color: var(--jt-brand);
+    background: var(--jt-brand-light-9);
+    box-shadow: 0 0 0 3px rgba(var(--jt-brand-rgb), 0.15);
   }
 
   .candidate-radio { margin: 0; flex-shrink: 0; }
@@ -330,13 +330,13 @@ const onClosed = () => {
     aspect-ratio: 16 / 11;
     border-radius: 4px;
     flex-shrink: 0;
-    background: #f1f5f9;
+    background: var(--jt-fill-light);
   }
   .cover-ph {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #94a3b8;
+    color: var(--jt-text-muted);
     font-size: 11px;
   }
 
@@ -353,11 +353,11 @@ const onClosed = () => {
       align-items: center;
       gap: 6px;
       font-size: 12px;
-      color: #64748b;
+      color: var(--jt-text-secondary);
     }
     .src-tag {
-      background: #6366f1;
-      color: #fff;
+      background: var(--jt-brand);
+      color: var(--jt-card-bg);
       padding: 1px 6px;
       border-radius: 3px;
       font-size: 11px;
@@ -376,19 +376,19 @@ const onClosed = () => {
     .candidate-title {
       font-size: 14px;
       font-weight: 500;
-      color: #0f172a;
+      color: var(--jt-text-primary);
       line-height: 1.4;
     }
     .candidate-actors {
       font-size: 12px;
-      color: #475569;
+      color: var(--jt-text-regular);
       .meta-label {
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         margin-right: 4px;
         font-size: 11px;
       }
       .actors-empty {
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         font-style: italic;
       }
     }
@@ -397,7 +397,7 @@ const onClosed = () => {
       flex-wrap: wrap;
       gap: 4px;
       align-items: center;
-      .more { font-size: 11px; color: #94a3b8; }
+      .more { font-size: 11px; color: var(--jt-text-muted); }
     }
   }
 }

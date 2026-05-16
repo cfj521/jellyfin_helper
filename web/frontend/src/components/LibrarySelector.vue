@@ -215,7 +215,7 @@ const typeTagType = (t) => ({
   .lib-detail {
     margin-top: 8px;
     padding: 8px 12px;
-    background: #f5f7fa;
+    background: var(--jt-fill-light);
     border-radius: 4px;
     font-size: 13px;
 

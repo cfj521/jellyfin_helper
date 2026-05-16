@@ -146,14 +146,14 @@ const goToChild = (taskId) => {
   justify-content: space-between;
   align-items: baseline;
 }
-.muted { color: #94a3b8; font-size: 12px; }
+.muted { color: var(--jt-text-muted); font-size: 12px; }
 
 .placeholder {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 24px;
-  color: #64748b;
+  color: var(--jt-text-secondary);
   font-size: 13px;
   justify-content: center;
 }
@@ -173,11 +173,11 @@ const goToChild = (taskId) => {
     top: 36px;
     bottom: -8px;
     width: 2px;
-    background: #e2e8f0;
+    background: var(--jt-card-border);
   }
 
-  &.is-completed::before { background: #10b981; }
-  &.is-failed::before { background: #ef4444; }
+  &.is-completed::before { background: var(--jt-success); }
+  &.is-failed::before { background: var(--jt-danger); }
 }
 
 .step-line {
@@ -190,8 +190,8 @@ const goToChild = (taskId) => {
 .step-icon {
   width: 36px; height: 36px;
   border-radius: 50%;
-  background: #e2e8f0;
-  color: #64748b;
+  background: var(--jt-card-border);
+  color: var(--jt-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -201,15 +201,15 @@ const goToChild = (taskId) => {
 }
 
 .is-completed .step-icon {
-  background: #10b981;
+  background: var(--jt-success);
   color: #fff;
 }
 .is-failed .step-icon {
-  background: #ef4444;
+  background: var(--jt-danger);
   color: #fff;
 }
 .is-running .step-icon {
-  background: #409eff;
+  background: var(--el-color-primary);
   color: #fff;
 }
 
@@ -245,13 +245,13 @@ const goToChild = (taskId) => {
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--jt-fill-light);
+    border: 1px solid var(--jt-card-border);
     border-radius: 10px;
     font-size: 12px;
 
-    .chip-label { color: #64748b; }
-    .chip-value { font-family: monospace; color: #1e293b; }
+    .chip-label { color: var(--jt-text-secondary); }
+    .chip-value { font-family: monospace; color: var(--jt-text-primary); }
   }
 }
 

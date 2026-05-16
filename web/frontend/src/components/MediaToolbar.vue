@@ -776,8 +776,8 @@ const confirmRunAll = async () => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 14px;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border: 1px solid #e2e8f0;
+  background: var(--jt-fill-light);
+  border: 1px solid var(--jt-card-border);
   border-radius: 8px;
   margin-bottom: 16px;
 
@@ -791,9 +791,9 @@ const confirmRunAll = async () => {
     align-items: center;
     gap: 8px;
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
 
-    .scope-icon { color: #6366f1; }
+    .scope-icon { color: var(--jt-brand); }
     .scope-label { font-weight: 500; }
   }
 
@@ -821,7 +821,7 @@ const confirmRunAll = async () => {
 .audio-dialog-tip {
   margin-bottom: 14px;
   font-size: 13px;
-  color: #64748b;
+  color: var(--jt-text-secondary);
   line-height: 1.5;
 }
 
@@ -829,18 +829,18 @@ const confirmRunAll = async () => {
 .audio-exception-tip {
   margin-top: 12px;
   padding: 8px 12px;
-  background: #f1f5f9;
-  border-left: 3px solid #6366f1;
+  background: var(--jt-fill-light);
+  border-left: 3px solid var(--jt-brand);
   border-radius: 4px;
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #475569;
+  color: var(--jt-text-regular);
   line-height: 1.5;
 
   .el-icon {
-    color: #6366f1;
+    color: var(--jt-brand);
     font-size: 14px;
     flex-shrink: 0;
   }
@@ -849,16 +849,16 @@ const confirmRunAll = async () => {
 // ── 通用确认对话框 ──
 .confirm-scope {
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
   border-radius: 4px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   font-weight: 500;
   margin-bottom: 12px;
 }
 .confirm-text {
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   line-height: 1.7;
   margin-bottom: 14px;
 }
@@ -899,17 +899,17 @@ const confirmRunAll = async () => {
 // ── 一键修复对话框 ──
 .runall-scope {
   padding: 8px 12px;
-  background: #f1f5f9;
+  background: var(--jt-fill-light);
   border-radius: 4px;
   font-size: 13px;
-  color: #475569;
+  color: var(--jt-text-regular);
   font-weight: 500;
   margin-bottom: 12px;
 }
 
 .runall-tip {
   font-size: 13px;
-  color: #64748b;
+  color: var(--jt-text-secondary);
   line-height: 1.6;
   margin-bottom: 14px;
 }
@@ -924,7 +924,7 @@ const confirmRunAll = async () => {
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    border-bottom: 1px dashed #e2e8f0;
+    border-bottom: 1px dashed var(--jt-card-border);
     font-size: 13px;
 
     &:last-child { border-bottom: none; }
@@ -937,7 +937,7 @@ const confirmRunAll = async () => {
     .step-no {
       width: 22px; height: 22px;
       border-radius: 50%;
-      background: #6366f1;
+      background: var(--jt-brand);
       color: #fff;
       font-size: 12px;
       display: flex;
@@ -952,13 +952,13 @@ const confirmRunAll = async () => {
       border-radius: 3px;
 
       &.danger {
-        background: #fef2f2;
+        background: var(--jt-danger-tint);
         color: #dc2626;
-        border: 1px solid #fecaca;
+        border: 1px solid var(--jt-danger-border);
       }
       &.skip {
-        background: #f1f5f9;
-        color: #64748b;
+        background: var(--jt-fill-light);
+        color: var(--jt-text-secondary);
       }
     }
   }
@@ -968,7 +968,7 @@ const confirmRunAll = async () => {
   .audio-section-label {
     font-size: 13px;
     font-weight: 500;
-    color: #475569;
+    color: var(--jt-text-regular);
     margin-bottom: 8px;
   }
 }
