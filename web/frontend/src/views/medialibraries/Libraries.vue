@@ -139,6 +139,7 @@ import { useRouter } from 'vue-router'
 import { Refresh, MagicStick, Check, Close, Loading, DataAnalysis, Warning, Right, Connection, Link } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { jellyfinApi, configApi } from '@/api'
+import { useNetwork } from '@/composables/useNetwork'
 import RefreshLibraryDialog from '@/components/RefreshLibraryDialog.vue'
 import MediaToolbar from '@/components/MediaToolbar.vue'
 
@@ -150,6 +151,7 @@ const statsError = reactive({})  // 每个库的加载错误信息
 const loading = ref(false)
 const loadError = ref('')
 const systemInfo = ref(null)
+const { isLan } = useNetwork()
 const jellyfinHost = ref('')  // 用于 Jellyfin Web 跳转链接
 const refreshing = ref(false)  // 当前刷新中的库 id（单库），或 true（全局）
 const showRefreshDialog = ref(false)
@@ -193,10 +195,11 @@ const loadAll = async (force = false) => {
     systemInfo.value = r.data
   } catch {}
   try {
-    // 拿 Jellyfin host 用于"在新窗口打开"链接
     const r2 = await configApi.getFull()
-    const host = r2.data?.config?.jellyfin?.host
-    if (host) jellyfinHost.value = host.replace(/\/$/, '') + '/web/'
+    const jf = r2.data?.config?.jellyfin || {}
+    // 内网用 host，公网用 external_url（Jellyfin 已暴露公网所以有 fallback）
+    const url = isLan ? (jf.host || jf.external_url) : (jf.external_url || jf.host)
+    if (url) jellyfinHost.value = url.replace(/\/$/, '') + '/web/'
   } catch {}
 }
 

@@ -63,6 +63,11 @@
           <el-form :model="form.jellyfin" label-width="120px">
             <el-form-item label="服务器地址">
               <el-input v-model="form.jellyfin.host" placeholder="http://192.168.1.100:8096" />
+              <div class="form-hint">后端连接用（内网地址即可）</div>
+            </el-form-item>
+            <el-form-item label="外部地址">
+              <el-input v-model="form.jellyfin.external_url" placeholder="https://jf.example.com" />
+              <div class="form-hint">公网可访问的 Jellyfin 地址，用于页面跳转链接。留空则使用上面的服务器地址</div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input v-model="form.jellyfin.api_key" type="password" show-password />
@@ -1279,6 +1284,95 @@
           <pre ref="logsViewer" class="logs-viewer" v-loading="logsLoading">{{ logsContent || '（无日志）' }}</pre>
         </el-card>
       </el-tab-pane>
+
+      <!-- ============ 用户管理 ============ -->
+      <el-tab-pane name="users" v-if="isAdmin">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><User /></el-icon>
+            <span>用户管理</span>
+          </div>
+        </template>
+
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><User /></el-icon>
+              <span>用户列表</span>
+              <el-button size="small" type="primary" :icon="Plus" @click="showAddUser = true">
+                添加用户
+              </el-button>
+            </div>
+          </template>
+
+          <el-table :data="userList" v-loading="usersLoading" stripe>
+            <el-table-column prop="username" label="用户名" width="180" />
+            <el-table-column prop="role" label="角色" width="120">
+              <template #default="{ row }">
+                <el-tag :type="row.role === 'admin' ? 'danger' : 'info'" size="small">
+                  {{ row.role === 'admin' ? '管理员' : '访客' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="创建时间" width="180">
+              <template #default="{ row }">
+                {{ new Date(row.created_at).toLocaleString('zh-CN') }}
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" min-width="200">
+              <template #default="{ row }">
+                <el-button size="small" @click="openChangePassword(row)">改密码</el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  :disabled="row.username === currentUser.username"
+                  @click="handleDeleteUser(row)"
+                >
+                  删除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+
+        <!-- 添加用户对话框 -->
+        <el-dialog v-model="showAddUser" title="添加用户" width="400px" destroy-on-close>
+          <el-form :model="newUserForm" label-width="80px">
+            <el-form-item label="用户名">
+              <el-input v-model="newUserForm.username" placeholder="请输入用户名" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="newUserForm.password" type="password" show-password placeholder="请输入密码" />
+            </el-form-item>
+            <el-form-item label="角色">
+              <el-radio-group v-model="newUserForm.role">
+                <el-radio value="admin">管理员</el-radio>
+                <el-radio value="guest">访客</el-radio>
+              </el-radio-group>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="showAddUser = false">取消</el-button>
+            <el-button type="primary" :loading="addingUser" @click="handleAddUser">确定</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 修改密码对话框 -->
+        <el-dialog v-model="showChangePassword" title="修改密码" width="400px" destroy-on-close>
+          <el-form label-width="80px">
+            <el-form-item label="用户">
+              <el-input :model-value="changePwdTarget?.username" disabled />
+            </el-form-item>
+            <el-form-item label="新密码">
+              <el-input v-model="newPassword" type="password" show-password placeholder="请输入新密码" />
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="showChangePassword = false">取消</el-button>
+            <el-button type="primary" :loading="changingPwd" @click="handleChangePassword">确定</el-button>
+          </template>
+        </el-dialog>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -1293,7 +1387,7 @@ import {
   Aim, Download,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, adultApi, logsApi, jellyfinApi } from '@/api'
+import { configApi, adultApi, logsApi, jellyfinApi, authApi } from '@/api'
 import SourcePool from '@/components/SourcePool.vue'
 
 const activeTab = ref('basic')
@@ -1424,7 +1518,7 @@ const DISPATCH_DEFAULT_FILE = {
 
 const blank = () => ({
   server: { backend_port: 8099, frontend_port: 5173 },
-  jellyfin: { host: '', api_key: '', db_path: '' },
+  jellyfin: { host: '', external_url: '', api_key: '', db_path: '' },
   tmdb: { api_key: '', request_delay: 30, language: 'zh-CN' },
   subtitle: {
     opensubtitles_api_key: '',
@@ -2012,10 +2106,85 @@ const dispatchAllConfigured = computed(() => {
   return dispatchMediaTypes.every(mt => !!form.dispatch.rules[mt.key]?.library_id)
 })
 
+// ==================== 用户管理 ====================
+const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+const isAdmin = currentUser.role === 'admin'
+const userList = ref([])
+const usersLoading = ref(false)
+const showAddUser = ref(false)
+const addingUser = ref(false)
+const newUserForm = reactive({ username: '', password: '', role: 'guest' })
+const showChangePassword = ref(false)
+const changingPwd = ref(false)
+const changePwdTarget = ref(null)
+const newPassword = ref('')
+
+async function loadUsers() {
+  if (!isAdmin) return
+  usersLoading.value = true
+  try {
+    const { data } = await authApi.listUsers()
+    userList.value = data
+  } catch { /* interceptor handles */ }
+  finally { usersLoading.value = false }
+}
+
+async function handleAddUser() {
+  if (!newUserForm.username || !newUserForm.password) {
+    ElMessage.warning('请填写用户名和密码')
+    return
+  }
+  addingUser.value = true
+  try {
+    await authApi.createUser(newUserForm)
+    ElMessage.success('添加成功')
+    showAddUser.value = false
+    newUserForm.username = ''
+    newUserForm.password = ''
+    newUserForm.role = 'guest'
+    loadUsers()
+  } catch { /* interceptor handles */ }
+  finally { addingUser.value = false }
+}
+
+function openChangePassword(user) {
+  changePwdTarget.value = user
+  newPassword.value = ''
+  showChangePassword.value = true
+}
+
+async function handleChangePassword() {
+  if (!newPassword.value) {
+    ElMessage.warning('请输入新密码')
+    return
+  }
+  changingPwd.value = true
+  try {
+    await authApi.changePassword(changePwdTarget.value.id, newPassword.value)
+    ElMessage.success('密码已修改')
+    showChangePassword.value = false
+  } catch { /* interceptor handles */ }
+  finally { changingPwd.value = false }
+}
+
+async function handleDeleteUser(user) {
+  await ElMessageBox.confirm(`确定删除用户 "${user.username}" 吗？`, '删除确认', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+  })
+  try {
+    await authApi.deleteUser(user.id)
+    ElMessage.success('已删除')
+    loadUsers()
+  } catch { /* interceptor handles */ }
+}
+
 onMounted(() => {
   loadConfig()
   loadJellyfinLibraries()
   refreshActressStatus()
+  loadUsers()
   // 运行中每 3 秒轮询一次；闲时 10 秒一次（保留检测重启 / 别处启动）
   actressPollTimer = setInterval(() => {
     refreshActressStatus()

@@ -116,7 +116,7 @@ from web.backend.api import (
     subtitle, metadata, media, stats, tasks, config_api,
     discover, resourcesearch, downloadpipeline,
     medialibraries, audio, maintenance, ratings, logs as logs_api, dispatch,
-    img_proxy,
+    img_proxy, auth,
 )
 
 
@@ -139,6 +139,10 @@ async def lifespan(app: FastAPI):
 
     # 启动时初始化数据库
     init_db()
+
+    # 同步 config.yaml 中的用户到数据库
+    from web.backend.api.auth import sync_users_from_config
+    sync_users_from_config()
 
     # 配置 DoubanClient 全局熔断（进程内所有路径共享，见 common/douban_client.py）
     try:
@@ -282,7 +286,12 @@ from web.backend.diagnostics import TimingMiddleware, install_pool_monitoring
 app.add_middleware(TimingMiddleware)
 install_pool_monitoring()
 
+# 认证中间件（在诊断之后注册 = 执行时在诊断之前，即最外层拦截）
+from web.backend.auth_middleware import AuthMiddleware
+app.add_middleware(AuthMiddleware)
+
 # 注册路由
+app.include_router(auth.router, prefix="/api/auth", tags=["认证"])
 app.include_router(subtitle.router, prefix="/api/subtitle", tags=["字幕管理"])
 app.include_router(metadata.router, prefix="/api/metadata", tags=["元数据管理"])
 app.include_router(media.router, prefix="/api/media", tags=["媒体库管理"])

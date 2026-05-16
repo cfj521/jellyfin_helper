@@ -124,6 +124,7 @@ import { useRoute } from 'vue-router'
 import { Search, Link } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { discoverApi, configApi } from '@/api'
+import { useNetwork } from '@/composables/useNetwork'
 
 const route = useRoute()
 const form = ref({ query: '', category: 'all' })
@@ -133,14 +134,18 @@ const keywords = ref([])
 const defaultKeywords = ref('')
 const jackettUrl = ref('')  // 用于"打开 Jackett 后台"链接
 
+const { isLan } = useNetwork()
+
 const loadConfig = async () => {
   try {
     const r = await configApi.getFull()
     const j = r.data?.config?.jackett || {}
     keywords.value = j.search_keywords || []
     defaultKeywords.value = j.default_keywords || ''
-    if (j.host) {
-      jackettUrl.value = String(j.host).replace(/\/$/, '') + '/UI/Dashboard'
+    // 内网访问用 host，公网访问用 external_url（没配则不显示）
+    const jUrl = isLan ? (j.external_url || j.host) : j.external_url
+    if (jUrl) {
+      jackettUrl.value = String(jUrl).replace(/\/$/, '') + '/UI/Dashboard'
     }
   } catch {
     keywords.value = []

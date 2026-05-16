@@ -11,9 +11,13 @@ export const api = axios.create({
   paramsSerializer: { indexes: null },
 })
 
-// 请求拦截器
+// 请求拦截器：自动附加 JWT token
 api.interceptors.request.use(
   config => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
     return config
   },
   error => {
@@ -21,17 +25,44 @@ api.interceptors.request.use(
   }
 )
 
-// 响应拦截器
+// 响应拦截器：401 时跳转登录
 api.interceptors.response.use(
   response => {
     return response
   },
   error => {
+    if (error.response?.status === 401) {
+      const isLoginReq = error.config?.url?.includes('/api/auth/login')
+      if (isLoginReq) {
+        const message = error.response?.data?.detail || '用户名或密码错误'
+        ElMessage.error(message)
+      } else {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login'
+        }
+      }
+      return Promise.reject(error)
+    }
     const message = error.response?.data?.detail || error.message || '请求失败'
     ElMessage.error(message)
     return Promise.reject(error)
   }
 )
+
+// 认证相关 API
+export const authApi = {
+  login: (username, password) =>
+    api.post('/api/auth/login', { username, password }),
+  me: () => api.get('/api/auth/me'),
+  status: () => api.get('/api/auth/status'),
+  listUsers: () => api.get('/api/auth/users'),
+  createUser: (data) => api.post('/api/auth/users', data),
+  changePassword: (userId, password) =>
+    api.put(`/api/auth/users/${userId}/password`, { password }),
+  deleteUser: (userId) => api.delete(`/api/auth/users/${userId}`),
+}
 
 // 字幕相关 API
 export const subtitleApi = {

@@ -1,6 +1,10 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <el-container class="app-container">
+    <!-- 登录页：无侧边栏布局 -->
+    <router-view v-if="$route.meta.public" />
+
+    <!-- 正常布局 -->
+    <el-container v-else class="app-container">
       <!-- 侧边栏 -->
       <el-aside width="220px" class="app-aside">
         <div class="logo">
@@ -44,22 +48,30 @@
           </el-menu-item>
         </el-menu>
 
-        <!-- 主题切换 -->
-        <div class="theme-picker">
-          <el-tooltip
-            v-for="t in themes"
-            :key="t.key"
-            :content="t.name"
-            placement="top"
-            :show-after="300"
-          >
-            <div
-              class="theme-dot"
-              :class="{ active: currentTheme === t.key }"
-              :style="{ '--dot-color': t.color }"
-              @click="setTheme(t.key)"
-            />
-          </el-tooltip>
+        <!-- 主题切换 + 用户 -->
+        <div class="sidebar-footer">
+          <div class="theme-picker">
+            <el-tooltip
+              v-for="t in themes"
+              :key="t.key"
+              :content="t.name"
+              placement="top"
+              :show-after="300"
+            >
+              <div
+                class="theme-dot"
+                :class="{ active: currentTheme === t.key }"
+                :style="{ '--dot-color': t.color }"
+                @click="setTheme(t.key)"
+              />
+            </el-tooltip>
+          </div>
+          <div class="user-bar" v-if="currentUser">
+            <span class="user-name">{{ currentUser.username }}</span>
+            <el-tooltip content="退出登录" placement="top" :show-after="300">
+              <el-icon class="logout-btn" @click="handleLogout"><SwitchButton /></el-icon>
+            </el-tooltip>
+          </div>
         </div>
       </el-aside>
 
@@ -86,10 +98,23 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useTheme } from '@/composables/useTheme'
 
+const router = useRouter()
 const { themes, current: currentTheme, setTheme } = useTheme()
+
+const currentUser = computed(() => {
+  try { return JSON.parse(localStorage.getItem('user') || 'null') } catch { return null }
+})
+
+function handleLogout() {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  router.push('/login')
+}
 </script>
 
 <style lang="scss">
@@ -230,14 +255,43 @@ const { themes, current: currentTheme, setTheme } = useTheme()
   }
 }
 
-// ============ 主题切换器 ============
+// ============ 侧边栏底部 ============
+.sidebar-footer {
+  border-top: 1px solid var(--jt-sidebar-divider);
+}
+
 .theme-picker {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 14px 16px;
-  border-top: 1px solid var(--jt-sidebar-divider);
+  padding: 12px 16px 6px;
+}
+
+.user-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 16px 14px;
+  color: var(--jt-sidebar-text-muted);
+  font-size: 13px;
+
+  .user-name {
+    opacity: 0.8;
+  }
+
+  .logout-btn {
+    cursor: pointer;
+    font-size: 18px;
+    opacity: 0.6;
+    transition: all 0.2s;
+
+    &:hover {
+      opacity: 1;
+      color: #f87171;
+    }
+  }
 }
 
 .theme-dot {

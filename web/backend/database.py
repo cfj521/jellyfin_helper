@@ -40,6 +40,17 @@ def get_db():
 
 # ==================== 模型定义 ====================
 
+class User(Base):
+    """用户"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(200), nullable=False)
+    role = Column(String(20), nullable=False, default="guest")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Task(Base):
     """后台任务"""
     __tablename__ = "tasks"
@@ -434,6 +445,8 @@ _SCHEMA_PATCHES = [
      "TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'UTC')"),
     # qb_added_on：qB 那边的加种时间戳，用于 adopt 识别"同 hash 重新加种"
     ("download_dispatch_map", "qb_added_on", "TIMESTAMP"),
+    # 用户认证
+    ("users", "role", "VARCHAR(20) DEFAULT 'guest' NOT NULL"),
 ]
 
 
