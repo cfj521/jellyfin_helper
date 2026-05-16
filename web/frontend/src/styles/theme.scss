@@ -1,97 +1,274 @@
 // =====================================================================
-// Jellyfin Tools 全局主题
-// 所有颜色集中在这里，便于统一调整
+// Jellyfin Tools 多主题系统
+// CSS Custom Properties 驱动，通过 html[data-theme] 切换
+// 主题：default（靛蓝）/ dark（暗夜）/ emerald（翡翠）
 // =====================================================================
 
-// ============ 设计变量 ============
-$brand:           #6366f1;   // 主色：靛蓝紫
-$brand-soft:      #818cf8;   // 浅
-$brand-dark:      #4f46e5;   // 深
-$brand-darker:    #4338ca;
-$brand-tint:      rgba(99, 102, 241, 0.10);  // 极淡，用于选中背景
-
-$accent-purple:   #8b5cf6;   // logo 渐变末端
-
-$sidebar-bg:      #0f172a;   // 侧边栏：slate-900
-$sidebar-bg-hover:#1e293b;   // hover/激活
-$sidebar-bg-deep: #060b18;   // 子菜单展开（比 bg 更深，体现层级）
-$sidebar-text:    #cbd5e1;
-$sidebar-text-muted: #94a3b8;
-$sidebar-text-active: #ffffff;
-
-$content-bg:      #f1f5f9;   // 主区背景
-$header-bg:       #ffffff;
-$card-bg:         #ffffff;
-$card-border:     #e2e8f0;
-$divider:         #e2e8f0;
-$divider-light:   #f1f5f9;
-
-$text-primary:    #0f172a;
-$text-regular:    #334155;
-$text-secondary:  #64748b;
-$text-muted:      #94a3b8;
-
-$success:         #10b981;
-$warning:         #f59e0b;
-$danger:          #ef4444;
-$info:            #6b7280;
-
-// ============ Element Plus CSS 变量全局 override ============
+// ============ 默认主题（靛蓝） ============
 :root {
-  // 主色（影响 el-button primary、el-link、el-tag primary、el-progress 等）
-  --el-color-primary: #{$brand};
-  --el-color-primary-light-3: #{$brand-soft};
+  --jt-brand: #6366f1;
+  --jt-brand-rgb: 99, 102, 241;
+  --jt-brand-soft: #818cf8;
+  --jt-brand-dark: #4f46e5;
+  --jt-brand-darker: #4338ca;
+  --jt-brand-tint: rgba(99, 102, 241, 0.10);
+  --jt-accent: #8b5cf6;
+
+  --jt-sidebar-bg: #0f172a;
+  --jt-sidebar-bg-hover: #1e293b;
+  --jt-sidebar-bg-deep: #060b18;
+  --jt-sidebar-text: #cbd5e1;
+  --jt-sidebar-text-muted: #94a3b8;
+  --jt-sidebar-text-active: #ffffff;
+  --jt-sidebar-divider: #1e293b;
+
+  --jt-content-bg: #f1f5f9;
+  --jt-header-bg: #ffffff;
+  --jt-card-bg: #ffffff;
+  --jt-card-border: #e2e8f0;
+  --jt-card-header-from: #fafbfc;
+  --jt-fill-light: #f8fafc;
+  --jt-divider: #e2e8f0;
+  --jt-divider-light: #f1f5f9;
+
+  --jt-text-primary: #0f172a;
+  --jt-text-regular: #334155;
+  --jt-text-secondary: #64748b;
+  --jt-text-muted: #94a3b8;
+
+  --jt-success: #10b981;
+  --jt-success-rgb: 16, 185, 129;
+  --jt-warning: #f59e0b;
+  --jt-warning-rgb: 245, 158, 11;
+  --jt-danger: #ef4444;
+  --jt-danger-rgb: 239, 68, 68;
+  --jt-info: #6b7280;
+
+  --jt-shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04);
+  --jt-shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --jt-shadow-lg: 0 12px 48px rgba(15, 23, 42, 0.2);
+  --jt-shadow-primary: 0 1px 3px rgba(99, 102, 241, 0.3);
+
+  --jt-radius-card: 8px;
+  --jt-radius-base: 6px;
+  --jt-radius-dialog: 10px;
+
+  // Element Plus overrides
+  --el-color-primary: var(--jt-brand);
+  --el-color-primary-light-3: var(--jt-brand-soft);
   --el-color-primary-light-5: #a5b4fc;
   --el-color-primary-light-7: #c7d2fe;
   --el-color-primary-light-8: #ddd6fe;
   --el-color-primary-light-9: #eef2ff;
-  --el-color-primary-dark-2: #{$brand-dark};
-
-  // 状态色
-  --el-color-success: #{$success};
-  --el-color-warning: #{$warning};
-  --el-color-danger: #{$danger};
-  --el-color-error: #{$danger};
-  --el-color-info: #{$info};
-
-  // 文字色
-  --el-text-color-primary: #{$text-primary};
-  --el-text-color-regular: #{$text-regular};
-  --el-text-color-secondary: #{$text-secondary};
-  --el-text-color-placeholder: #{$text-muted};
-
-  // 边框
-  --el-border-color: #{$card-border};
-  --el-border-color-light: #{$divider};
-  --el-border-color-lighter: #{$divider-light};
-
-  // 圆角统一
-  --el-border-radius-base: 6px;
+  --el-color-primary-dark-2: var(--jt-brand-dark);
+  --el-color-success: var(--jt-success);
+  --el-color-warning: var(--jt-warning);
+  --el-color-danger: var(--jt-danger);
+  --el-color-error: var(--jt-danger);
+  --el-color-info: var(--jt-info);
+  --el-text-color-primary: var(--jt-text-primary);
+  --el-text-color-regular: var(--jt-text-regular);
+  --el-text-color-secondary: var(--jt-text-secondary);
+  --el-text-color-placeholder: var(--jt-text-muted);
+  --el-border-color: var(--jt-card-border);
+  --el-border-color-light: var(--jt-divider);
+  --el-border-color-lighter: var(--jt-divider-light);
+  --el-border-radius-base: var(--jt-radius-base);
   --el-border-radius-small: 4px;
   --el-border-radius-round: 16px;
-
-  // 字体
   --el-font-size-base: 14px;
+  --el-bg-color: var(--jt-card-bg);
+  --el-bg-color-overlay: var(--jt-card-bg);
+  --el-bg-color-page: var(--jt-content-bg);
+  --el-fill-color-blank: var(--jt-card-bg);
 }
 
-// ============ 卡片：圆角 + 柔阴影 ============
+// ============ 暗夜主题 ============
+[data-theme="dark"] {
+  --jt-brand: #818cf8;
+  --jt-brand-rgb: 129, 140, 248;
+  --jt-brand-soft: #a5b4fc;
+  --jt-brand-dark: #6366f1;
+  --jt-brand-darker: #4f46e5;
+  --jt-brand-tint: rgba(129, 140, 248, 0.12);
+  --jt-accent: #a78bfa;
+
+  --jt-sidebar-bg: #0c0f1a;
+  --jt-sidebar-bg-hover: #1a1f35;
+  --jt-sidebar-bg-deep: #06080f;
+  --jt-sidebar-text: #94a3b8;
+  --jt-sidebar-text-muted: #64748b;
+  --jt-sidebar-text-active: #e2e8f0;
+  --jt-sidebar-divider: #1a1f35;
+
+  --jt-content-bg: #111827;
+  --jt-header-bg: #1f2937;
+  --jt-card-bg: #1f2937;
+  --jt-card-border: #374151;
+  --jt-card-header-from: #283548;
+  --jt-fill-light: #283548;
+  --jt-divider: #374151;
+  --jt-divider-light: #1f2937;
+
+  --jt-text-primary: #f1f5f9;
+  --jt-text-regular: #cbd5e1;
+  --jt-text-secondary: #94a3b8;
+  --jt-text-muted: #64748b;
+
+  --jt-success: #34d399;
+  --jt-success-rgb: 52, 211, 153;
+  --jt-warning: #fbbf24;
+  --jt-warning-rgb: 251, 191, 36;
+  --jt-danger: #f87171;
+  --jt-danger-rgb: 248, 113, 113;
+  --jt-info: #9ca3af;
+
+  --jt-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --jt-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --jt-shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.6);
+  --jt-shadow-primary: 0 1px 3px rgba(129, 140, 248, 0.3);
+
+  --jt-radius-card: 10px;
+  --jt-radius-base: 8px;
+  --jt-radius-dialog: 12px;
+
+  // Element Plus dark overrides
+  --el-color-primary: var(--jt-brand);
+  --el-color-primary-light-3: #a5b4fc;
+  --el-color-primary-light-5: #6366f1;
+  --el-color-primary-light-7: #3730a3;
+  --el-color-primary-light-8: #312e81;
+  --el-color-primary-light-9: #1e1b4b;
+  --el-color-primary-dark-2: #6366f1;
+  --el-color-success: var(--jt-success);
+  --el-color-warning: var(--jt-warning);
+  --el-color-danger: var(--jt-danger);
+  --el-color-error: var(--jt-danger);
+  --el-color-info: var(--jt-info);
+  --el-text-color-primary: var(--jt-text-primary);
+  --el-text-color-regular: var(--jt-text-regular);
+  --el-text-color-secondary: var(--jt-text-secondary);
+  --el-text-color-placeholder: var(--jt-text-muted);
+  --el-border-color: var(--jt-card-border);
+  --el-border-color-light: var(--jt-divider);
+  --el-border-color-lighter: var(--jt-divider-light);
+  --el-bg-color: var(--jt-card-bg);
+  --el-bg-color-overlay: #283548;
+  --el-bg-color-page: var(--jt-content-bg);
+  --el-fill-color: #374151;
+  --el-fill-color-light: #283548;
+  --el-fill-color-lighter: #1f2937;
+  --el-fill-color-extra-light: #1e293b;
+  --el-fill-color-blank: var(--jt-card-bg);
+  --el-fill-color-dark: #475569;
+  --el-mask-color: rgba(0, 0, 0, 0.7);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.3);
+  --el-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --el-box-shadow-light: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --el-box-shadow-lighter: 0 1px 4px rgba(0, 0, 0, 0.3);
+  --el-box-shadow-dark: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --el-disabled-bg-color: #374151;
+  --el-disabled-text-color: #64748b;
+  --el-disabled-border-color: #475569;
+  --el-border-radius-base: var(--jt-radius-base);
+
+  color-scheme: dark;
+}
+
+// ============ 翡翠主题 ============
+[data-theme="emerald"] {
+  --jt-brand: #10b981;
+  --jt-brand-rgb: 16, 185, 129;
+  --jt-brand-soft: #34d399;
+  --jt-brand-dark: #059669;
+  --jt-brand-darker: #047857;
+  --jt-brand-tint: rgba(16, 185, 129, 0.10);
+  --jt-accent: #06b6d4;
+
+  --jt-sidebar-bg: #064e3b;
+  --jt-sidebar-bg-hover: #065f46;
+  --jt-sidebar-bg-deep: #022c22;
+  --jt-sidebar-text: #a7f3d0;
+  --jt-sidebar-text-muted: #6ee7b7;
+  --jt-sidebar-text-active: #ffffff;
+  --jt-sidebar-divider: #065f46;
+
+  --jt-content-bg: #f0fdf4;
+  --jt-header-bg: #ffffff;
+  --jt-card-bg: #ffffff;
+  --jt-card-border: #bbf7d0;
+  --jt-card-header-from: #ecfdf5;
+  --jt-fill-light: #ecfdf5;
+  --jt-divider: #bbf7d0;
+  --jt-divider-light: #ecfdf5;
+
+  --jt-text-primary: #022c22;
+  --jt-text-regular: #334155;
+  --jt-text-secondary: #64748b;
+  --jt-text-muted: #94a3b8;
+
+  --jt-success: #10b981;
+  --jt-success-rgb: 16, 185, 129;
+  --jt-warning: #f59e0b;
+  --jt-warning-rgb: 245, 158, 11;
+  --jt-danger: #ef4444;
+  --jt-danger-rgb: 239, 68, 68;
+  --jt-info: #6b7280;
+
+  --jt-shadow-sm: 0 1px 3px rgba(4, 120, 87, 0.06);
+  --jt-shadow-md: 0 4px 16px rgba(4, 120, 87, 0.10);
+  --jt-shadow-lg: 0 12px 48px rgba(4, 120, 87, 0.2);
+  --jt-shadow-primary: 0 1px 3px rgba(16, 185, 129, 0.3);
+
+  --jt-radius-card: 10px;
+  --jt-radius-base: 6px;
+  --jt-radius-dialog: 12px;
+
+  // Element Plus emerald overrides
+  --el-color-primary: var(--jt-brand);
+  --el-color-primary-light-3: var(--jt-brand-soft);
+  --el-color-primary-light-5: #6ee7b7;
+  --el-color-primary-light-7: #a7f3d0;
+  --el-color-primary-light-8: #d1fae5;
+  --el-color-primary-light-9: #ecfdf5;
+  --el-color-primary-dark-2: var(--jt-brand-dark);
+  --el-color-success: var(--jt-success);
+  --el-color-warning: var(--jt-warning);
+  --el-color-danger: var(--jt-danger);
+  --el-color-error: var(--jt-danger);
+  --el-color-info: var(--jt-info);
+  --el-text-color-primary: var(--jt-text-primary);
+  --el-text-color-regular: var(--jt-text-regular);
+  --el-text-color-secondary: var(--jt-text-secondary);
+  --el-text-color-placeholder: var(--jt-text-muted);
+  --el-border-color: var(--jt-card-border);
+  --el-border-color-light: var(--jt-divider);
+  --el-border-color-lighter: var(--jt-divider-light);
+}
+
+// =====================================================================
+// 组件样式覆盖（使用 CSS Custom Properties）
+// =====================================================================
+
+// ============ 卡片 ============
 .el-card {
-  border-radius: 8px !important;
-  border: 1px solid $card-border !important;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04) !important;
+  border-radius: var(--jt-radius-card) !important;
+  border: 1px solid var(--jt-card-border) !important;
+  box-shadow: var(--jt-shadow-sm) !important;
+  background-color: var(--jt-card-bg) !important;
   transition: box-shadow 0.2s ease, transform 0.2s ease;
 
   &.is-hover-shadow:hover,
   &[shadow="hover"]:hover {
-    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08) !important;
+    box-shadow: var(--jt-shadow-md) !important;
   }
 
   .el-card__header {
     padding: 14px 18px;
-    background: linear-gradient(180deg, #fafbfc 0%, $card-bg 100%);
-    border-bottom: 1px solid $divider-light;
+    background: linear-gradient(180deg, var(--jt-card-header-from) 0%, var(--jt-card-bg) 100%);
+    border-bottom: 1px solid var(--jt-divider-light);
     font-weight: 600;
-    color: $text-primary;
+    color: var(--jt-text-primary);
   }
 
   .el-card__body {
@@ -101,32 +278,36 @@ $info:            #6b7280;
 
 // ============ 按钮 ============
 .el-button {
-  border-radius: 6px;
+  border-radius: var(--jt-radius-base);
   font-weight: 500;
   transition: all 0.2s ease;
 }
 
 .el-button--primary {
-  --el-button-bg-color: #{$brand};
-  --el-button-border-color: #{$brand};
-  --el-button-hover-bg-color: #{$brand-soft};
-  --el-button-hover-border-color: #{$brand-soft};
-  --el-button-active-bg-color: #{$brand-dark};
-  --el-button-active-border-color: #{$brand-dark};
-  box-shadow: 0 1px 3px rgba(99, 102, 241, 0.3);
+  --el-button-bg-color: var(--jt-brand);
+  --el-button-border-color: var(--jt-brand);
+  --el-button-hover-bg-color: var(--jt-brand-soft);
+  --el-button-hover-border-color: var(--jt-brand-soft);
+  --el-button-active-bg-color: var(--jt-brand-dark);
+  --el-button-active-border-color: var(--jt-brand-dark);
+  box-shadow: var(--jt-shadow-primary);
 }
 
 // ============ 表单元素 ============
 .el-input__wrapper {
-  border-radius: 6px;
+  border-radius: var(--jt-radius-base);
   transition: all 0.2s;
+  background-color: var(--jt-card-bg) !important;
 }
 
 .el-select__wrapper {
-  border-radius: 6px;
+  border-radius: var(--jt-radius-base);
 }
 
-// placeholder 强制不加粗：某些字体渲染下默认占位符看着发粗，统一压成 normal
+.el-textarea__inner {
+  background-color: var(--jt-card-bg) !important;
+}
+
 .el-input__inner::placeholder,
 .el-textarea__inner::placeholder,
 .el-select__placeholder,
@@ -136,28 +317,31 @@ $info:            #6b7280;
 
 // ============ 表格 ============
 .el-table {
-  border-radius: 6px;
+  border-radius: var(--jt-radius-base);
   overflow: hidden;
+  --el-table-bg-color: var(--jt-card-bg);
+  --el-table-tr-bg-color: var(--jt-card-bg);
+  --el-table-header-bg-color: var(--jt-fill-light);
+  --el-table-row-hover-bg-color: var(--jt-brand-tint);
+  --el-table-border-color: var(--jt-divider);
+  --el-table-text-color: var(--jt-text-regular);
+  --el-table-header-text-color: var(--jt-text-primary);
 
   th.el-table__cell {
-    background-color: #f8fafc !important;
-    color: $text-primary;
+    background-color: var(--jt-fill-light) !important;
+    color: var(--jt-text-primary);
     font-weight: 600;
   }
 
   tr:hover > td.el-table__cell {
-    background-color: $brand-tint !important;
+    background-color: var(--jt-brand-tint) !important;
   }
 
-  // 操作列：按钮加边框 + 浅阴影 + 间距
-  // Element Plus 的 text/plain 按钮在表格里默认无边框、视觉无层次。
-  // 这里给 cell 内所有按钮加统一的"小操作按钮"外观
   .cell {
     .el-button + .el-button {
       margin-left: 8px;
     }
 
-    // 通用：表格内按钮统一带边框（无阴影）
     .el-button.is-text,
     .el-button.is-link,
     .el-button.is-plain,
@@ -167,59 +351,54 @@ $info:            #6b7280;
       min-height: 28px;
       border-radius: 4px;
       font-weight: 500;
-      border: 1px solid #e2e8f0;
-      background-color: #fff;
+      border: 1px solid var(--jt-card-border);
+      background-color: var(--jt-card-bg);
       box-shadow: none;
       transition: all 0.15s ease;
     }
 
-    // primary
     .el-button.el-button--primary {
-      color: $brand;
-      border-color: rgba(99, 102, 241, 0.35);
+      color: var(--jt-brand);
+      border-color: rgba(var(--jt-brand-rgb), 0.35);
       &:hover {
-        background-color: rgba(99, 102, 241, 0.08);
-        border-color: $brand;
+        background-color: rgba(var(--jt-brand-rgb), 0.08);
+        border-color: var(--jt-brand);
       }
     }
 
-    // danger（删除按钮）
     .el-button.el-button--danger {
-      color: $danger;
-      border-color: rgba(239, 68, 68, 0.4);
+      color: var(--jt-danger);
+      border-color: rgba(var(--jt-danger-rgb), 0.4);
       &:hover {
-        background-color: rgba(239, 68, 68, 0.08);
-        border-color: $danger;
+        background-color: rgba(var(--jt-danger-rgb), 0.08);
+        border-color: var(--jt-danger);
       }
     }
 
-    // warning（取消等）
     .el-button.el-button--warning {
-      color: $warning;
-      border-color: rgba(245, 158, 11, 0.4);
+      color: var(--jt-warning);
+      border-color: rgba(var(--jt-warning-rgb), 0.4);
       &:hover {
-        background-color: rgba(245, 158, 11, 0.08);
-        border-color: $warning;
+        background-color: rgba(var(--jt-warning-rgb), 0.08);
+        border-color: var(--jt-warning);
       }
     }
 
-    // success
     .el-button.el-button--success {
-      color: $success;
-      border-color: rgba(16, 185, 129, 0.4);
+      color: var(--jt-success);
+      border-color: rgba(var(--jt-success-rgb), 0.4);
       &:hover {
-        background-color: rgba(16, 185, 129, 0.08);
-        border-color: $success;
+        background-color: rgba(var(--jt-success-rgb), 0.08);
+        border-color: var(--jt-success);
       }
     }
 
-    // info / 默认色
     .el-button.el-button--info,
     .el-button.el-button--default {
-      color: $text-regular;
+      color: var(--jt-text-regular);
       &:hover {
-        background-color: #f8fafc;
-        border-color: #cbd5e1;
+        background-color: var(--jt-fill-light);
+        border-color: var(--jt-text-muted);
       }
     }
   }
@@ -233,75 +412,99 @@ $info:            #6b7280;
 
 // ============ 弹窗 ============
 .el-dialog {
-  border-radius: 10px;
+  border-radius: var(--jt-radius-dialog);
   overflow: hidden;
-  box-shadow: 0 12px 48px rgba(15, 23, 42, 0.2);
+  box-shadow: var(--jt-shadow-lg);
+  background-color: var(--jt-card-bg);
 
   .el-dialog__header {
     padding: 16px 20px;
-    background: linear-gradient(180deg, #fafbfc 0%, $card-bg 100%);
-    border-bottom: 1px solid $divider-light;
+    background: linear-gradient(180deg, var(--jt-card-header-from) 0%, var(--jt-card-bg) 100%);
+    border-bottom: 1px solid var(--jt-divider-light);
     margin-right: 0;
 
     .el-dialog__title {
       font-weight: 600;
-      color: $text-primary;
+      color: var(--jt-text-primary);
     }
   }
 
   .el-dialog__body {
     padding: 20px;
+    color: var(--jt-text-regular);
   }
 
   .el-dialog__footer {
     padding: 12px 20px;
-    border-top: 1px solid $divider-light;
+    border-top: 1px solid var(--jt-divider-light);
   }
 }
 
 // ============ 通知/消息 ============
 .el-message {
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--jt-shadow-md);
 }
 
 .el-notification {
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
+  box-shadow: var(--jt-shadow-lg);
+  background-color: var(--jt-card-bg) !important;
 }
 
 // ============ 标签页 ============
 .el-tabs__item.is-active {
-  color: $brand;
+  color: var(--jt-brand);
 }
 .el-tabs__active-bar {
-  background-color: $brand;
+  background-color: var(--jt-brand);
+}
+.el-tabs__content {
+  color: var(--jt-text-regular);
 }
 
 // ============ 进度条 ============
 .el-progress-bar__inner {
-  background: linear-gradient(90deg, $brand 0%, $brand-soft 100%);
+  background: linear-gradient(90deg, var(--jt-brand) 0%, var(--jt-brand-soft) 100%);
 }
 
 // ============ 链接 ============
 .el-link.el-link--primary {
-  color: $brand;
-
+  color: var(--jt-brand);
   &:hover {
-    color: $brand-soft;
+    color: var(--jt-brand-soft);
   }
 }
 
-// ============ 复选框/单选框 选中态 ============
+// ============ 复选框/单选框 ============
 .el-checkbox__input.is-checked .el-checkbox__inner,
 .el-radio__input.is-checked .el-radio__inner {
-  background-color: $brand;
-  border-color: $brand;
+  background-color: var(--jt-brand);
+  border-color: var(--jt-brand);
 }
 
 .el-checkbox__input.is-checked + .el-checkbox__label,
 .el-radio__input.is-checked + .el-radio__label {
-  color: $brand;
+  color: var(--jt-brand);
+}
+
+// ============ Popover / Tooltip / Dropdown ============
+.el-popper,
+.el-dropdown-menu {
+  background-color: var(--jt-card-bg) !important;
+  border-color: var(--jt-card-border) !important;
+}
+
+.el-dropdown-menu__item:not(.is-disabled):hover {
+  background-color: var(--jt-brand-tint) !important;
+  color: var(--jt-brand) !important;
+}
+
+// ============ 分页 ============
+.el-pagination {
+  --el-pagination-bg-color: var(--jt-card-bg);
+  --el-pagination-text-color: var(--jt-text-regular);
+  --el-pagination-button-bg-color: var(--jt-card-bg);
 }
 
 // ============ 滚动条 ============
@@ -314,7 +517,6 @@ $info:            #6b7280;
   background: rgba(148, 163, 184, 0.5);
   border-radius: 4px;
   transition: background 0.2s;
-
   &:hover {
     background: rgba(100, 116, 139, 0.8);
   }
@@ -324,10 +526,19 @@ $info:            #6b7280;
   background: transparent;
 }
 
+// 暗夜主题滚动条
+[data-theme="dark"] {
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    &:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+  }
+}
+
 // 深色侧边栏内的滚动条
 .app-aside ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
-
   &:hover {
     background: rgba(255, 255, 255, 0.25);
   }
@@ -340,7 +551,6 @@ $info:            #6b7280;
   box-sizing: border-box;
 }
 
-// 高度链：让子组件能用 height: 100% 占满视口（SPA 标准）
 html, body, #app {
   height: 100%;
   margin: 0;
@@ -350,8 +560,8 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: $content-bg;
-  color: $text-regular;
+  background: var(--jt-content-bg);
+  color: var(--jt-text-regular);
 }
 
 // ============ 通用页面布局 ============
@@ -365,13 +575,13 @@ body {
   align-items: center;
   margin-bottom: 20px;
   padding-bottom: 14px;
-  border-bottom: 1px solid $divider;
+  border-bottom: 1px solid var(--jt-divider);
 
   h2 {
     margin: 0;
     font-size: 20px;
     font-weight: 600;
-    color: $text-primary;
+    color: var(--jt-text-primary);
     letter-spacing: 0.2px;
   }
 }
@@ -385,13 +595,13 @@ body {
   .stat-value {
     font-size: 28px;
     font-weight: 700;
-    color: $text-primary;
+    color: var(--jt-text-primary);
     line-height: 1.2;
   }
 
   .stat-label {
     font-size: 13px;
-    color: $text-secondary;
+    color: var(--jt-text-secondary);
     margin-top: 6px;
   }
 }
@@ -404,7 +614,7 @@ body {
 .empty-state {
   text-align: center;
   padding: 60px 20px;
-  color: $text-muted;
+  color: var(--jt-text-muted);
 
   .el-icon {
     font-size: 48px;
@@ -417,7 +627,7 @@ body {
 }
 
 // ============ 任务状态色 ============
-.status-pending  { color: $warning; }
-.status-running  { color: $brand; }
-.status-completed { color: $success; }
-.status-failed   { color: $danger; }
+.status-pending  { color: var(--jt-warning); }
+.status-running  { color: var(--jt-brand); }
+.status-completed { color: var(--jt-success); }
+.status-failed   { color: var(--jt-danger); }

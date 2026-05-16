@@ -45,6 +45,23 @@
           </el-menu-item>
         </el-menu>
 
+        <!-- 主题切换 -->
+        <div class="theme-picker">
+          <el-tooltip
+            v-for="t in themes"
+            :key="t.key"
+            :content="t.name"
+            placement="top"
+            :show-after="300"
+          >
+            <div
+              class="theme-dot"
+              :class="{ active: currentTheme === t.key }"
+              :style="{ '--dot-color': t.color }"
+              @click="setTheme(t.key)"
+            />
+          </el-tooltip>
+        </div>
       </el-aside>
 
       <!-- 主内容区（无 header，主内容直接占满）-->
@@ -71,10 +88,13 @@
 
 <script setup>
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
+import { useTheme } from '@/composables/useTheme'
+
+const { themes, current: currentTheme, setTheme } = useTheme()
 </script>
 
 <style lang="scss">
-@use '@/styles/theme.scss' as *;
+@use '@/styles/theme.scss';
 
 // ============ 容器 ============
 .app-container {
@@ -83,7 +103,7 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 
 // ============ 侧边栏 ============
 .app-aside {
-  background: $sidebar-bg;
+  background: var(--jt-sidebar-bg);
   display: flex;
   flex-direction: column;
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.08);
@@ -99,7 +119,7 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.3px;
-  background: linear-gradient(135deg, $brand 0%, $accent-purple 100%);
+  background: linear-gradient(135deg, var(--jt-brand) 0%, var(--jt-accent) 100%);
   position: relative;
 
   span {
@@ -115,10 +135,9 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
   overflow-y: auto;
   padding: 8px 0;
 
-  // 主项 + 子菜单标题
   .el-menu-item,
   .el-sub-menu__title {
-    color: $sidebar-text;
+    color: var(--jt-sidebar-text);
     background-color: transparent !important;
     height: 44px;
     line-height: 44px;
@@ -128,24 +147,24 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
     transition: all 0.2s;
 
     .el-icon {
-      color: $sidebar-text-muted;
+      color: var(--jt-sidebar-text-muted);
       transition: color 0.2s;
     }
 
     &:hover {
-      background-color: $sidebar-bg-hover !important;
+      background-color: var(--jt-sidebar-bg-hover) !important;
       color: #fff;
 
       .el-icon {
-        color: $brand-soft;
+        color: var(--jt-brand-soft);
       }
     }
   }
 
-  // 选中态：渐变背景 + 左侧蓝紫高亮条
+  // 选中态
   .el-menu-item.is-active {
-    color: $sidebar-text-active !important;
-    background: linear-gradient(90deg, rgba($brand, 0.28) 0%, rgba($brand, 0.08) 100%) !important;
+    color: var(--jt-sidebar-text-active) !important;
+    background: linear-gradient(90deg, rgba(var(--jt-brand-rgb), 0.28) 0%, rgba(var(--jt-brand-rgb), 0.08) 100%) !important;
     position: relative;
 
     &::before {
@@ -155,55 +174,47 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
       top: 6px;
       bottom: 6px;
       width: 3px;
-      background: $brand;
+      background: var(--jt-brand);
       border-radius: 0 2px 2px 0;
     }
 
     .el-icon {
-      color: $brand-soft;
+      color: var(--jt-brand-soft);
     }
   }
 
-  // 展开的子菜单标题（活动状态）
   .el-sub-menu.is-active > .el-sub-menu__title {
-    color: $sidebar-text-active;
+    color: var(--jt-sidebar-text-active);
 
     .el-icon {
-      color: $brand-soft;
+      color: var(--jt-brand-soft);
     }
   }
 
-  // ============ 关键修复：子菜单展开时的背景 ============
-  // 默认 Element Plus 给 .el-menu--inline 一个白色背景，跟深色侧边栏冲突。
-  // 改成比 sidebar 更深的色，体现层级嵌套。
   .el-menu--inline {
-    background: $sidebar-bg-deep !important;
+    background: var(--jt-sidebar-bg-deep) !important;
     padding: 4px 0;
 
-    // 内部子菜单项：缩进 + 略小字号 + 沿用深色背景
     .el-menu-item {
       background-color: transparent !important;
       padding-left: 48px !important;
       font-size: 13px;
       height: 38px;
       line-height: 38px;
-      color: $sidebar-text-muted;
+      color: var(--jt-sidebar-text-muted);
 
       &:hover {
-        background-color: $sidebar-bg-hover !important;
+        background-color: var(--jt-sidebar-bg-hover) !important;
         color: #fff;
       }
 
       &.is-active {
-        color: $sidebar-text-active !important;
-        // 子菜单内的选中态用更柔和的色调
-        background: linear-gradient(90deg, rgba($brand, 0.22) 0%, rgba($brand, 0.06) 100%) !important;
+        color: var(--jt-sidebar-text-active) !important;
+        background: linear-gradient(90deg, rgba(var(--jt-brand-rgb), 0.22) 0%, rgba(var(--jt-brand-rgb), 0.06) 100%) !important;
       }
     }
   }
 
-  // 设置菜单项：与导航项视觉分隔
-  // 用 ::after 画一条横向分隔线（::before 已被 is-active 高亮条占用）
   .settings-menu-item {
     margin-top: 16px !important;
     position: relative;
@@ -215,14 +226,46 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
       left: 16px;
       right: 16px;
       height: 1px;
-      background: $sidebar-bg-hover;
+      background: var(--jt-sidebar-bg-hover);
     }
+  }
+}
+
+// ============ 主题切换器 ============
+.theme-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--jt-sidebar-divider);
+}
+
+.theme-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--dot-color);
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+  position: relative;
+
+  &:hover {
+    transform: scale(1.2);
+    border-color: rgba(255, 255, 255, 0.4);
+  }
+
+  &.active {
+    border-color: #fff;
+    box-shadow: 0 0 0 3px var(--dot-color);
+    transform: scale(1.1);
   }
 }
 
 // ============ 主内容 ============
 .app-main {
-  background: $content-bg;
+  background: var(--jt-content-bg);
   padding: 20px;
 }
 

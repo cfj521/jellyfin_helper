@@ -9,11 +9,11 @@
     gap: 8px;
     margin-bottom: 16px;
     padding: 10px 12px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--jt-fill-light);
+    border: 1px solid var(--jt-card-border);
     border-radius: 6px;
     font-size: 13px;
-    color: #475569;
+    color: var(--jt-text-regular);
   }
 
   .file-list {
@@ -21,28 +21,28 @@
       display: flex;
       align-items: center;
       padding: 12px;
-      border-bottom: 1px solid #f1f5f9;
+      border-bottom: 1px solid var(--jt-divider-light);
       cursor: pointer;
       transition: background-color 0.15s;
       border-radius: 4px;
 
       &:hover {
-        background-color: rgba(99, 102, 241, 0.06);
+        background-color: var(--jt-brand-tint);
       }
 
       .file-icon {
         margin-right: 12px;
         font-size: 20px;
-        color: #64748b;
+        color: var(--jt-text-secondary);
       }
 
       .file-name {
         flex: 1;
-        color: #0f172a;
+        color: var(--jt-text-primary);
       }
 
       .file-size {
-        color: #94a3b8;
+        color: var(--jt-text-muted);
         font-size: 13px;
       }
     }
@@ -55,7 +55,7 @@
     display: flex;
     justify-content: space-between;
     margin-bottom: 12px;
-    color: #475569;
+    color: var(--jt-text-regular);
     font-size: 14px;
   }
 }
