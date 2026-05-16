@@ -19,7 +19,6 @@ env/
 
 # Node.js / 前端
 node_modules/
-dist/
 dist-ssr/
 .vite/
 *.local
