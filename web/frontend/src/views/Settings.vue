@@ -65,7 +65,7 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="信息" prop="message" min-width="380" show-overflow-tooltip />
+            <el-table-column label="版本" prop="message" min-width="380" show-overflow-tooltip />
             <el-table-column label="耗时" width="100">
               <template #default="{ row }">
                 <span class="muted">{{ row.elapsed_ms ? `${row.elapsed_ms} ms` : '-' }}</span>
@@ -120,7 +120,11 @@
                 <span v-else class="muted">未测</span>
               </template>
             </el-table-column>
-            <el-table-column label="信息" min-width="320" show-overflow-tooltip>
+            <el-table-column
+              :label="group.key === 'core' ? '版本' : '信息'"
+              min-width="320"
+              show-overflow-tooltip
+            >
               <template #default="{ row }">
                 <span v-if="row.result">{{ row.result.message }}</span>
                 <span v-else class="muted">点右侧「测试」获取结果</span>

@@ -19,21 +19,37 @@
        quota_guard.acquire('tmdb', batch=self.batch)
      如果当前已被暂停或撞到 batch 配额则 sleep 后返回等待时长。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-源              │ 硬规则     │ batch 配额          │ pause / batch pause
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TMDB            │ 1req/0.5s  │ 30/min 900/h 5000/d │ 60s  / 15min
-assrt           │ 1req/4.5s  │ 10/min 500/h 2500/d │ 120s / 30min
-OpenSubtitles   │ 1req/3s    │ 12/min 600/h 3000/d │ 120s / 30min
-MDB List        │ 1req/s     │ 20/min 300/h 1000/d │ 1d   / 1d
-Douban          │ 1req/5s    │ 10/min 300/h 2000/d │ 180s / 2h
-Trakt           │ 1req/s     │ ——                  │ 60s  / ——
-AniList         │ 1req/s     │ ——                  │ 60s  / ——
-Wikidata        │ 1req/s     │ 15/min 600/h 3000/d │ 60s  / 60s
-Shooter         │ 1req/3s    │ 10/min 500/h 2500/d │ 120s / 30min
-Adult Scraper   │ 1req/3s    │ 15/min 600/h 3000/d │ 180s / 1h
-LLM             │ 1req/s     │ ——                  │ 60s  / ——
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+源              │ 官方 limits                    │ 我们 hard delay │ batch 配额          │ pause / batch pause
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TMDB            │ ~50 req/10s (≈5 req/s)         │ 0.5s            │ 30/min 900/h 5000/d │ 60s  / 15min
+assrt           │ 20 req/min (token+IP)          │ 6.0s            │ 10/min 500/h 2500/d │ 120s / 30min
+OpenSubtitles   │ search: 5 req/10s              │ 3.0s            │ 12/min 600/h 3000/d │ 120s / 30min
+                │ download: **20 / 24h (免费版)**│                 │                     │ (+ 命中 406 时 pause_for 到 reset_time_utc)
+Shooter         │ 无公开                         │ 3.0s            │ 10/min 500/h 2500/d │ 120s / 30min
+MDB List        │ 1000 / day                     │ 1.0s            │ 20/min 300/h 1000/d │ 1d   / 1d
+Douban          │ 无公开（403/429/503 反爬）     │ 5.0s            │ 10/min 300/h 2000/d │ 180s / 2h
+Trakt           │ 未明确（低频可用）             │ 1.0s            │ ——                  │ 60s  / ——
+AniList         │ 90 req/min                     │ 1.0s            │ ——                  │ 60s  / ——
+Wikidata        │ 未明确（要求合规 UA）          │ 1.0s            │ 15/min 600/h 3000/d │ 60s  / 30min
+Adult Scraper   │ 各站独立（多为 Cloudflare 拦） │ 3.0s            │ 15/min 600/h 3000/d │ 180s / 1h
+LLM             │ 取决于 provider (qwen/openai…) │ 1.0s            │ ——                  │ 60s  / ——
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+注解（容易踩坑的几条）：
+
+* **assrt 一个命中 video = 3 次请求**：search / detail / dl.assrt.net。三者
+  都过 quota_guard.acquire('assrt') 计数（fetch_archive 也加了钩子，否则
+  服务器侧每分钟 ~15 req 但自家以为 ~10 req → 撞 30900）。
+
+* **OpenSubtitles 免费 20 下载 / 24h**：撞顶时 /download 返回 HTTP 406
+  （**不是 429**）+ body 含 remaining=0 / reset_time_utc。
+  download() 解析后调 quota_guard.pause_for() 设精确恢复时间，整源暂停到次日。
+
+* **MDB List 1000 / day**：撞顶 batch_pause 整整 1 天 (86400s)。
+
+* **quota_guard 计数**：batch=True/False 都记 timestamp，确保 UI 单测和
+  worker 共享同一个 60s 滑窗 —— 避免自家算 ok 但服务器已撞顶。
 """
 from __future__ import annotations
 
@@ -59,8 +75,14 @@ TMDB_BATCH_QUOTA: Tuple[int, int, int] = (30, 900, 5000)   # (min, hour, day)
 TMDB_PAUSE: float = 60.0
 TMDB_BATCH_PAUSE: float = 900.0           # 15 min
 
-# ── assrt (字幕) ── 官方 20 req/min（token+IP），硬限 4.5s 留 buffer
-ASSRT_DELAY: float = 4.5
+# ── assrt (字幕) ── 官方 20 req/min（token+IP）
+# 实测 4.5s hard delay 仍偶尔撞 30900：服务器侧每个命中 video 实际有
+# 3 次请求（search / detail / dl.assrt.net），过去 dl 不计入 quota_guard
+# 导致自家算 2 次 / 服务器算 3 次错位。fetch_archive 已加入计数后改 6s。
+# - hard delay 6s = 10 req/min（官方限制 50% buffer）
+# - batch_per_min=10 是 burst 兜底（hard delay 已经 cap 在 10/min，正常
+#   顺序跑触发不到这条，只有多线程异常 burst 才会撞）
+ASSRT_DELAY: float = 6.0
 ASSRT_BATCH_QUOTA: Tuple[int, int, int] = (10, 500, 2500)
 ASSRT_PAUSE: float = 120.0
 ASSRT_BATCH_PAUSE: float = 1800.0         # 30 min
@@ -88,14 +110,12 @@ DOUBAN_DELAY: float = 5.0
 DOUBAN_BATCH_QUOTA: Tuple[int, int, int] = (10, 300, 2000)
 DOUBAN_PAUSE: float = 180.0
 DOUBAN_BATCH_PAUSE: float = 7200.0        # 2 h
-DOUBAN_BREAKER_MAX_FAILURES: int = 5      # 连续 N 次失败触发全局熔断
-DOUBAN_BREAKER_COOLDOWN: int = 3600       # 熔断冷却（秒）
 
 # ── Wikidata (演员图兜底) ──
 WIKIDATA_DELAY: float = 1.0
 WIKIDATA_BATCH_QUOTA: Tuple[int, int, int] = (15, 600, 3000)
 WIKIDATA_PAUSE: float = 60.0
-WIKIDATA_BATCH_PAUSE: float = 60.0        # 与 pause 一致
+WIKIDATA_BATCH_PAUSE: float = 1800.0      # 30 min
 
 # ── Trakt (推荐源) ── 无配额
 TRAKT_DELAY: float = 1.0
@@ -137,11 +157,6 @@ class SourceConfig:
     # batch 配额耗尽时的暂停秒数（默认与 pause_seconds 等同）
     batch_pause_seconds: float = 0.0
 
-    # 熔断（连续失败 N 次后直接锁死 X 秒）：0 = 不启用
-    # 目前只 douban 用，其它源用普通 pause
-    circuit_break_after: int = 0
-    circuit_break_seconds: float = 3600.0
-
     # 描述（日志/前端用）
     description: str = ''
 
@@ -176,7 +191,7 @@ SOURCE_CONFIGS: Dict[str, SourceConfig] = {
         batch_per_hour=OPENSUBTITLES_BATCH_QUOTA[1],
         batch_per_day=OPENSUBTITLES_BATCH_QUOTA[2],
         batch_pause_seconds=OPENSUBTITLES_BATCH_PAUSE,
-        description='OpenSubtitles (5 req/10s free, HTTP 429)',
+        description='OpenSubtitles (search 5req/10s + download 20/24h 免费版, 撞顶 HTTP 406)',
     ),
     'shooter': SourceConfig(
         hard_delay=SHOOTER_DELAY,
@@ -203,8 +218,6 @@ SOURCE_CONFIGS: Dict[str, SourceConfig] = {
         batch_per_hour=DOUBAN_BATCH_QUOTA[1],
         batch_per_day=DOUBAN_BATCH_QUOTA[2],
         batch_pause_seconds=DOUBAN_BATCH_PAUSE,
-        circuit_break_after=DOUBAN_BREAKER_MAX_FAILURES,
-        circuit_break_seconds=DOUBAN_BREAKER_COOLDOWN,
         description='豆瓣 (无公开 API, 403/429/503 反爬)',
     ),
     'trakt': SourceConfig(
@@ -252,7 +265,6 @@ class _SourceState:
     """单源运行时状态（由 QuotaGuard 内部管理）。"""
     consecutive_hits: int = 0
     paused_until: float = 0.0
-    circuit_open_until: float = 0.0
     total_hits: int = 0
     last_hit_at: float = 0.0
     # batch 调用滑动窗时间戳（保留最近 1 天内的）
@@ -279,9 +291,68 @@ class QuotaGuard:
     _HOUR_SEC = 3600.0
     _MIN_SEC = 60.0
 
+    # 长暂停（>= 10min）才持久化到 kv_cache。短暂停（60-300s 这种）
+    # 重启时基本已过期，落库性价比低
+    _PERSIST_THRESHOLD_SEC = 600
+    _PERSIST_SCOPE = 'quota_guard_paused'
+
     def __init__(self):
         self._lock = threading.Lock()
         self._states: Dict[str, _SourceState] = {}
+        self._restored = False
+
+    # ---- 持久化（lazy，避免 common → web 反向 import 循环）----
+
+    @classmethod
+    def _persist_save(cls, source: str, paused_until: float):
+        """把 paused_until 落 kv_cache。失败静默 —— 持久化是锦上添花，不能拖累主流程。"""
+        if paused_until - time.time() < cls._PERSIST_THRESHOLD_SEC:
+            return  # 短暂停不存
+        try:
+            from web.backend.cache_store import set_cached
+            set_cached(cls._PERSIST_SCOPE, source, {'paused_until': paused_until})
+        except Exception:
+            pass
+
+    @classmethod
+    def _persist_clear(cls, source: str):
+        try:
+            from web.backend.cache_store import invalidate
+            invalidate(cls._PERSIST_SCOPE, source)
+        except Exception:
+            pass
+
+    def _restore_once(self):
+        """启动后第一次 acquire/report/status 时尝试从 kv_cache 恢复历史暂停。
+        过期的项顺手清掉，避免越攒越多。"""
+        if self._restored:
+            return
+        self._restored = True
+        try:
+            # 读全部 source 在 kv_cache 里的记录（按已知源逐个 get）
+            from web.backend.cache_store import get_cached, invalidate
+            now = time.time()
+            for source in SOURCE_CONFIGS:
+                data = get_cached(
+                    self._PERSIST_SCOPE, source,
+                    ttl_seconds=365 * self._DAY_SEC, allow_stale=True,
+                )
+                if not isinstance(data, dict):
+                    continue
+                until = data.get('paused_until')
+                if not isinstance(until, (int, float)):
+                    continue
+                if until <= now:
+                    invalidate(self._PERSIST_SCOPE, source)
+                    continue
+                state = self._get_state(source)
+                state.paused_until = float(until)
+                logger.info(
+                    f"[QuotaGuard] ⤴ 从 kv_cache 恢复 {source} 暂停状态："
+                    f"剩余 {until - now:.0f}s"
+                )
+        except Exception as e:
+            logger.debug(f"[QuotaGuard] 持久化恢复失败（忽略）: {e}")
 
     def _get_state(self, source: str) -> _SourceState:
         if source not in self._states:
@@ -346,18 +417,6 @@ class QuotaGuard:
             state.total_hits += 1
             state.last_hit_at = now
 
-            # 熔断判定（目前只 douban 用）
-            if cfg.circuit_break_after > 0 and state.consecutive_hits >= cfg.circuit_break_after:
-                state.circuit_open_until = now + cfg.circuit_break_seconds
-                state.paused_until = state.circuit_open_until
-                pause_sec = cfg.circuit_break_seconds
-                logger.error(
-                    f"[QuotaGuard] 🔴 {source} 熔断：连续 {state.consecutive_hits} 次限流"
-                    f" → 暂停 {pause_sec:.0f}s ({cfg.description})"
-                    f"{f' [{reason}]' if reason else ''}"
-                )
-                return pause_sec
-
             pause_sec = cfg.pause_seconds
             state.paused_until = now + pause_sec
             logger.warning(
@@ -365,7 +424,9 @@ class QuotaGuard:
                 f" → 暂停 {pause_sec:.0f}s ({cfg.description})"
                 f"{f' [{reason}]' if reason else ''}"
             )
-            return pause_sec
+        # 锁外持久化（避免 DB 写慢拖累其他 acquire）
+        self._persist_save(source, state.paused_until)
+        return pause_sec
 
     # ---- 上报成功 ----
 
@@ -394,6 +455,9 @@ class QuotaGuard:
 
         返回值：本次实际等待的秒数（无需等待则为 0）。
         """
+        # 启动后第一次调用时从持久化恢复历史长暂停（懒加载，零热路径开销）
+        self._restore_once()
+
         waited = 0.0
 
         # ① 等待已有暂停
@@ -408,7 +472,10 @@ class QuotaGuard:
             time.sleep(pause_left)
             waited += pause_left
 
-        # ② batch 配额检查
+        # ② batch 配额检查（只在 batch=True 时启用配额暂停）
+        # 关键：检查窗口看的是"所有"请求时间戳（不只是 batch 调用的）。否则
+        # 当批量任务和 UI 单测交叉跑时，quota_guard 看不到非 batch 的历史调用，
+        # 自家配额未触发但服务器端已超 → 撞 429/限流码（assrt 30900 就是这场景）
         if batch:
             quota_pause = 0.0
             with self._lock:
@@ -427,15 +494,17 @@ class QuotaGuard:
                         )
 
             if quota_pause > 0:
+                # 落库（持久化）
+                self._persist_save(source, time.time() + quota_pause)
                 if not blocking:
                     return quota_pause
                 time.sleep(quota_pause)
                 waited += quota_pause
 
-            # ③ 记录本次 batch 请求时间戳（落在 acquire 末尾 → 请求即将发出）
-            with self._lock:
-                state = self._get_state(source)
-                state.batch_timestamps.append(time.time())
+        # ③ 记录请求时间戳（不论 batch / non-batch 都记，对齐服务器侧滑窗）
+        with self._lock:
+            state = self._get_state(source)
+            state.batch_timestamps.append(time.time())
 
         return waited
 
@@ -446,18 +515,14 @@ class QuotaGuard:
             state = self._get_state(source)
             return state.paused_until > time.time()
 
-    def is_circuit_open(self, source: str) -> bool:
-        with self._lock:
-            state = self._get_state(source)
-            return state.circuit_open_until > time.time()
-
     def status(self, source: str) -> Dict:
+        # 首次访问 status 时尝试从 kv_cache 恢复历史暂停（懒加载）
+        self._restore_once()
         with self._lock:
             state = self._get_state(source)
             cfg = self._get_config(source)
             now = time.time()
             paused_remaining = max(0.0, state.paused_until - now)
-            circuit_remaining = max(0.0, state.circuit_open_until - now)
 
             # batch 窗口实时计数（不修改 state）
             ts = state.batch_timestamps
@@ -469,9 +534,10 @@ class QuotaGuard:
                 'source': source,
                 'description': cfg.description,
                 'is_paused': paused_remaining > 0,
+                # 绝对恢复时间戳（unix 秒）—— 前端用这个显示具体恢复时间点，避免倒计时不自动刷新
+                'paused_until_ts': int(state.paused_until) if paused_remaining > 0 else None,
+                # 保留剩余秒数字段，供后端日志/调试用；前端不再展示
                 'paused_remaining_sec': round(paused_remaining, 1),
-                'is_circuit_open': circuit_remaining > 0,
-                'circuit_remaining_sec': round(circuit_remaining, 1),
                 'consecutive_hits': state.consecutive_hits,
                 'total_hits': state.total_hits,
                 'last_hit_at': state.last_hit_at or None,
@@ -497,12 +563,37 @@ class QuotaGuard:
                     setattr(cfg, k, v)
             logger.info(f"[QuotaGuard] {source} 配置已更新: {kwargs}")
 
+    def pause_for(self, source: str, seconds: float, reason: str = ''):
+        """
+        外部主动设置某源暂停时长（覆盖默认 pause_seconds）。
+        适用于"服务器明确告知恢复时间"的场景：
+          - OpenSubtitles 24h 下载额度耗尽（HTTP 406 body 含 reset_time）
+          - MDB List 1000 req/day 耗尽（next day 才能恢复）
+          - assrt token 临时封禁（按 server 给的 retry-after）
+        与 report_limited 区别：不递增 consecutive_hits，不触发熔断升级；
+        纯粹是"我比你更知道该等多久"的硬覆盖。
+        """
+        if seconds <= 0:
+            return
+        with self._lock:
+            state = self._get_state(source)
+            state.paused_until = max(state.paused_until, time.time() + seconds)
+            state.total_hits += 1
+            state.last_hit_at = time.time()
+            logger.warning(
+                f"[QuotaGuard] ⏸ {source} 暂停 {seconds:.0f}s"
+                f"{f' [{reason}]' if reason else ''}"
+            )
+        # 锁外持久化（长暂停才落库；短暂停 < 10min 跳过）
+        self._persist_save(source, state.paused_until)
+
     def reset(self, source: str):
-        """手动重置某源状态（管理 / 调试）。"""
+        """手动重置某源状态（管理 / 调试）。同时清掉 kv_cache 持久化记录。"""
         with self._lock:
             if source in self._states:
                 self._states[source] = _SourceState()
                 logger.info(f"[QuotaGuard] {source} 状态已手动重置")
+        self._persist_clear(source)
 
 
 # ============================================================================

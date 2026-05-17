@@ -1204,11 +1204,11 @@ def _douban_prefetch_consumer():
         batch=True,
     )
 
-    logger.info(f"豆瓣预取 worker 启动：delay={DOUBAN_DELAY}s + batch 配额（熔断走全局）")
+    logger.info(f"豆瓣预取 worker 启动：delay={DOUBAN_DELAY}s + batch 配额")
     while True:
-        # 全局熔断 peek：open 时短睡跳过，等熔断器恢复
-        open_, remaining = DoubanClient.breaker_status()
-        if open_:
+        # 全局暂停 peek：被限流时短睡跳过，等暂停结束
+        paused, remaining = DoubanClient.is_paused()
+        if paused:
             _time.sleep(min(max(remaining, 1.0), 60.0))
             continue
 
@@ -1222,10 +1222,10 @@ def _douban_prefetch_consumer():
             cached = _kv_get(_DOUBAN_DETAIL_SCOPE, did, ttl_seconds=_DOUBAN_DETAIL_TTL)
             if isinstance(cached, dict) and cached.get('summary'):
                 continue
-            # 拉之前再 peek 一次：worker 在 _get 等待 self.delay 期间熔断器可能被
+            # 拉之前再 peek 一次：worker 在 _get 等待 self.delay 期间限流可能被
             # 另一路径触发，避免拿过期信号还硬发请求
-            open_, _ = DoubanClient.breaker_status()
-            if open_:
+            paused, _ = DoubanClient.is_paused()
+            if paused:
                 continue
             detail = client.fetch_subject_summary(did)
             if detail and detail.get('summary'):
@@ -1241,7 +1241,7 @@ def _douban_prefetch_consumer():
                     except Exception:
                         logger.exception(f"MDB List 入队（豆瓣 prefetch）失败 {did}")
                 logger.debug(f"豆瓣详情预取写入缓存 {did}")
-            # 失败计数已由 client._get / report_antibot 上报到全局熔断器，这里不重复
+            # 失败计数已由 client._get / report_antibot 上报到 quota_guard，这里不重复
         except Exception as e:
             logger.warning(f"豆瓣详情预取 {did} 异常: {e}")
         finally:

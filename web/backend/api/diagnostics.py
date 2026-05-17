@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -58,8 +59,18 @@ def _make_result(name: str, label: str, group: str, status: str,
 # 系统级（本地、零成本，进入页面自动跑）
 # ============================================================================
 
+# 从 `--version` 第一行抠出版本号。优先匹配 v1.2.3 / 1.2.3-suffix / 1.2 这类。
+# 失败时退回原始首行的前 30 字符。
+_VERSION_RE = re.compile(r'\bv?(\d+\.\d+(?:\.\d+)?(?:-[\w.]+)?)\b')
+
+
+def _extract_version(text: str) -> str:
+    m = _VERSION_RE.search(text)
+    return m.group(1) if m else text.strip()[:30]
+
+
 def _check_binary(name: str, label: str, args=('--version',)) -> Dict:
-    """检查命令行工具是否在 PATH 上且可执行。"""
+    """检查命令行工具是否在 PATH 上且可执行。info 字段只显示版本号。"""
     path = shutil.which(name)
     if not path:
         return _make_result(name, label, 'system', 'not_configured',
@@ -73,7 +84,7 @@ def _check_binary(name: str, label: str, args=('--version',)) -> Dict:
         elapsed = int((time.time() - t0) * 1000)
         out = (r.stdout or r.stderr or '').strip().splitlines()
         first = (out[0] if out else f'exit={r.returncode}').strip()
-        return _make_result(name, label, 'system', 'ok', first[:100], elapsed)
+        return _make_result(name, label, 'system', 'ok', _extract_version(first), elapsed)
     except subprocess.TimeoutExpired:
         return _make_result(name, label, 'system', 'fail', '--version 超时 3s')
     except Exception as e:
@@ -93,8 +104,6 @@ def diagnostics_system():
             _check_binary('ffmpeg', 'FFmpeg'),
             _check_binary('ffprobe', 'FFprobe'),
             _check_binary('mkvpropedit', 'MKVPropEdit (mkvtoolnix)'),
-            # unrar 不接受 --version；不带参数会打印 banner 和退出码 0/10
-            _check_binary('unrar', 'unrar', args=()),
             _check_binary('bsdtar', 'bsdtar'),
         ]
     }
@@ -114,7 +123,7 @@ def _check_jellyfin() -> Tuple[bool, str]:
     try:
         info = client._request('GET', '/System/Info')
         if info:
-            return True, f"Jellyfin {info.get('Version', 'unknown')}"
+            return True, info.get('Version') or 'unknown'
         return False, '/System/Info 返回空'
     except Exception as e:
         return False, f'{type(e).__name__}: {e}'
@@ -132,7 +141,19 @@ def _check_qbittorrent() -> Tuple[bool, str]:
         password=settings.qbittorrent_password,
     )
     try:
-        return (True, '登录 ok') if client.login() else (False, '登录失败（账号/密码？）')
+        if not client.login():
+            return False, '登录失败（账号/密码？）'
+        # login ok 后顺便拿版本：GET /api/v2/app/version → "v4.6.0"（纯文本）
+        try:
+            r = client.session.get(
+                f"{client.host}/api/v2/app/version",
+                timeout=client.timeout,
+            )
+            if r.status_code == 200 and r.text:
+                return True, r.text.strip().lstrip('v') or 'unknown'
+        except Exception:
+            pass
+        return True, 'unknown'
     except Exception as e:
         return False, f'{type(e).__name__}: {e}'
 
@@ -153,9 +174,9 @@ def _check_jackett() -> Tuple[bool, str]:
             timeout=15,
         )
         if r.status_code == 200 and '<caps' in r.text:
-            # 顺手数一下 indexer 数（caps 里每个 indexer 一个 <indexer> tag）
+            # Jackett 不开放无认证版本端点；显示 indexer 数量作为有意义的状态
             n = r.text.count('<indexer ')
-            return True, f'Torznab caps ok（聚合 {n} 个 indexer）' if n else 'Torznab caps ok'
+            return True, f'{n} indexers' if n else 'running'
         if r.status_code == 401:
             return False, 'HTTP 401（api_key 无效）'
         return False, f'HTTP {r.status_code}（响应不含 <caps>）'

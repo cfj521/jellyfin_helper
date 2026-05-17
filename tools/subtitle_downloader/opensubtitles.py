@@ -52,9 +52,11 @@ class OpenSubtitlesClient:
         self.username = username
         self.password = password
         self.token = None
+        # 始终带 Accept: application/json（部分端点严格要求）
         self.headers = {
             'Api-Key': api_key,
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
             'User-Agent': 'JellyfinHelper v1.0'
         }
         self.request_delay = max(0.0, float(request_delay))
@@ -213,14 +215,13 @@ class OpenSubtitlesClient:
 
     def download(self, file_id: int, output_path: Path) -> bool:
         """
-        下载字幕
+        下载字幕。
 
-        Args:
-            file_id: 字幕文件ID
-            output_path: 输出路径
-
-        Returns:
-            是否成功
+        OpenSubtitles 免费版每 24h **20 次下载上限**，耗尽后 /download 返回
+        HTTP 406 + body.remaining=0 + body.reset_time。这种情况下：
+          - 记录到 quota_guard，源会暂停一段时间（避免后续 video 反复撞）
+          - 日志显示"每日额度耗尽"，明确告诉用户原因（不是网络/api_key 错）
+          - 返回 False（调用方按 not_found 处理 → 尝试下一个 provider）
         """
         if not self.token:
             if not self.login():
@@ -236,6 +237,42 @@ class OpenSubtitlesClient:
                 headers=headers,
                 json={'file_id': file_id}
             )
+
+            # HTTP 406 不一定是 Not Acceptable —— OpenSubtitles 用它表达"配额耗尽"
+            # body 是 JSON：{"requests":20,"remaining":0,"message":"...","reset_time":"05 hours and 15 minutes","reset_time_utc":"2026-05-17T23:59:58.000Z"}
+            if response.status_code == 406:
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                if data.get('remaining') == 0:
+                    reset_human = data.get('reset_time') or '未知'
+                    # 解析 ISO UTC 时间戳算精确暂停秒数（默认 24h 兜底）
+                    pause_sec = 24 * 3600
+                    reset_utc = data.get('reset_time_utc')
+                    if reset_utc:
+                        try:
+                            from datetime import datetime, timezone
+                            target = datetime.fromisoformat(reset_utc.replace('Z', '+00:00'))
+                            delta = (target - datetime.now(timezone.utc)).total_seconds()
+                            if delta > 0:
+                                pause_sec = delta + 60  # 留 1min 安全 buffer
+                        except Exception:
+                            pass
+                    logger.warning(
+                        f"OpenSubtitles 每日下载额度已耗尽（免费版 20/24h），"
+                        f"重置在 {reset_human} 后；暂停所有 OS 请求 {pause_sec:.0f}s。"
+                        f"file_id={file_id} 被跳过"
+                    )
+                    quota_guard.pause_for(
+                        'opensubtitles', pause_sec,
+                        reason=f'24h 下载额度耗尽，{reset_human} 后恢复'
+                    )
+                    return False
+                # 真 Not Acceptable（理论上加了 Accept header 不会撞）
+                logger.error(f"OpenSubtitles /download HTTP 406: {response.text[:200]}")
+                return False
+
             if response.status_code == 429:
                 quota_guard.report_limited('opensubtitles', 'HTTP 429 下载')
                 logger.warning("OpenSubtitles 下载限流 (429)")
