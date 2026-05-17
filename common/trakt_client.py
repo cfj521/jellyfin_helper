@@ -66,7 +66,7 @@ class TraktClient:
         client_id: str,
         base_url: str = 'https://api.trakt.tv',
         request_delay: float = 1.0,
-        timeout: int = 15,
+        timeout: int = 30,
         batch: bool = False,
     ):
         if not client_id:

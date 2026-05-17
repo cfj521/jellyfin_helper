@@ -115,7 +115,7 @@ class TraktConfig(BaseModel):
     """Trakt API 配置。
     https://trakt.tv/oauth/applications 创建 application 后，把"Client ID"贴到 client_id。
     公开 endpoint（trending / popular）不需要 OAuth；header 里带 trakt-api-key 即可。
-    delay 参数统一在 common/rate_limiter.py 定义；HTTP timeout 用客户端默认 15s。
+    delay 参数统一在 common/rate_limiter.py 定义；HTTP timeout 用客户端默认 30s。
     """
     enabled: bool = False
     client_id: str = ''
@@ -126,7 +126,7 @@ class TraktConfig(BaseModel):
 
 class AniListConfig(BaseModel):
     """AniList GraphQL 配置（公开 API，**完全不需要账号和 key**）。
-    delay 参数统一在 common/rate_limiter.py 定义；HTTP timeout 用客户端默认 15s。
+    delay 参数统一在 common/rate_limiter.py 定义；HTTP timeout 用客户端默认 30s。
     """
     enabled: bool = True
     base_url: str = 'https://graphql.anilist.co'
