@@ -104,68 +104,6 @@ def _reload_settings():
         pass
 
 
-@router.post("/config/check-db")
-def check_database_connection():
-    """
-    检测 PostgreSQL 数据库连接：
-      ① 能否连上（host:port 可达 + 认证通过）
-      ② 数据库版本
-      ③ 表数量（验证 schema 已初始化）
-    """
-    import time
-    from sqlalchemy import text
-
-    host = settings.db_host
-    port = settings.db_port
-    db_name = settings.db_name
-
-    if not host:
-        return {'ok': False, 'message': '未配置数据库 host'}
-
-    t0 = time.time()
-    try:
-        from web.backend.database import engine
-        with engine.connect() as conn:
-            # 版本
-            row = conn.execute(text("SELECT version()")).fetchone()
-            version_str = row[0] if row else '未知'
-            # 表数量
-            row2 = conn.execute(text(
-                "SELECT count(*) FROM information_schema.tables "
-                "WHERE table_schema = 'public'"
-            )).fetchone()
-            table_count = row2[0] if row2 else 0
-        elapsed = round((time.time() - t0) * 1000)
-        # 截短版本信息（只取第一行，去掉编译细节）
-        short_ver = version_str.split(',')[0] if ',' in version_str else version_str
-        return {
-            'ok': True,
-            'message': f'连接正常（{elapsed}ms）',
-            'version': short_ver,
-            'host': f'{host}:{port}',
-            'database': db_name,
-            'table_count': table_count,
-        }
-    except Exception as e:
-        elapsed = round((time.time() - t0) * 1000)
-        err = str(e)
-        # 友好化常见错误
-        if 'could not connect' in err or 'Connection refused' in err:
-            msg = f'无法连接 {host}:{port}（连接被拒绝）'
-        elif 'password authentication failed' in err:
-            msg = '认证失败（用户名或密码错误）'
-        elif 'does not exist' in err:
-            msg = f'数据库 "{db_name}" 不存在'
-        else:
-            msg = err[:200]
-        return {
-            'ok': False,
-            'message': msg,
-            'host': f'{host}:{port}',
-            'database': db_name,
-        }
-
-
 @router.get("/config/full")
 def get_full_config():
     """获取完整配置（不脱敏，原值返回）"""

@@ -99,6 +99,13 @@
                 </span>
                 {{ apiKeyCheckResult.message }}
               </div>
+              <div v-if="apiKeyCheckResult?.db_check" class="form-hint" style="margin-top: 4px">
+                数据库直读：
+                <el-tag
+                  :type="apiKeyCheckResult.db_check.ok ? 'success' : 'danger'"
+                  size="small" effect="light"
+                >{{ apiKeyCheckResult.db_check.ok ? '✓' : '✗' }} {{ apiKeyCheckResult.db_check.message }}</el-tag>
+              </div>
             </el-form-item>
             <el-form-item label="数据库路径">
               <el-input
@@ -196,47 +203,9 @@
           </div>
         </el-card>
 
-        <!-- PostgreSQL 连接检测（配置仅在 config.yaml 维护，这里只做验证） -->
-        <el-card shadow="never" class="cfg-card">
-          <template #header>
-            <div class="cfg-card-head">
-              <el-icon><Coin /></el-icon>
-              <span>数据库（PostgreSQL）</span>
-            </div>
-          </template>
-          <el-form label-width="120px">
-            <el-form-item label=" ">
-              <el-button
-                size="small"
-                :loading="checkingDb"
-                :icon="Check"
-                @click="onCheckDb"
-              >检查连接</el-button>
-              <el-tag
-                v-if="dbCheckResult"
-                :type="dbCheckResult.ok ? 'success' : 'danger'"
-                size="small"
-                effect="light"
-                style="margin-left: 12px"
-              >
-                {{ dbCheckResult.ok ? '✓ 连接正常' : '✗ 连接失败' }}
-              </el-tag>
-              <div v-if="dbCheckResult" class="form-hint" style="margin-top: 4px">
-                <span v-if="dbCheckResult.host">{{ dbCheckResult.host }}</span>
-                <span v-if="dbCheckResult.database"> / {{ dbCheckResult.database }}</span>
-                <span v-if="dbCheckResult.version"> · {{ dbCheckResult.version }}</span>
-                <span v-if="dbCheckResult.table_count != null"> · {{ dbCheckResult.table_count }} 张表</span>
-                <br v-if="dbCheckResult.message">
-                {{ dbCheckResult.message }}
-              </div>
-            </el-form-item>
-            <el-form-item>
-              <div class="form-hint">
-                数据库连接配置在 <code>config.yaml → database:</code> 段维护，修改后需重启后端生效
-              </div>
-            </el-form-item>
-          </el-form>
-        </el-card>
+        <!-- 数据库 (PostgreSQL) section 已移除 UI 展示 ——
+             连接配置仅在 config.yaml 里维护（database: 段），
+             form.database 保留以便保存时不丢字段，但不再渲染表单 -->
 
         <!-- ===== 媒体元数据 ===== -->
         <el-card shadow="never" class="cfg-card">
@@ -1419,7 +1388,7 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import {
-  Refresh, Check, Connection, Link, Lock, Coin,
+  Refresh, Check, Connection, Link, Lock,
   Files, Plus, Delete, ArrowUp, ArrowDown, Right,
   Document, User, Loading, VideoPlay, VideoPause, Warning,
   Aim, Download,
@@ -1454,31 +1423,6 @@ const onCheckApiKey = async () => {
     ElMessage.error('检查失败：' + apiKeyCheckResult.value.message)
   } finally {
     checkingApiKey.value = false
-  }
-}
-
-// PostgreSQL 数据库连接检测
-const checkingDb = ref(false)
-const dbCheckResult = ref(null)
-const onCheckDb = async () => {
-  checkingDb.value = true
-  dbCheckResult.value = null
-  try {
-    const r = await configApi.checkDb()
-    dbCheckResult.value = r.data || {}
-    if (r.data?.ok) {
-      ElMessage.success('数据库连接正常')
-    } else {
-      ElMessage.warning(r.data?.message || '连接失败')
-    }
-  } catch (e) {
-    dbCheckResult.value = {
-      ok: false,
-      message: e.response?.data?.detail || e.message || '请求失败',
-    }
-    ElMessage.error('检查失败：' + dbCheckResult.value.message)
-  } finally {
-    checkingDb.value = false
   }
 }
 
