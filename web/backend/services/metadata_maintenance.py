@@ -164,7 +164,6 @@ class _MetadataRefreshWorker:
             client = AniListClient(
                 base_url=cfg.base_url,
                 request_delay=ANILIST_DELAY,
-                timeout=cfg.timeout_seconds,
                 batch=True,
             )
             detail = client.detail(int(source_id))
