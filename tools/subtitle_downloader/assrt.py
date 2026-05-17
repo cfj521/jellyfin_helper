@@ -17,7 +17,7 @@ import zipfile
 import logging
 import threading
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Callable, Optional, List, Dict, Any, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -379,7 +379,11 @@ def _decode_zip_filename(name_bytes_or_str: Any, is_utf8_flag: bool) -> str:
     return raw.decode('utf-8', errors='replace')
 
 
-def extract_subtitles_from_archive(content: bytes, ext: str) -> List[Tuple[str, bytes]]:
+def extract_subtitles_from_archive(
+    content: bytes,
+    ext: str,
+    picker: Optional[Callable[[List[str]], Optional[str]]] = None,
+) -> List[Tuple[str, bytes]]:
     """
     从压缩包里抽出所有字幕文件，返回 [(原始文件名, 字节内容)]。
 
@@ -397,22 +401,21 @@ def extract_subtitles_from_archive(content: bytes, ext: str) -> List[Tuple[str, 
     head4 = content[:4]
     head6 = content[:6]
 
-    # zip：magic 'PK\x03\x04' 或 ext
+    # picker=None → 旧行为（全解所有字幕文件）
+    # picker 提供时 → 各路径先列名 → picker 挑 best → 只解一个，避免整包解压
+
     if ext == '.zip' or head4 == b'PK\x03\x04':
-        return _extract_zip(content)
+        return _extract_zip(content, picker)
 
-    # 7z：先 py7zr（纯 Python），不行才 bsdtar
     if ext == '.7z' or head6 == b'7z\xbc\xaf\x27\x1c':
-        return _extract_7z(content) or _extract_via_bsdtar(content, hint_ext='.7z')
+        return _extract_7z(content, picker) or _extract_via_bsdtar(content, hint_ext='.7z', picker=picker)
 
-    # rar：直接走 bsdtar（libarchive >= 3.6 支持 RAR5）
-    # 老路径 rarfile + unrar 已删 —— bsdtar 单进程一次解决，省 PyPI 依赖 + 子进程开销
     if ext == '.rar' or head4 == b'Rar!':
-        return _extract_via_bsdtar(content, hint_ext='.rar')
+        return _extract_via_bsdtar(content, hint_ext='.rar', picker=picker)
 
     # tar 系列：tarfile 自动识别 gz/bz2/xz 透明解压
     if ext in ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz'):
-        return _extract_tar(content)
+        return _extract_tar(content, picker)
     # 也认 tar magic（"ustar"在偏移 257）—— 但裸 tar 没固定 magic head，
     # 主要场景靠 ext 走（上游 fetch_archive 会按 URL 后缀给出）。
 
@@ -423,10 +426,15 @@ def extract_subtitles_from_archive(content: bytes, ext: str) -> List[Tuple[str, 
     return []
 
 
-def _extract_zip(content: bytes) -> List[Tuple[str, bytes]]:
+def _extract_zip(
+    content: bytes,
+    picker: Optional[Callable[[List[str]], Optional[str]]] = None,
+) -> List[Tuple[str, bytes]]:
     out: List[Tuple[str, bytes]] = []
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            # 先收集所有字幕条目（带 decode 后的真名）
+            sub_entries: List[Tuple[str, zipfile.ZipInfo]] = []
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -434,21 +442,34 @@ def _extract_zip(content: bytes) -> List[Tuple[str, bytes]]:
                 real_name = _decode_zip_filename(info.filename, is_utf8)
                 if not real_name.lower().endswith(SUB_EXTENSIONS):
                     continue
+                sub_entries.append((real_name, info))
+
+            # picker 模式：先挑名再只读那一个
+            if picker is not None:
+                chosen = picker([n for n, _ in sub_entries])
+                if not chosen:
+                    return []
+                sub_entries = [(n, i) for n, i in sub_entries if n == chosen]
+
+            for real_name, info in sub_entries:
                 try:
-                    data = zf.read(info)
+                    out.append((real_name, zf.read(info)))
                 except Exception as e:
                     logger.warning(f"读取 zip 内 {real_name} 失败: {e}")
-                    continue
-                out.append((real_name, data))
     except zipfile.BadZipFile as e:
         logger.warning(f"zip 解析失败: {e}")
     return out
 
 
-def _extract_7z(content: bytes) -> List[Tuple[str, bytes]]:
+def _extract_7z(
+    content: bytes,
+    picker: Optional[Callable[[List[str]], Optional[str]]] = None,
+) -> List[Tuple[str, bytes]]:
     """纯 Python 7z（py7zr）。
     py7zr 1.x 没了 read/readall，只能 extract() 到 tempdir 再读回内存。
     失败返回 []，让 bsdtar 兜底。
+
+    picker 模式：z.extract(targets=[chosen]) 只解出一个。
     """
     try:
         import py7zr
@@ -462,6 +483,11 @@ def _extract_7z(content: bytes) -> List[Tuple[str, bytes]]:
             names = [n for n in z.getnames() if n.lower().endswith(SUB_EXTENSIONS)]
             if not names:
                 return []
+            if picker is not None:
+                chosen = picker(names)
+                if not chosen:
+                    return []
+                names = [chosen]
             with tempfile.TemporaryDirectory(prefix='py7zr_') as td:
                 z.extract(path=td, targets=names)
                 for name in names:
@@ -481,17 +507,28 @@ def _extract_7z(content: bytes) -> List[Tuple[str, bytes]]:
     return out
 
 
-def _extract_tar(content: bytes) -> List[Tuple[str, bytes]]:
-    """tar / tar.gz / tar.bz2 / tar.xz —— tarfile 自动识别透明解压。"""
+def _extract_tar(
+    content: bytes,
+    picker: Optional[Callable[[List[str]], Optional[str]]] = None,
+) -> List[Tuple[str, bytes]]:
+    """tar / tar.gz / tar.bz2 / tar.xz —— tarfile 自动识别透明解压。
+
+    picker 模式：先列名 → picker → 只 extractfile 一个。
+    """
     import tarfile
     out: List[Tuple[str, bytes]] = []
     try:
         with tarfile.open(fileobj=io.BytesIO(content), mode='r:*') as tf:
-            for member in tf.getmembers():
-                if not member.isfile():
-                    continue
-                if not member.name.lower().endswith(SUB_EXTENSIONS):
-                    continue
+            sub_members = [
+                m for m in tf.getmembers()
+                if m.isfile() and m.name.lower().endswith(SUB_EXTENSIONS)
+            ]
+            if picker is not None:
+                chosen = picker([m.name for m in sub_members])
+                if not chosen:
+                    return []
+                sub_members = [m for m in sub_members if m.name == chosen]
+            for member in sub_members:
                 try:
                     f = tf.extractfile(member)
                     if f is not None:
@@ -515,12 +552,22 @@ def _extract_gz_single(content: bytes) -> List[Tuple[str, bytes]]:
     return [('subtitle.srt', data)]
 
 
-def _extract_via_bsdtar(content: bytes, hint_ext: str = '') -> List[Tuple[str, bytes]]:
+def _extract_via_bsdtar(
+    content: bytes,
+    hint_ext: str = '',
+    picker: Optional[Callable[[List[str]], Optional[str]]] = None,
+) -> List[Tuple[str, bytes]]:
     """用 bsdtar (libarchive) 解压 rar/7z/tar 等。需 PATH 上有 bsdtar 或 tar。
 
-    策略：解压整个包到 tempdir，再走文件系统读字幕文件。
-    避免之前"列条目 → 逐个 -xOf"的 Unicode 罗盘问题——bsdtar 在 Windows 控制台
-    输出文件名时受 CP936 影响，subprocess decode 后中文变 '?'，再喂回去就找不到了。
+    picker=None：解整包到 tempdir，os.walk 读出所有字幕（旧行为）。
+    picker 提供：先 `-tf` 列名 → picker 挑 chosen → `-xf <chosen>` 只解一个，
+    省去无关文件的解压计算。
+
+    注意：bsdtar 在 Windows 上 stdout 默认 UTF-8，subprocess capture_output=True
+    拿到的是字节流，自己 decode UTF-8 后传回 args 给 bsdtar -xf —— Python 3
+    subprocess 在 Windows 用 CreateProcessW（wide chars），中文 args 不会被
+    cp936 损坏。如果 bsdtar 内部匹配失败（个别版本会把 archive 内 UTF-8 名转
+    本地 codepage 后跟 args 对比），picker 模式拿不到文件 → 兜底走"全解"。
     """
     import shutil
     import subprocess
@@ -539,21 +586,72 @@ def _extract_via_bsdtar(content: bytes, hint_ext: str = '') -> List[Tuple[str, b
 
     out: List[Tuple[str, bytes]] = []
     try:
-        with tempfile.TemporaryDirectory(prefix='bsdtar_') as tdir:
+        chosen: Optional[str] = None
+        if picker is not None:
+            # 阶段 1：列内容拿字幕名
             try:
-                r = subprocess.run(
-                    [bsdtar, '-xf', tf_path, '-C', tdir],
-                    capture_output=True, timeout=60,
+                list_r = subprocess.run(
+                    [bsdtar, '-tf', tf_path], capture_output=True, timeout=15,
                 )
             except subprocess.TimeoutExpired:
-                logger.warning(f"bsdtar 解压超时: {tf_path}")
+                logger.warning(f"bsdtar -tf 超时: {tf_path}")
+                return []
+            if list_r.returncode != 0:
+                logger.warning(
+                    f"bsdtar -tf 失败 rc={list_r.returncode}: "
+                    f"{(list_r.stderr or b'')[:200].decode('utf-8', errors='replace')}"
+                )
+                return []
+            # bsdtar 在 Windows 上 stdout 用系统 codepage (cp936/gbk) 输出文件名，
+            # Linux/macOS 上用 UTF-8。先按系统首选编码 decode，失败回退 UTF-8。
+            import locale as _locale
+            sys_enc = _locale.getpreferredencoding(do_setlocale=False) or 'utf-8'
+            raw_text: Optional[str] = None
+            for enc in (sys_enc, 'utf-8'):
+                try:
+                    raw_text = list_r.stdout.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if raw_text is None:
+                raw_text = list_r.stdout.decode('utf-8', errors='replace')
+            names = [
+                n.strip()
+                for n in raw_text.splitlines()
+                if n.strip() and n.strip().lower().endswith(SUB_EXTENSIONS)
+            ]
+            if not names:
+                return []
+            chosen = picker(names)
+            if not chosen:
+                return []
+
+        # 阶段 2：解压（picker 模式只解 chosen 一个；无 picker 全解）
+        with tempfile.TemporaryDirectory(prefix='bsdtar_') as tdir:
+            cmd = [bsdtar, '-xf', tf_path, '-C', tdir]
+            if chosen:
+                cmd.append(chosen)
+            try:
+                r = subprocess.run(cmd, capture_output=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                logger.warning(f"bsdtar -xf 超时: {tf_path}")
                 return []
             if r.returncode != 0:
-                # 即便部分文件成功也可能 rc != 0；先看 tempdir 有没有字幕，没有再认输
                 stderr_short = (r.stderr[:300] if r.stderr else b'').decode('utf-8', errors='replace')
                 logger.warning(f"bsdtar 解压 rc={r.returncode}（部分失败正常）: {stderr_short}")
 
-            # 走文件系统找字幕（os.walk 给的是 OS 真实文件名，Unicode 安全）
+            # picker 模式：尝试按 chosen 路径直接读
+            if chosen:
+                fpath = os.path.join(tdir, chosen)
+                if os.path.isfile(fpath):
+                    with open(fpath, 'rb') as f:
+                        out.append((chosen.replace('\\', '/'), f.read()))
+                    logger.info(f"bsdtar 单文件解压成功: {chosen}")
+                    return out
+                # 失配兜底（cp936 codepage 转换问题等）：走 os.walk 找
+                logger.warning(f"bsdtar picker 模式按名找不到 {chosen}，回退 os.walk")
+
+            # 全解 / picker 失配兜底：os.walk 读字幕
             for root, _, files in os.walk(tdir):
                 for fname in files:
                     if not fname.lower().endswith(SUB_EXTENSIONS):
@@ -565,7 +663,6 @@ def _extract_via_bsdtar(content: bytes, hint_ext: str = '') -> List[Tuple[str, b
                     except OSError as e:
                         logger.warning(f"读取解压后的 {fname} 失败: {e}")
                         continue
-                    # 相对路径作为条目名（保留子目录信息），统一斜杠
                     rel = os.path.relpath(fpath, tdir).replace('\\', '/')
                     out.append((rel, data))
         logger.info(f"bsdtar 解压成功: {len(out)} 个字幕文件")
@@ -653,6 +750,44 @@ def _episode_match(a: Optional[Tuple[Optional[int], int]],
     return True
 
 
+def pick_best_subtitle_name(
+    names: List[str],
+    preferred_langs: List[str],
+    preferred_formats: Optional[List[str]] = None,
+    fallback_lang: Optional[str] = None,
+    video_filename: Optional[str] = None,
+) -> Optional[str]:
+    """**只看文件名**挑最佳字幕（不读 bytes），返回 best_name 或 None。
+
+    用于 picker 模式：先列压缩包内容，picker 挑出 best name，再单文件解压。
+    打分逻辑跟 pick_best_subtitle 一致（也是后者的复用基础）：
+      1. 集数匹配（video_filename 给定时）
+      2. lang_match_score
+      3. preferred_formats 格式偏好
+      4. 文件名长度（短的优先，避免 NFO 之类）
+    """
+    if not names:
+        return None
+    ext_score = _build_format_score(preferred_formats)
+    video_ep = _extract_episode(video_filename) if video_filename else None
+
+    def resolve_lang(name: str) -> Optional[str]:
+        return _detect_lang_combo(name) or fallback_lang
+
+    def score(name):
+        if video_ep is not None:
+            sub_ep = _extract_episode(name)
+            ep_mismatch = 1 if (sub_ep is not None and not _episode_match(video_ep, sub_ep)) else 0
+        else:
+            ep_mismatch = 0
+        lang = resolve_lang(name)
+        lang_key = _lang_match_score(lang, preferred_langs)
+        ext = Path(name).suffix.lower()
+        return (ep_mismatch, lang_key, -ext_score.get(ext, 0), len(name))
+
+    return sorted(names, key=score)[0]
+
+
 def pick_best_subtitle(
     files: List[Tuple[str, bytes]],
     preferred_langs: List[str],
@@ -661,52 +796,25 @@ def pick_best_subtitle(
     video_filename: Optional[str] = None,
 ) -> Optional[Tuple[str, bytes, str]]:
     """
-    从一堆候选字幕里挑最匹配的。
-    返回 (filename, content, lang_code) 或 None。lang_code 可能是复合（如 'chs.eng'）。
+    从一堆 (name, bytes) 候选里挑最匹配的。
+    返回 (filename, content, lang_code) 或 None。
 
-    打分（按 sort key tuple，越小越优）：
-      1. **集数匹配**：video_filename 给定 + 文件名能提集号 → 不匹配的排到最后。
-         避免"包内整季 S08E01-E06 时搜 E06 拿到 E01"这种坑。
-      2. **lang_match_score**：双语包覆盖更多 preferred 项 → 排前
-         例：preferred_langs=['chs','eng'] 时 'chs.eng' 文件覆盖 2 项 → 优先于单语
-      3. **preferred_formats**：用户配置的格式偏好（默认 ass > srt > sup）
-      4. 文件名越短越优先（避免选到 NFO 之类）
-
-    fallback_lang：当**文件名识别不到 lang token**（如裸 release 名 'movie.S08E06.ass'）时，
-      退到这个值（通常是 assrt 的 sub.lang.desc 解析出的包级语言）。
-      没给 fallback 就当作"无语言信息"参与打分（rank=999，但同包文件并列时仍可比较 ext/集数）。
-
-    preferred_formats=None 时回退到项目默认 ['ass','srt','sup']。
+    历史路径：先全解后筛选时用。新代码优先用 picker 模式（extract 时传 picker，
+    只解出一个文件），不再走这条。
     """
     if not files:
         return None
-    ext_score = _build_format_score(preferred_formats)
-
-    video_ep = _extract_episode(video_filename) if video_filename else None
-
-    def resolve_lang(name: str) -> Optional[str]:
-        """文件名 → lang。识别不出退到 fallback_lang。"""
-        return _detect_lang_combo(name) or fallback_lang
-
-    def score(item):
-        name, _ = item
-        # 1) episode 匹配优先：包内有多集时，挑跟视频集号一致的
-        if video_ep is not None:
-            sub_ep = _extract_episode(name)
-            ep_mismatch = 1 if (sub_ep is not None and not _episode_match(video_ep, sub_ep)) else 0
-        else:
-            ep_mismatch = 0
-        # 2) lang 匹配
-        lang = resolve_lang(name)
-        lang_key = _lang_match_score(lang, preferred_langs)
-        # 3) 格式偏好
-        ext = Path(name).suffix.lower()
-        return (ep_mismatch, lang_key, -ext_score.get(ext, 0), len(name))
-
-    files_sorted = sorted(files, key=score)
-    best_name, best_data = files_sorted[0]
-    best_lang = resolve_lang(best_name) or (preferred_langs[0] if preferred_langs else 'chs')
-    return best_name, best_data, best_lang
+    names = [n for n, _ in files]
+    chosen = pick_best_subtitle_name(
+        names, preferred_langs, preferred_formats, fallback_lang, video_filename
+    )
+    if not chosen:
+        return None
+    for n, b in files:
+        if n == chosen:
+            lang = _detect_lang_combo(chosen) or fallback_lang or (preferred_langs[0] if preferred_langs else 'chs')
+            return chosen, b, lang
+    return None
 
 
 def pick_one_per_lang(
