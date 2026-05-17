@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Dict
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +36,7 @@ class OpenSubtitlesClient:
     }
 
     def __init__(self, api_key: str, username: str = None, password: str = None,
-                 request_delay: float = 2.0):
+                 request_delay: float = 2.0, batch: bool = False):
         """
         初始化客户端
 
@@ -44,6 +46,7 @@ class OpenSubtitlesClient:
             password: 密码（可选，用于下载）
             request_delay: 两次 API 请求之间的最小间隔（秒）。免费层 5/10s 限频，
                 建议 ≥2s 留余量。本类内部串行排队，多线程共享同一实例也安全。
+            batch: True 表示批量调用方（如全库字幕修复），额外受 batch 配额约束。
         """
         self.api_key = api_key
         self.username = username
@@ -55,11 +58,14 @@ class OpenSubtitlesClient:
             'User-Agent': 'JellyfinHelper v1.0'
         }
         self.request_delay = max(0.0, float(request_delay))
+        self.batch = batch
         self._last_call = 0.0
         self._lock = threading.Lock()
 
     def _wait_quota(self):
         """两次 OpenSubtitles API 请求之间的强制间隔。"""
+        # 保底层：先检查全局暂停 / batch 配额
+        quota_guard.acquire('opensubtitles', batch=self.batch)
         with self._lock:
             elapsed = time.monotonic() - self._last_call
             if elapsed < self.request_delay:
@@ -188,9 +194,19 @@ class OpenSubtitlesClient:
                 headers=self.headers,
                 params=params
             )
+            if response.status_code == 429:
+                quota_guard.report_limited('opensubtitles', 'HTTP 429 搜索')
+                logger.warning("OpenSubtitles 搜索限流 (429)")
+                return []
             response.raise_for_status()
+            quota_guard.report_success('opensubtitles')
             data = response.json()
             return data.get('data', [])
+        except requests.exceptions.HTTPError as e:
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
+                quota_guard.report_limited('opensubtitles', 'HTTP 429 搜索')
+            logger.error(f"搜索失败: {e}")
+            return []
         except Exception as e:
             logger.error(f"搜索失败: {e}")
             return []
@@ -220,7 +236,12 @@ class OpenSubtitlesClient:
                 headers=headers,
                 json={'file_id': file_id}
             )
+            if response.status_code == 429:
+                quota_guard.report_limited('opensubtitles', 'HTTP 429 下载')
+                logger.warning("OpenSubtitles 下载限流 (429)")
+                return False
             response.raise_for_status()
+            quota_guard.report_success('opensubtitles')
             data = response.json()
 
             download_url = data.get('link')
@@ -228,7 +249,7 @@ class OpenSubtitlesClient:
                 logger.error("未获取到下载链接")
                 return False
 
-            # 下载文件
+            # 下载文件（CDN 链接，不走限频）
             response = requests.get(download_url)
             response.raise_for_status()
 

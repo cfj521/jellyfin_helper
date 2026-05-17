@@ -228,7 +228,14 @@ export const taskApi = {
     api.post(`/api/tasks/${id}/cancel`),
 
   delete: (id) =>
-    api.delete(`/api/tasks/${id}`)
+    api.delete(`/api/tasks/${id}`),
+
+  // 配额保护状态
+  quotaStatus: () =>
+    api.get('/api/tasks/quota-status'),
+
+  resetQuota: (source) =>
+    api.post(`/api/tasks/quota-status/${source}/reset`),
 }
 
 // Jellyfin 直通 API

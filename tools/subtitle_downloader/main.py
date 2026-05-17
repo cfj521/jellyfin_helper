@@ -90,11 +90,13 @@ class _OpenSubtitlesProvider(_Provider):
         api_key = sub_cfg.get('opensubtitles_api_key', '')
         if not api_key:
             raise ValueError("OpenSubtitles 未配置 API Key")
+        from common.rate_limiter import OPENSUBTITLES_DELAY
         self.client = OpenSubtitlesClient(
             api_key=api_key,
             username=sub_cfg.get('opensubtitles_username'),
             password=sub_cfg.get('opensubtitles_password'),
-            request_delay=sub_cfg.get('opensubtitles_request_delay', 2.0),
+            request_delay=OPENSUBTITLES_DELAY,
+            batch=bool(sub_cfg.get('_batch_mode')),
         )
 
     def _map_lang_code(self, lang: str) -> str:
@@ -201,9 +203,11 @@ class _AssrtProvider(_Provider):
         token = sub_cfg.get('assrt_api_token', '')
         if not token:
             raise ValueError("assrt 未配置 API Token")
+        from common.rate_limiter import ASSRT_DELAY
         self.client = _assrt.AssrtClient(
             token=token,
-            request_delay=sub_cfg.get('assrt_request_delay', 4.0),
+            request_delay=ASSRT_DELAY,
+            batch=bool(sub_cfg.get('_batch_mode')),
         )
         # 字幕格式偏好：默认 ass>srt>sup
         self.preferred_formats = sub_cfg.get('preferred_formats', ['ass', 'srt', 'sup'])
@@ -353,8 +357,10 @@ class _ShooterProvider(_Provider):
     name = "shooter"
 
     def __init__(self, sub_cfg: Dict):
+        from common.rate_limiter import SHOOTER_DELAY
         self.client = _shooter.ShooterClient(
-            request_delay=sub_cfg.get('shooter_request_delay', 2.0),
+            request_delay=SHOOTER_DELAY,
+            batch=bool(sub_cfg.get('_batch_mode')),
         )
 
     def try_download(self, video_path, languages, dry_run):
@@ -454,9 +460,12 @@ _PROVIDER_FACTORIES = {
 class SubtitleDownloader:
     """字幕下载器。按 subtitle.sources 配置的顺序尝试多个 provider。"""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, batch: bool = False):
         self.config = config
-        sub_cfg = config.get('subtitle', {}) or {}
+        self.batch = batch
+        sub_cfg = dict(config.get('subtitle', {}) or {})
+        # 透传 batch 到每个 provider（factory(sub_cfg) 会读 _batch_mode）
+        sub_cfg['_batch_mode'] = batch
 
         # downloading_langs：下载优先级（排序池），前优先；支持双语复合 chs.eng / cht.eng
         # 兼容旧 preferred_langs：旧配置存在时也能读到（一次性兜底）

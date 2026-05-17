@@ -254,6 +254,31 @@ async def tasks_stream(request: Request):
     return StreamingResponse(gen(), media_type='text/event-stream', headers=_SSE_HEADERS)
 
 
+# ============================================================================
+# 配额保护状态 API（必须在 /{task_id} 之前定义，否则会被路径参数吞掉）
+# ============================================================================
+
+@router.get("/quota-status")
+def get_quota_status():
+    """
+    返回所有外部 API 源的配额保护状态。
+
+    前端任务详情页用：运行中的任务如果触发了限流暂停，用户能看到原因。
+    """
+    from common.rate_limiter import quota_guard
+    return quota_guard.all_status()
+
+
+@router.post("/quota-status/{source}/reset")
+def reset_quota_source(source: str):
+    """手动重置某源的限流状态（管理/调试用）。"""
+    from common.rate_limiter import quota_guard, SOURCE_CONFIGS
+    if source not in SOURCE_CONFIGS:
+        raise HTTPException(404, f"未知源: {source}")
+    quota_guard.reset(source)
+    return {"message": f"{source} 状态已重置"}
+
+
 @router.get("/{task_id}/stream")
 async def task_stream(task_id: int, request: Request):
     """SSE 详情页通道：先发一份初始 snapshot（来自 DB），之后由 pubsub 推增量。

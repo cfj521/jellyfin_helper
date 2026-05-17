@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 # 懒加载 curl_cffi.requests；缺失时 _CFFI_REQ=None，落回普通 requests
@@ -80,9 +82,11 @@ class BaseScraper(ABC):
     # impersonate 配置：curl_cffi 支持 chrome99 ~ chrome131 等
     cffi_impersonate: str = 'chrome124'
 
-    def __init__(self, delay: float = 1.0, proxy: Optional[str] = None, timeout: int = 30):
+    def __init__(self, delay: float = 1.0, proxy: Optional[str] = None,
+                 timeout: int = 30, batch: bool = False):
         self.delay = delay
         self.timeout = timeout
+        self.batch = batch
         self._last_req_at = 0.0
 
         if self.use_cffi and _CFFI_REQ is not None:
@@ -108,6 +112,8 @@ class BaseScraper(ABC):
         失败（网络 / 4xx / 5xx）返回 None。
         curl_cffi 的 raise_for_status 行为不完全等同 requests，统一手动判断。
         """
+        # 保底层：先检查全局暂停 / batch 配额（成人源汇总到 'adult' 一个 bucket）
+        quota_guard.acquire('adult', batch=self.batch)
         self._rate_limit()
         t0 = time.time()
         try:
@@ -118,9 +124,12 @@ class BaseScraper(ABC):
             return None
         elapsed_ms = (time.time() - t0) * 1000
         status = getattr(r, 'status_code', 0)
+        if status == 429:
+            quota_guard.report_limited('adult', f'HTTP 429 {self.name}')
         if status >= 400:
             logger.warning(f"[{self.name}] 请求失败 ({elapsed_ms:.0f}ms) {url} - HTTP {status}")
             return None
+        quota_guard.report_success('adult')
         # 慢请求 → 升级到 WARNING 级别，便于在批量刮削日志里 grep
         if elapsed_ms > 5000:
             logger.warning(f"[{self.name}] SLOW GET ({elapsed_ms:.0f}ms) {url}")

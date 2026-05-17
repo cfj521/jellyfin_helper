@@ -133,7 +133,11 @@ class _MetadataRefreshWorker:
             from common.tmdb_client import TMDBClient
             from web.backend.api.discover import _tmdb_scrape_lang
             lang = _tmdb_scrape_lang()
-            client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=lang)
+            from common.rate_limiter import TMDB_DELAY
+            # 后台 metadata 保活 worker → batch=True
+            client = TMDBClient(
+                settings.tmdb_api_key, delay=TMDB_DELAY, language=lang, batch=True,
+            )
             raw = client.get_detail(media_type, int(source_id), language=lang)
             if not raw:
                 logger.info(f"metadata refresh tmdb={source_id}: 上游空，保留旧行")
@@ -156,10 +160,12 @@ class _MetadataRefreshWorker:
             return
         try:
             from common.anilist_client import AniListClient
+            from common.rate_limiter import ANILIST_DELAY
             client = AniListClient(
                 base_url=cfg.base_url,
-                request_delay=cfg.request_delay,
+                request_delay=ANILIST_DELAY,
                 timeout=cfg.timeout_seconds,
+                batch=True,
             )
             detail = client.detail(int(source_id))
             if not detail:
@@ -182,9 +188,11 @@ class _MetadataRefreshWorker:
             return
         try:
             from common.douban_client import DoubanClient
+            from common.rate_limiter import DOUBAN_DELAY
             client = DoubanClient(
                 user_agent=settings.douban_user_agent,
-                delay=settings.douban_request_delay,
+                delay=DOUBAN_DELAY,
+                batch=True,
             )
             detail = client.fetch_subject_summary(str(source_id))
             if not detail or not detail.get('summary'):

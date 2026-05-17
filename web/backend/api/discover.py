@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT_DIR))
 from web.backend.database import get_db
 from web.backend.config import settings
 from web.backend.services import metadata_store
+from common.rate_limiter import DOUBAN_DELAY
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -137,7 +138,7 @@ def get_trending(
             return {**cached, "cached": True}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=_tmdb_scrape_lang())
+    client = TMDBClient(settings.tmdb_api_key, language=_tmdb_scrape_lang())
     try:
         items = client.trending(media_type=media_type, time_window=time_window, page=page)
     except Exception as e:
@@ -172,7 +173,7 @@ def get_popular(media_type: str = "movie", page: int = 1, refresh: bool = False)
             return {**cached, "cached": True}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=_tmdb_scrape_lang())
+    client = TMDBClient(settings.tmdb_api_key, language=_tmdb_scrape_lang())
 
     if media_type not in ('movie', 'tv'):
         raise HTTPException(status_code=400, detail="media_type 必须是 movie / tv")
@@ -235,7 +236,7 @@ def get_category_list(
             return {**cached, "cached": True}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=_tmdb_scrape_lang())
+    client = TMDBClient(settings.tmdb_api_key, language=_tmdb_scrape_lang())
     try:
         items = client.list_items(media_type, category, page=page)
     except Exception as e:
@@ -298,7 +299,7 @@ def get_detail(
                 return {**full, "cached": True, "_from_metadata": True}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.5, language=lang)
+    client = TMDBClient(settings.tmdb_api_key, language=lang)
     try:
         raw = client.get_detail(media_type, tmdb_id, language=lang)
     except Exception as e:
@@ -564,7 +565,7 @@ def get_english_title(media_type: str, tmdb_id: int):
         return {"english_title": None, "cached": False}
 
     from common.tmdb_client import TMDBClient
-    client = TMDBClient(settings.tmdb_api_key, delay=0.0, language='en-US')
+    client = TMDBClient(settings.tmdb_api_key, language='en-US')
     en_title = client.get_english_title(media_type, tmdb_id)
 
     # 即使是 None 也写缓存，避免反复打 TMDB（缺英文翻译的条目存在）
@@ -639,7 +640,7 @@ def get_english_title_by_imdb(imdb_id: str):
             return {**_strip_internal(hit), "cached": True}
 
         from common.tmdb_client import TMDBClient
-        client = TMDBClient(settings.tmdb_api_key, delay=0.0, language='en-US')
+        client = TMDBClient(settings.tmdb_api_key, language='en-US')
         find_data = client._request(f'/find/{imdb_id}', {'external_source': 'imdb_id'})
 
         # find_data is None → TMDB 502/503/网络炸（_request 已重试 3 次仍失败）→ 临时态，短缓存
@@ -700,7 +701,7 @@ def _get_tmdb_genre_map(media_type: str, lang: str) -> Dict[int, str]:
         return {}
     try:
         from common.tmdb_client import TMDBClient
-        client = TMDBClient(settings.tmdb_api_key, delay=0.0, language=lang)
+        client = TMDBClient(settings.tmdb_api_key, language=lang)
         data = client._request(f'/genre/{media_type}/list', {'language': lang})
         if not data:
             return {}
@@ -915,10 +916,11 @@ def get_trakt(
             return {**cached, "cached": True}
 
     from common.trakt_client import TraktClient
+    from common.rate_limiter import TRAKT_DELAY
     client = TraktClient(
         client_id=cfg.client_id,
         base_url=cfg.base_url,
-        request_delay=cfg.request_delay,
+        request_delay=TRAKT_DELAY,
         timeout=cfg.timeout_seconds,
     )
 
@@ -945,7 +947,7 @@ def get_trakt(
         try:
             from common.tmdb_client import TMDBClient
             from concurrent.futures import ThreadPoolExecutor
-            tmdb = TMDBClient(settings.tmdb_api_key, delay=0.0, language=_tmdb_scrape_lang())
+            tmdb = TMDBClient(settings.tmdb_api_key, language=_tmdb_scrape_lang())
             poster_targets = [(d, d.get('tmdb_id'), d.get('media_type') or media_type)
                               for d in out if d.get('tmdb_id')]
             if poster_targets:
@@ -1004,9 +1006,10 @@ def get_anilist(
             return {**cached, "cached": True}
 
     from common.anilist_client import AniListClient
+    from common.rate_limiter import ANILIST_DELAY
     client = AniListClient(
         base_url=cfg.base_url,
-        request_delay=cfg.request_delay,
+        request_delay=ANILIST_DELAY,
         timeout=cfg.timeout_seconds,
     )
 
@@ -1191,16 +1194,19 @@ def _douban_prefetch_consumer():
     熔断由 DoubanClient 的全局熔断器统一管（见 common/douban_client.py 顶部
     _GlobalBreaker）—— worker 在循环顶端 peek，open 时分段睡；
     失败/成功计数全由 client 内部上报，本 worker 不再维护本地计数器。
+
+    worker = batch caller：用 hard delay (DOUBAN_DELAY=5s) + batch 配额
+    （10/min, 300/h, 2000/d）双重控制，撞配额自动暂停 2h。
     """
     import time as _time
     from common.douban_client import DoubanClient
-    # 用更长 delay 避免反爬：跟前台请求 client 分开，独立 rate_limit
     client = DoubanClient(
         user_agent=settings.douban_user_agent,
-        delay=settings.douban_worker_delay,
+        delay=DOUBAN_DELAY,
+        batch=True,
     )
 
-    logger.info(f"豆瓣预取 worker 启动：delay={settings.douban_worker_delay}s（熔断走全局）")
+    logger.info(f"豆瓣预取 worker 启动：delay={DOUBAN_DELAY}s + batch 配额（熔断走全局）")
     while True:
         # 全局熔断 peek：open 时短睡跳过，等熔断器恢复
         open_, remaining = DoubanClient.breaker_status()
@@ -1317,7 +1323,7 @@ def get_douban_lists(
     # 复用 douban 段的 user_agent + delay 配置
     client = DoubanClient(
         user_agent=settings.douban_user_agent,
-        delay=settings.douban_request_delay,
+        delay=DOUBAN_DELAY,
     )
     start = (page - 1) * page_size
     # 按 doulist_id 形态分派：
@@ -1404,9 +1410,10 @@ def get_anilist_detail(anilist_id: int, refresh: bool = False):
                 return {**full, "cached": True, "_from_metadata": True}
 
     from common.anilist_client import AniListClient
+    from common.rate_limiter import ANILIST_DELAY
     client = AniListClient(
         base_url=cfg.base_url,
-        request_delay=cfg.request_delay,
+        request_delay=ANILIST_DELAY,
         timeout=cfg.timeout_seconds,
     )
     try:
@@ -1529,7 +1536,7 @@ def get_douban_detail(douban_id: str, refresh: bool = False):
     from common.douban_client import DoubanClient
     client = DoubanClient(
         user_agent=settings.douban_user_agent,
-        delay=settings.douban_request_delay,
+        delay=DOUBAN_DELAY,
     )
     detail = client.fetch_subject_summary(str(douban_id))
 

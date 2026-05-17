@@ -354,18 +354,6 @@
                 修改后会清空 TMDB 列表缓存，下次访问时按新语言重新获取。
               </div>
             </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number
-                v-model="form.tmdb.request_delay"
-                :min="0"
-                :max="300"
-                :step="5"
-              />
-              <div class="form-hint">
-                <strong>仅用于演员图 / 海报的批量修复</strong>，避免被 TMDB 风控拒绝。
-                推荐 / 流行列表不受此约束。被拒绝时按 30 / 60 / 90s 累加退避，自动重试 3 次。
-              </div>
-            </el-form-item>
             <el-form-item label="缓存 TTL(分钟)">
               <el-input-number v-model="form.cache.tmdb_minutes" :min="1" :max="10080" :step="30" controls-position="right" />
               <span class="form-hint" style="margin-left: 8px">热门 / 流行 / 详情列表的响应缓存</span>
@@ -410,10 +398,6 @@
                 按顺序找标签；勾的语言都没有时，落到 Wikidata label 默认值
               </div>
             </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number v-model="form.wikidata.request_delay" :min="0" :max="10" :step="0.5" />
-              <div class="form-hint">SPARQL 端点对单 IP 限速，1s 一般足够</div>
-            </el-form-item>
           </el-form>
         </el-card>
 
@@ -442,10 +426,6 @@
                 — 免费额度 1000 req/天，足够单人媒体库使用
               </div>
             </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number v-model="form.mdblist.request_delay" :min="0" :max="60" :step="0.5" />
-              <div class="form-hint">两次 API 请求之间的最小间隔；MDB List 限速宽松，1s 通常足够</div>
-            </el-form-item>
             <el-form-item label="缓存 TTL(天)">
               <el-input-number v-model="form.mdblist.cache_ttl_days" :min="1" :max="365" />
               <div class="form-hint">同一作品在该天数内不再重新拉取（电影评分变化不大，30 天合理）</div>
@@ -472,13 +452,6 @@
             </el-form-item>
 
             <!-- 前台同步路径 -->
-            <el-divider content-position="left">
-              <span class="sub-section-title">前台请求（用户点开详情/简介时同步抓）</span>
-            </el-divider>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number v-model="form.douban.request_delay" :min="0" :max="60" :step="1" />
-              <div class="form-hint">用户主动触发的同步抓取间隔，建议 ≥5</div>
-            </el-form-item>
             <el-form-item label="评分缓存(天)">
               <el-input-number v-model="form.douban.cache_ttl_days" :min="1" :max="365" />
               <div class="form-hint">单条评分缓存有效期（MediaRating 表 douban_fetched_at）</div>
@@ -486,23 +459,6 @@
             <el-form-item label="片单缓存(天)" v-if="form.douban_lists">
               <el-input-number v-model="form.douban_lists.cache_days" :min="1" :max="30" />
               <div class="form-hint">doulist 整页结果缓存。片单几乎不变，建议 ≥3</div>
-            </el-form-item>
-
-            <!-- 后台预取路径 -->
-            <el-divider content-position="left">
-              <span class="sub-section-title">后台预取 worker（自动批量补 detail，避开反爬）</span>
-            </el-divider>
-            <el-form-item label="抓取间隔(秒)">
-              <el-input-number v-model="form.douban.worker_delay" :min="5" :max="300" :step="5" />
-              <div class="form-hint">后台串行任务的请求间隔。比前台保守，≥30 推荐</div>
-            </el-form-item>
-            <el-form-item label="失败熔断阈值">
-              <el-input-number v-model="form.douban.worker_max_failures" :min="1" :max="50" :step="1" />
-              <div class="form-hint">连续失败 N 次后 worker 进冷却</div>
-            </el-form-item>
-            <el-form-item label="冷却时长(秒)">
-              <el-input-number v-model="form.douban.worker_cooldown_seconds" :min="60" :max="86400" :step="300" />
-              <div class="form-hint">冷却期间不消费队列，默认 3600 = 1h</div>
             </el-form-item>
 
             <!-- 片单白名单 -->
@@ -632,10 +588,6 @@
                 — 公开 endpoint 无需 OAuth，只用 Client ID
               </div>
             </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number v-model="form.trakt.request_delay" :min="0" :max="60" :step="0.5" />
-              <div class="form-hint">两次 API 请求之间的最小间隔；Trakt 限速宽松，1s 通常足够</div>
-            </el-form-item>
             <el-form-item label="超时(秒)">
               <el-input-number v-model="form.trakt.timeout_seconds" :min="5" :max="120" :step="5" />
             </el-form-item>
@@ -663,10 +615,6 @@
               <div class="form-hint">
                 公开 GraphQL，<b>不需要账号 / API key</b>。番剧元数据 / 排行优势：原生日文标题、季度划分、社区评分
               </div>
-            </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number v-model="form.anilist.request_delay" :min="0" :max="60" :step="0.5" />
-              <div class="form-hint">AniList 限速 90 req/min，1s 间隔安全</div>
             </el-form-item>
             <el-form-item label="超时(秒)">
               <el-input-number v-model="form.anilist.timeout_seconds" :min="5" :max="120" :step="5" />
@@ -806,18 +754,6 @@
             <el-form-item label="密码">
               <el-input v-model="form.subtitle.opensubtitles_password" type="password" show-password />
             </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number
-                v-model="form.subtitle.opensubtitles_request_delay"
-                :min="0"
-                :max="60"
-                :step="0.5"
-                :precision="1"
-              />
-              <div class="form-hint">
-                两次请求之间的最小间隔。免费层 5 次/10s + 200 次/天，建议 ≥2s 留余量。
-              </div>
-            </el-form-item>
           </el-form>
         </el-card>
 
@@ -841,19 +777,6 @@
                 复制 32 位 Token
               </div>
             </el-form-item>
-            <el-form-item label="请求延迟(秒)">
-              <el-input-number
-                v-model="form.subtitle.assrt_request_delay"
-                :min="0"
-                :max="60"
-                :step="0.5"
-                :precision="1"
-              />
-              <div class="form-hint">
-                官方限频 20 次/分钟（按 token + IP 共享），建议 ≥3s 不会触发限频。
-                超频时 API 会返回 30900，前端会提示"配额超限"。
-              </div>
-            </el-form-item>
           </el-form>
         </el-card>
       </el-tab-pane>
@@ -874,9 +797,6 @@
             <el-form-item label="启用">
               <el-switch v-model="form.adult.enabled" />
               <span class="form-hint">禁用时菜单不显示、相关 API 不挂载</span>
-            </el-form-item>
-            <el-form-item label="同源连续刮削间隔(秒)">
-              <el-input-number v-model="form.adult.scraper_delay" :min="1" :max="300" :step="1" />
             </el-form-item>
             <el-form-item label="自动监视">
               <el-switch v-model="form.adult.auto_scrape" />
@@ -1526,12 +1446,11 @@ const DISPATCH_DEFAULT_FILE = {
 const blank = () => ({
   server: { backend_port: 8099, frontend_port: 5173 },
   jellyfin: { host: '', external_url: '', api_key: '', db_path: '' },
-  tmdb: { api_key: '', request_delay: 30, language: 'zh-CN' },
+  tmdb: { api_key: '', language: 'zh-CN' },
   subtitle: {
     opensubtitles_api_key: '',
     opensubtitles_username: '',
     opensubtitles_password: '',
-    opensubtitles_request_delay: 2.0,
     // 缺字幕判定（原子单语言 checkbox；任一缺即视为缺字幕）
     required_langs: ['chs', 'eng'],
     // 自动下载语言优先级（SourcePool 排序池；可含双语复合 chs.eng / cht.eng）
@@ -1539,7 +1458,6 @@ const blank = () => ({
       { name: 'chs.eng' }, { name: 'chs' }, { name: 'eng' },
     ],
     assrt_api_token: '',
-    assrt_request_delay: 3.0,
     sources: [
       { name: 'assrt', enabled: true },
       { name: 'opensubtitles', enabled: true },
@@ -1594,10 +1512,9 @@ const blank = () => ({
     tmdb_minutes: 120,
     library_days: 7,
   },
-  mdblist: { enabled: true, api_key: '', request_delay: 1.0, cache_ttl_days: 30 },
+  mdblist: { enabled: true, api_key: '', cache_ttl_days: 30 },
   douban: {
-    enabled: true, request_delay: 5.0, cache_ttl_days: 30,
-    worker_delay: 30.0, worker_max_failures: 5, worker_cooldown_seconds: 3600,
+    enabled: true, cache_ttl_days: 30,
   },
   // 媒体元数据实体表 (L3 长缓存) + 全局元数据语言
   // 详见 docs/2026-05-15-media-metadata-store.md
@@ -1614,14 +1531,12 @@ const blank = () => ({
     enabled: false,
     client_id: '',
     base_url: 'https://api.trakt.tv',
-    request_delay: 1.0,
     timeout_seconds: 15,
     cache_minutes: 60,
   },
   anilist: {
     enabled: true,
     base_url: 'https://graphql.anilist.co',
-    request_delay: 1.0,
     timeout_seconds: 15,
     cache_minutes: 240,
   },
@@ -1639,14 +1554,12 @@ const blank = () => ({
     enabled: true,
     user_agent: 'JellyfinHelper/1.0',
     language_order: ['zh', 'en'],
-    request_delay: 1.0,
   },
   adult: {
     enabled: false,
     library_ids: [],
     auto_detect: true,
     auto_scrape: false,
-    scraper_delay: 3,
     sources: [],
   },
 })

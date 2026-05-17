@@ -26,6 +26,8 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,13 +75,17 @@ class ShooterClient:
 
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
-    def __init__(self, request_delay: float = 2.0, timeout: float = 15.0):
+    def __init__(self, request_delay: float = 2.0, timeout: float = 15.0,
+                 batch: bool = False):
         self.request_delay = max(0.0, float(request_delay))
         self.timeout = float(timeout)
+        self.batch = batch
         self._last_call = 0.0
         self._lock = threading.Lock()
 
     def _wait_quota(self):
+        # 保底层：先检查全局暂停 / batch 配额
+        quota_guard.acquire('shooter', batch=self.batch)
         with self._lock:
             elapsed = time.monotonic() - self._last_call
             if elapsed < self.request_delay:
@@ -119,9 +125,15 @@ class ShooterClient:
             logger.warning(f"shooter 请求异常: {e}")
             return []
 
+        if r.status_code == 429:
+            quota_guard.report_limited('shooter', 'HTTP 429')
+            logger.warning("shooter 限流 (429)")
+            return []
         if r.status_code != 200:
             logger.warning(f"shooter 状态码 {r.status_code}")
             return []
+
+        quota_guard.report_success('shooter')
 
         # Shooter 没结果时返回 b'\xff' 单字节
         if r.content == b'\xff' or not r.content:

@@ -16,6 +16,8 @@ from typing import Optional
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,6 +104,7 @@ class MDBListClient:
         delay: float = 1.0,
         max_retries: int = 2,
         timeout: float = 15.0,
+        batch: bool = False,
     ):
         if not api_key:
             raise ValueError("MDB List 客户端需要 API Key")
@@ -109,6 +112,7 @@ class MDBListClient:
         self.delay = delay
         self.max_retries = max_retries
         self.timeout = timeout
+        self.batch = batch
         self._last_request_time = 0.0
         self._session = requests.Session()
 
@@ -128,6 +132,9 @@ class MDBListClient:
         本方法返回 None 表示请求失败 / 没拿到数据。
         注意：banner 占位响应（无 ratings 字段）也算"没数据"，因为 MDB List 偶尔在错误路径上返回它。
         """
+        # 保底层：先检查全局暂停 / 批量配额
+        quota_guard.acquire('mdblist', batch=self.batch)
+
         url = f"{BASE_URL.rstrip('/')}{path}"
         params = {'apikey': self.api_key}
         for attempt in range(self.max_retries + 1):
@@ -140,6 +147,8 @@ class MDBListClient:
 
             # 429: 限流；5xx: 服务异常 → 退避重试
             if resp.status_code == 429 or resp.status_code >= 500:
+                if resp.status_code == 429:
+                    quota_guard.report_limited('mdblist', f'HTTP 429 {path}')
                 if attempt >= self.max_retries:
                     logger.error(
                         f"MDB List 失败 HTTP {resp.status_code}（已重试 {attempt} 次）"
@@ -178,6 +187,7 @@ class MDBListClient:
                 logger.warning(f"MDB List 返回 banner 占位（路径错误？） {path}")
                 return None
 
+            quota_guard.report_success('mdblist')
             return data
         return None
 

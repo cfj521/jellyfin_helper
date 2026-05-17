@@ -120,6 +120,7 @@ export const STATUS_META = {
   pending:   { label: '等待中', color: '#909399', tagType: 'info' },
   running:   { label: '运行中', color: '#409eff', tagType: 'primary' },
   completed: { label: '已完成', color: '#67c23a', tagType: 'success' },
+  success:   { label: '已完成', color: '#67c23a', tagType: 'success' },
   failed:    { label: '失败',   color: '#f56c6c', tagType: 'danger' },
   cancelled: { label: '已取消', color: '#909399', tagType: 'info' },
 }

@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 
 import requests
 
+from common.rate_limiter import quota_guard
 from web.backend.config import settings
 from web.backend.database import LLMClassifyCache, SessionLocal
 
@@ -197,6 +198,9 @@ class LLMClient:
             'temperature': 0.1,
         }
 
+        # 保底层：先检查全局暂停
+        quota_guard.acquire('llm')
+
         url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
         r = requests.post(
             url,
@@ -207,7 +211,11 @@ class LLMClient:
             },
             timeout=self.cfg.timeout_seconds,
         )
+        if r.status_code == 429:
+            quota_guard.report_limited('llm', 'HTTP 429')
+            raise RuntimeError("LLM 限流 (429)")
         r.raise_for_status()
+        quota_guard.report_success('llm')
         data = r.json()
         content = data['choices'][0]['message']['content']
         result = json.loads(content)

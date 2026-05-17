@@ -19,6 +19,8 @@ from typing import Dict, List, Optional
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -143,10 +145,12 @@ class AniListClient:
         base_url: str = 'https://graphql.anilist.co',
         request_delay: float = 1.0,
         timeout: int = 15,
+        batch: bool = False,
     ):
         self.base_url = base_url.rstrip('/')
         self.request_delay = max(0.0, request_delay)
         self.timeout = timeout
+        self.batch = batch
         self._lock = threading.Lock()
         self._last_call = 0.0
         self._session = requests.Session()
@@ -163,6 +167,8 @@ class AniListClient:
             self._last_call = time.monotonic()
 
     def _query(self, query: str, variables: Optional[Dict] = None) -> Optional[Dict]:
+        # 保底层：先检查全局暂停 / 批量配额（anilist 当前未配 batch 配额，仅暂停保护）
+        quota_guard.acquire('anilist', batch=self.batch)
         self._wait()
         try:
             r = self._session.post(
@@ -170,11 +176,21 @@ class AniListClient:
                 json={'query': query, 'variables': variables or {}},
                 timeout=self.timeout,
             )
+            if r.status_code == 429:
+                quota_guard.report_limited('anilist', 'HTTP 429')
+                logger.warning("[anilist] 限流 (429)")
+                return None
             r.raise_for_status()
             data = r.json()
             if 'errors' in data:
+                # AniList 有时在 errors 中返回限流信息
+                for err in data['errors']:
+                    if err.get('status') == 429:
+                        quota_guard.report_limited('anilist', 'GraphQL 429')
+                        return None
                 logger.warning(f"[anilist] GraphQL errors: {data['errors']}")
                 return None
+            quota_guard.report_success('anilist')
             return data.get('data')
         except requests.RequestException as e:
             logger.warning(f"[anilist] 请求失败: {e}")

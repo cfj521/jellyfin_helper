@@ -13,6 +13,8 @@ from typing import List, Optional, Tuple
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +57,7 @@ class WikidataClient:
         delay: float = 1.0,
         max_retries: int = 2,
         timeout: float = 30.0,
+        batch: bool = False,
     ):
         if not user_agent:
             raise ValueError("Wikidata 客户端需要 User-Agent（基金会强制要求）")
@@ -63,6 +66,7 @@ class WikidataClient:
         self.delay = delay
         self.max_retries = max_retries
         self.timeout = timeout
+        self.batch = batch
         self._last_request_time = 0.0
         self._session = requests.Session()
         self._session.headers.update({
@@ -77,6 +81,9 @@ class WikidataClient:
         self._last_request_time = time.time()
 
     def _query(self, sparql: str) -> Optional[dict]:
+        # 保底层：先检查全局暂停 / 批量配额
+        quota_guard.acquire('wikidata', batch=self.batch)
+
         for attempt in range(self.max_retries + 1):
             self._rate_limit()
             try:
@@ -90,6 +97,8 @@ class WikidataClient:
                 return None
 
             if resp.status_code == 429 or resp.status_code >= 500:
+                if resp.status_code == 429:
+                    quota_guard.report_limited('wikidata', 'HTTP 429')
                 if attempt >= self.max_retries:
                     logger.error(
                         f"Wikidata 查询失败 HTTP {resp.status_code}（已重试 {attempt} 次）"
@@ -109,7 +118,9 @@ class WikidataClient:
                 return None
 
             try:
-                return resp.json()
+                data = resp.json()
+                quota_guard.report_success('wikidata')
+                return data
             except ValueError:
                 logger.error(f"Wikidata 返回非 JSON: {resp.text[:200]}")
                 return None

@@ -21,6 +21,8 @@ from typing import Dict, List, Optional
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +67,7 @@ class TraktClient:
         base_url: str = 'https://api.trakt.tv',
         request_delay: float = 1.0,
         timeout: int = 15,
+        batch: bool = False,
     ):
         if not client_id:
             raise ValueError("Trakt client_id 不能为空")
@@ -72,6 +75,7 @@ class TraktClient:
         self.base_url = base_url.rstrip('/')
         self.request_delay = max(0.0, request_delay)
         self.timeout = timeout
+        self.batch = batch
         self._lock = threading.Lock()
         self._last_call = 0.0
         self._session = requests.Session()
@@ -91,11 +95,18 @@ class TraktClient:
             self._last_call = time.monotonic()
 
     def _get(self, path: str, params: Optional[Dict] = None) -> Optional[List]:
+        # 保底层：先检查全局暂停 / 批量配额（trakt 当前未配 batch 配额）
+        quota_guard.acquire('trakt', batch=self.batch)
         self._wait()
         try:
             url = f"{self.base_url}{path}"
             r = self._session.get(url, params=params, timeout=self.timeout)
+            if r.status_code == 429:
+                quota_guard.report_limited('trakt', f'HTTP 429 {path}')
+                logger.warning(f"[trakt] {path} 限流 (429)")
+                return None
             r.raise_for_status()
+            quota_guard.report_success('trakt')
             return r.json()
         except requests.RequestException as e:
             logger.warning(f"[trakt] {path} 请求失败: {e}")

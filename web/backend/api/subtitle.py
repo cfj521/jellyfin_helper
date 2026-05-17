@@ -775,7 +775,8 @@ def run_subtitle_download(
 
         _progress_msg(10, f"准备下载 {len(videos)} 个视频的字幕...")
 
-        downloader = SubtitleDownloader(settings.to_dict())
+        # 批量字幕下载 → batch=True 启用 batch 配额
+        downloader = SubtitleDownloader(settings.to_dict(), batch=True)
 
         def _on_each(idx, total, item):
             # 进度从 10% 推进到 95%
@@ -1214,7 +1215,8 @@ def run_subtitle_auto_fix_inline(
         # （API 调用可能传了自定义优先级，不一定等于 settings.downloading_langs）
         _cfg = settings.to_dict()
         _cfg.setdefault('subtitle', {})['downloading_langs'] = downloading_langs
-        downloader = SubtitleDownloader(_cfg)
+        # auto-fix 批量任务 → batch=True
+        downloader = SubtitleDownloader(_cfg, batch=True)
         targets = downloader.collect_targets_from_report(report_data)
         if limit:
             targets = targets[:limit]
@@ -1495,9 +1497,10 @@ def _get_assrt_client() -> "_assrt.AssrtClient":
             status_code=400,
             detail="未配置 assrt API Token，请在 config.yaml 中设置 subtitle.assrt_api_token",
         )
+    from common.rate_limiter import ASSRT_DELAY
     return _assrt.AssrtClient(
         token=settings.assrt_api_token,
-        request_delay=settings.assrt_request_delay,
+        request_delay=ASSRT_DELAY,
     )
 
 
@@ -1670,11 +1673,12 @@ def multi_search(request: MultiSearchRequest):
     if 'opensubtitles' in enabled and settings.opensubtitles_api_key:
         try:
             from tools.subtitle_downloader.opensubtitles import OpenSubtitlesClient
+            from common.rate_limiter import OPENSUBTITLES_DELAY
             os_client = OpenSubtitlesClient(
                 api_key=settings.opensubtitles_api_key,
                 username=settings.opensubtitles_username,
                 password=settings.opensubtitles_password,
-                request_delay=settings.opensubtitles_request_delay,
+                request_delay=OPENSUBTITLES_DELAY,
             )
             # OpenSubtitles 优先 ID 搜（精度远高于 query）；都没给才退回 query
             results = os_client.search(
@@ -1830,12 +1834,13 @@ def multi_download(request: MultiDownloadRequest):
         if not settings.opensubtitles_api_key:
             raise HTTPException(status_code=400, detail="未配置 opensubtitles api_key")
         from tools.subtitle_downloader.opensubtitles import OpenSubtitlesClient
+        from common.rate_limiter import OPENSUBTITLES_DELAY
         from web.backend.path_translator import translate_path_with_settings
         client = OpenSubtitlesClient(
             api_key=settings.opensubtitles_api_key,
             username=settings.opensubtitles_username,
             password=settings.opensubtitles_password,
-            request_delay=settings.opensubtitles_request_delay,
+            request_delay=OPENSUBTITLES_DELAY,
         )
         local_path = translate_path_with_settings(request.video_path) or request.video_path
         video_path = Path(local_path)
