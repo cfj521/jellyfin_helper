@@ -17,6 +17,8 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.database import get_db, Task, ActorInfo, MediaItem
 from web.backend.config import settings
+# 批量端点：TMDBClient(..., batch=True) 启用 batch 配额（min/hour/day 滑窗）；
+# 单条端点：默认 batch=False，仅受 hard delay + 限流暂停 约束。
 from web.backend.api.tasks import (
     create_task, update_task_progress, complete_task,
     cancellable_task, TaskCancelledError, mark_task_cancelled,
@@ -29,8 +31,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _make_wikidata_client():
-    """按 settings 构造 Wikidata 客户端；未启用或 UA 缺失返回 None。"""
+def _make_wikidata_client(batch: bool = False):
+    """按 settings 构造 Wikidata 客户端；未启用或 UA 缺失返回 None。
+
+    batch=True 用于批量演员修复，启用 batch 配额（15/min, 600/h, 3000/d）。
+    """
     if not settings.wikidata_enabled:
         return None
     if not settings.wikidata_user_agent:
@@ -38,10 +43,12 @@ def _make_wikidata_client():
         return None
     try:
         from common.wikidata_client import WikidataClient
+        from common.rate_limiter import WIKIDATA_DELAY
         return WikidataClient(
             user_agent=settings.wikidata_user_agent,
             language_order=settings.wikidata_language_order,
-            delay=settings.wikidata_request_delay,
+            delay=WIKIDATA_DELAY,
+            batch=batch,
         )
     except Exception as e:
         logger.warning(f"初始化 Wikidata 客户端失败: {e}")
@@ -455,8 +462,8 @@ def run_actor_fix(
         _progress(5, "初始化...")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
-        tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
-        wd_client = _make_wikidata_client()
+        tmdb_client = TMDBClient(settings.tmdb_api_key, language=settings.tmdb_language, batch=True)
+        wd_client = _make_wikidata_client(batch=True)
 
         # 如果指定了 library_id 或 library_ids，先从 Jellyfin 拉这些库下出现的所有演员 ID
         library_actor_ids: Optional[set] = None
@@ -695,7 +702,8 @@ def run_single_actor_fix(task_id: int, actor_id: int):
             actor_jellyfin_id = actor.jellyfin_id
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
-        tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
+        # 单条端点 → batch=False（默认）
+        tmdb_client = TMDBClient(settings.tmdb_api_key, language=settings.tmdb_language)
         wd_client = _make_wikidata_client()
 
         resolved_url: Optional[str] = None
@@ -1264,7 +1272,7 @@ def run_poster_fix(
         _progress(5, "初始化...")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
-        tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
+        tmdb_client = TMDBClient(settings.tmdb_api_key, language=settings.tmdb_language, batch=True)
 
         # ---- 短事务：把待处理条目快照成 dict 列表 ----
         with SessionLocal() as db:
@@ -1410,7 +1418,8 @@ def run_single_poster_fix(task_id: int, item_id: int):
             update_task_progress(db, task_id, 30, f"搜索 TMDB: {item_data['title']}")
 
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
-        tmdb_client = TMDBClient(settings.tmdb_api_key, delay=settings.tmdb_request_delay, language=settings.tmdb_language)
+        # 单条端点 → batch=False（默认）
+        tmdb_client = TMDBClient(settings.tmdb_api_key, language=settings.tmdb_language)
 
         result = _fix_one_poster_pure(jf_client, tmdb_client, item_data, scan_only=False)
 
@@ -1589,8 +1598,8 @@ def run_episode_still_fix(
         jf_client = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         tmdb_client = TMDBClient(
             settings.tmdb_api_key,
-            delay=settings.tmdb_request_delay,
             language=settings.tmdb_language,
+            batch=True,
         )
 
         _progress(10, "解析 Episode 列表...")

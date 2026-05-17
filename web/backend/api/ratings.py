@@ -38,28 +38,34 @@ router = APIRouter()
 # 客户端工厂（按需创建，settings 改了重启即可）
 # ============================================================
 
-def _make_mdblist_client():
+def _make_mdblist_client(batch: bool = False):
+    """构造 MDB List 客户端；batch=True 时启用 batch 配额（20/min, 300/h, 1000/d）。"""
     if not settings.mdblist_enabled or not settings.mdblist_api_key:
         return None
     try:
         from common.mdblist_client import MDBListClient
+        from common.rate_limiter import MDBLIST_DELAY
         return MDBListClient(
             api_key=settings.mdblist_api_key,
-            delay=settings.mdblist_request_delay,
+            delay=MDBLIST_DELAY,
+            batch=batch,
         )
     except Exception as e:
         logger.warning(f"初始化 MDB List 客户端失败: {e}")
         return None
 
 
-def _make_douban_client():
+def _make_douban_client(batch: bool = False):
+    """构造豆瓣客户端；batch=True 时启用 batch 配额（10/min, 300/h, 2000/d）。"""
     if not settings.douban_enabled:
         return None
     try:
         from common.douban_client import DoubanClient
+        from common.rate_limiter import DOUBAN_DELAY
         return DoubanClient(
             user_agent=settings.douban_user_agent,
-            delay=settings.douban_request_delay,
+            delay=DOUBAN_DELAY,
+            batch=batch,
         )
     except Exception as e:
         logger.warning(f"初始化豆瓣客户端失败: {e}")
@@ -220,7 +226,8 @@ def _fetch_mdblist_sync(
     tmdb_id 可为 None（豆瓣条目桥接路径）—— 此时必须传 imdb_id：
       内部用 imdb_id 拿数据，从响应里的 ids.tmdb 派生 tmdb_id 作为 MediaRating 主键。
     """
-    client = _make_mdblist_client()
+    # 这函数被 mdblist 后台 worker 调用 → batch=True
+    client = _make_mdblist_client(batch=True)
     if client is None:
         return None
 
@@ -374,8 +381,8 @@ class _DoubanWorker:
         logger.info("豆瓣爬虫 worker 已启动")
 
     def _run(self):
-        # 客户端在 worker 内创建一次：保留 session 复用，且严格按 delay 限速
-        client = _make_douban_client()
+        # 客户端在 worker 内创建一次：保留 session 复用 + batch 配额（worker 算批量）
+        client = _make_douban_client(batch=True)
         if client is None:
             return
 

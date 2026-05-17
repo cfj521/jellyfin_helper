@@ -122,6 +122,9 @@
         </div>
       </el-card>
 
+      <!-- 配额保护状态面板：仅当有源被限流/熔断时显示 -->
+      <QuotaStatusPanel />
+
       <!-- task 整体失败时单独 alert 提示（不再用通用 failure-card 收集子项警告，
            子项失败/未找到信息全部在下方 task-type 专用 view 里展示）-->
       <el-alert
@@ -173,6 +176,7 @@ import RunAllView           from '@/components/task-detail/RunAllView.vue'
 import AdultScanView          from '@/components/task-detail/AdultScanView.vue'
 import AdultScrapeBatchView   from '@/components/task-detail/AdultScrapeBatchView.vue'
 import AdultRepairCoversView  from '@/components/task-detail/AdultRepairCoversView.vue'
+import QuotaStatusPanel       from '@/components/task-detail/QuotaStatusPanel.vue'
 
 const route = useRoute()
 const router = useRouter()

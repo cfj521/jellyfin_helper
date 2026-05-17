@@ -104,11 +104,8 @@ class Settings(BaseSettings):
     path_mappings_enabled: bool = (_yaml_config.get('path_mappings') or {}).get('enabled', False)
     path_mappings_rules: List[dict] = (_yaml_config.get('path_mappings') or {}).get('rules') or []
 
-    # TMDB 配置
+    # TMDB 配置（delay 参数统一在 common/rate_limiter.py 定义）
     tmdb_api_key: str = _yaml_config.get('tmdb', {}).get('api_key', '')
-    # TMDB 请求延迟（秒）：每次 TMDB 调用之间的最小间隔
-    # 实际生效以 config.yaml 为准；这里只是 yaml 没配置时的兜底
-    tmdb_request_delay: float = _yaml_config.get('tmdb', {}).get('request_delay', 1.0)
     # TMDB 显示语言（影响标题、简介、类型名等本地化字段）
     # 常见：zh-CN / zh-TW / en-US / ja-JP / ko-KR
     tmdb_language: str = _yaml_config.get('tmdb', {}).get('language', 'zh-CN')
@@ -129,31 +126,21 @@ class Settings(BaseSettings):
     wikidata_language_order: List[str] = _yaml_config.get('wikidata', {}).get(
         'language_order', ['zh', 'en']
     )
-    wikidata_request_delay: float = _yaml_config.get('wikidata', {}).get('request_delay', 1.0)
+    # delay 参数统一在 common/rate_limiter.py 定义
 
     # MDB List 配置（评分聚合 API：IMDB / RT / Metacritic / Trakt / Letterboxd 一次拿全）
     mdblist_enabled: bool = _yaml_config.get('mdblist', {}).get('enabled', True)
     mdblist_api_key: str = _yaml_config.get('mdblist', {}).get('api_key', '')
-    mdblist_request_delay: float = _yaml_config.get('mdblist', {}).get('request_delay', 1.0)
     mdblist_cache_ttl_days: int = _yaml_config.get('mdblist', {}).get('cache_ttl_days', 30)
 
     # 豆瓣评分（无官方 API，HTML 爬虫；爬取较慢，作为懒拉取的后台任务）
     douban_enabled: bool = _yaml_config.get('douban', {}).get('enabled', True)
-    douban_request_delay: float = _yaml_config.get('douban', {}).get('request_delay', 5.0)
     douban_cache_ttl_days: int = _yaml_config.get('douban', {}).get('cache_ttl_days', 30)
     douban_user_agent: str = _yaml_config.get('douban', {}).get(
         'user_agent',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     )
-    # 豆瓣 detail 后台预取 worker（保守策略，避免触发反爬封禁）
-    # worker_delay: 后台 prefetch worker 的请求间隔（前台请求另走 request_delay）
-    # worker_max_failures / worker_cooldown_seconds: 全局熔断阈值
-    #   连续 N 次失败 → 进 cooldown，期间 **所有路径**（前台/后台/ratings/maintenance）
-    #   的豆瓣请求都直接返回 None，不发出 HTTP 请求
-    douban_worker_delay: float = _yaml_config.get('douban', {}).get('worker_delay', 30.0)
-    douban_worker_max_failures: int = _yaml_config.get('douban', {}).get('worker_max_failures', 5)
-    douban_worker_cooldown_seconds: int = _yaml_config.get('douban', {}).get('worker_cooldown_seconds', 3600)
 
     # ---- 媒体元数据实体表（media_metadata）----
     # 详见 docs/2026-05-15-media-metadata-store.md
@@ -171,7 +158,7 @@ class Settings(BaseSettings):
     opensubtitles_api_key: str = _yaml_config.get('subtitle', {}).get('opensubtitles_api_key', '')
     opensubtitles_username: Optional[str] = _yaml_config.get('subtitle', {}).get('opensubtitles_username')
     opensubtitles_password: Optional[str] = _yaml_config.get('subtitle', {}).get('opensubtitles_password')
-    opensubtitles_request_delay: float = _yaml_config.get('subtitle', {}).get('opensubtitles_request_delay', 2.0)
+    # delay 参数统一在 common/rate_limiter.py 定义
     # ── 字幕语言：两套配置，职责分明 ──
     #
     # required_langs：**缺字幕判定**的依据。原子单语言，任一缺即视为缺字幕。
@@ -191,9 +178,6 @@ class Settings(BaseSettings):
 
     # 射手字幕 assrt.net（中文字幕主力源；API 限频 20/min）
     assrt_api_token: str = _yaml_config.get('subtitle', {}).get('assrt_api_token', '')
-    # default 4.0：assrt 服务端硬限 20 req/min。3.0s 间隔正好踩边，常被
-    # 并发的"前端手动搜字幕"/配额查询击穿。4.0s 留 33% buffer 给其它并发。
-    assrt_request_delay: float = _yaml_config.get('subtitle', {}).get('assrt_request_delay', 4.0)
 
     # 字幕格式偏好（按顺序优先；同一语言下只下载排名最高的那一种）
     # 'ass' / 'ssa' 视为同一类（ASS 是 SSA v4+），'srt' 是兜底通用格式，'sup' 是蓝光图形字幕
@@ -294,7 +278,7 @@ class Settings(BaseSettings):
     adult_auto_detect: bool = _yaml_config.get('adult', {}).get('auto_detect', True)
     # 自动监视：开启后通过 Jellyfin WebSocket 实时监听库变化，发现新视频自动入库 + 刮削
     adult_auto_scrape: bool = _yaml_config.get('adult', {}).get('auto_scrape', False)
-    adult_scraper_delay: float = _yaml_config.get('adult', {}).get('scraper_delay', 3.0)
+    # delay 参数统一在 common/rate_limiter.py 定义
     # 刮削源配置（List[Dict]）。按顺序回退，第一个命中即返回。
     # missav 放最后：覆盖广（含 FC2 + 中文标题），但需 CF 绕过较慢，作为最终兜底
     # 过滤掉已下线源（如 avmoo）—— 老 config.yaml 可能还残留，避免 ScraperManager 每次启动都 warn
@@ -338,7 +322,6 @@ class Settings(BaseSettings):
             },
             "tmdb": {
                 "api_key": self.tmdb_api_key,
-                "request_delay": self.tmdb_request_delay,
                 "language": self.tmdb_language,
             },
             "cache": {
@@ -349,17 +332,14 @@ class Settings(BaseSettings):
                 "enabled": self.wikidata_enabled,
                 "user_agent": self.wikidata_user_agent,
                 "language_order": self.wikidata_language_order,
-                "request_delay": self.wikidata_request_delay,
             },
             "mdblist": {
                 "enabled": self.mdblist_enabled,
                 "api_key": self.mdblist_api_key,
-                "request_delay": self.mdblist_request_delay,
                 "cache_ttl_days": self.mdblist_cache_ttl_days,
             },
             "douban": {
                 "enabled": self.douban_enabled,
-                "request_delay": self.douban_request_delay,
                 "cache_ttl_days": self.douban_cache_ttl_days,
                 "user_agent": self.douban_user_agent,
             },
@@ -367,12 +347,10 @@ class Settings(BaseSettings):
                 "opensubtitles_api_key": self.opensubtitles_api_key,
                 "opensubtitles_username": self.opensubtitles_username,
                 "opensubtitles_password": self.opensubtitles_password,
-                "opensubtitles_request_delay": self.opensubtitles_request_delay,
                 "required_langs": self.required_langs,         # 缺字幕判定
                 "downloading_langs": self.downloading_langs,   # 下载优先级（排序池）
                 "preferred_formats": self.preferred_subtitle_formats,
                 "assrt_api_token": self.assrt_api_token,
-                "assrt_request_delay": self.assrt_request_delay,
                 "sources": self.subtitle_sources,
             },
             "audio": {
@@ -400,7 +378,6 @@ class Settings(BaseSettings):
                 "extra_paths": self.adult_extra_paths,
                 "auto_detect": self.adult_auto_detect,
                 "auto_scrape": self.adult_auto_scrape,
-                "scraper_delay": self.adult_scraper_delay,
                 "sources": self.adult_sources,
             },
             "debug": {

@@ -503,9 +503,12 @@ class AdultWatcher:
         from tools.adult_manager.scrapers.manager import ScraperManager
         from tools.adult_manager.nfo_writer import write_nfo as do_write_nfo
 
+        from common.rate_limiter import ADULT_SCRAPER_DELAY
+        # 后台 adult watcher worker → batch=True
         manager = ScraperManager(
-            delay=settings.adult_scraper_delay,
+            delay=ADULT_SCRAPER_DELAY,
             sources=settings.adult_sources,
+            batch=True,
         )
         if not manager.scrapers:
             return 0

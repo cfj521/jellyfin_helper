@@ -21,6 +21,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -127,12 +129,14 @@ class AssrtClient:
     _global_last_call: float = 0.0
     _global_lock = threading.Lock()
 
-    def __init__(self, token: str, request_delay: float = 4.0, base_url: Optional[str] = None):
+    def __init__(self, token: str, request_delay: float = 4.0,
+                 base_url: Optional[str] = None, batch: bool = False):
         if not token:
             raise ValueError("缺少 assrt API token")
         self.token = token
         self.request_delay = max(0.0, float(request_delay))
         self.base_url = (base_url or self.BASE_URL).rstrip('/')
+        self.batch = batch
         self.session = requests.Session()
         self.session.headers['User-Agent'] = 'JellyfinHelper/1.0'
 
@@ -142,7 +146,7 @@ class AssrtClient:
         """全进程串行限频：所有 AssrtClient 实例共用 _global_last_call/_lock。
 
         request_delay 由调用方实例决定；多实例不同 delay 时取**当前调用方**的，
-        但 last_call 是全局的 —— 实践上配置统一来源 settings.assrt_request_delay
+        但 last_call 是全局的 —— 实践上配置统一来源 rate_limiter.ASSRT_DELAY
         不会出现多种 delay。
         """
         with AssrtClient._global_lock:
@@ -155,6 +159,9 @@ class AssrtClient:
         params = dict(params or {})
         params['token'] = self.token
         url = f"{self.base_url}{path}"
+
+        # 保底层：如果之前触发过限流，先等暂停结束 / batch 配额
+        quota_guard.acquire('assrt', batch=self.batch)
 
         self._wait_quota()
         try:
@@ -171,6 +178,7 @@ class AssrtClient:
             except Exception:
                 code, msg = resp.status_code, resp.text[:200]
             if code == 30900:
+                quota_guard.report_limited('assrt', '30900 配额超限')
                 raise AssrtRateLimitError(30900, '配额超限（20/min），请稍后重试')
             raise AssrtError(code, f"服务端错误: {msg}")
 
@@ -193,8 +201,12 @@ class AssrtClient:
             sub_block = data.get('sub') or {}
             msg = sub_block.get('result') or data.get('errmsg') or 'unknown'
             if status == 30900:
+                quota_guard.report_limited('assrt', '30900 配额超限')
                 raise AssrtRateLimitError(status, msg)
             raise AssrtError(status, msg)
+
+        # 请求成功 → 重置连续计数
+        quota_guard.report_success('assrt')
         return data
 
     # ---- API endpoints ----

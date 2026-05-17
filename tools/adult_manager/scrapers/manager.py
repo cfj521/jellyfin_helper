@@ -55,6 +55,7 @@ class ScraperManager:
         delay: float = 1.0,
         proxy: Optional[str] = None,
         sources: Optional[List[Union[str, Dict]]] = None,
+        batch: bool = False,
     ):
         """
         sources 支持两种形式：
@@ -63,9 +64,11 @@ class ScraperManager:
               {'name': 'javdb',  'enabled': false}]  —— 完整配置
 
         proxy 是全局代理，每个源也可以在配置里覆盖（item['proxy']）。
+        batch=True 用于批量 / 后台刮削任务，额外受 adult 配额约束。
         """
         self.delay = delay
         self.proxy = proxy
+        self.batch = batch
         self.scrapers: List[BaseScraper] = []
 
         sources = sources or ['javbus', 'javdb']
@@ -90,6 +93,7 @@ class ScraperManager:
             kwargs = {
                 'delay': delay,
                 'proxy': cfg.get('proxy', proxy),
+                'batch': batch,
             }
             if cfg.get('base_url'):
                 kwargs['base_url'] = cfg['base_url']
@@ -99,9 +103,14 @@ class ScraperManager:
             try:
                 self.scrapers.append(cls(**kwargs))
             except TypeError:
-                # 老的子类不接受 base_url，回退到不传
-                kwargs.pop('base_url', None)
-                self.scrapers.append(cls(**kwargs))
+                # 老的子类不接受 base_url 或 batch，回退到不传
+                fallback = dict(kwargs)
+                fallback.pop('base_url', None)
+                try:
+                    self.scrapers.append(cls(**fallback))
+                except TypeError:
+                    fallback.pop('batch', None)
+                    self.scrapers.append(cls(**fallback))
 
         if not self.scrapers:
             logger.warning("ScraperManager 没有可用的刮削源")

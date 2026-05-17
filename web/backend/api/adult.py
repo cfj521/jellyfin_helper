@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from web.backend.database import get_db, SessionLocal, AdultItem
 from web.backend.config import settings
+from common.rate_limiter import ADULT_SCRAPER_DELAY
 from web.backend.api.tasks import (
     create_task, update_task_progress, complete_task,
     cancellable_task, TaskCancelledError, mark_task_cancelled,
@@ -985,8 +986,9 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
     from web.backend.shutdown import is_shutting_down
 
     manager = ScraperManager(
-        delay=settings.adult_scraper_delay,
+        delay=ADULT_SCRAPER_DELAY,
         sources=settings.adult_sources,
+        batch=True,
     )
     if not manager.scrapers:
         with SessionLocal() as db:
@@ -1931,7 +1933,7 @@ def adult_identify_search(
 
     from tools.adult_manager.scrapers.manager import ScraperManager
     manager = ScraperManager(
-        delay=settings.adult_scraper_delay,
+        delay=ADULT_SCRAPER_DELAY,
         sources=settings.adult_sources,
     )
     if not manager.scrapers:
@@ -2088,7 +2090,7 @@ def rescrape_one_item(item_id: int):
         file_path = item.file_path
 
     manager = ScraperManager(
-        delay=settings.adult_scraper_delay,
+        delay=ADULT_SCRAPER_DELAY,
         sources=settings.adult_sources,
     )
     if not manager.scrapers:

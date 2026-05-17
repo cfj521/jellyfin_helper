@@ -115,21 +115,22 @@ class TraktConfig(BaseModel):
     """Trakt API 配置。
     https://trakt.tv/oauth/applications 创建 application 后，把"Client ID"贴到 client_id。
     公开 endpoint（trending / popular）不需要 OAuth；header 里带 trakt-api-key 即可。
+    delay 参数统一在 common/rate_limiter.py 定义。
     """
     enabled: bool = False
     client_id: str = ''
     base_url: str = 'https://api.trakt.tv'
-    request_delay: float = 1.0
     timeout_seconds: int = 15
     # 缓存 TTL（分钟）：Trakt 是实时观看活动信号，刷新频率应该比 TMDB 高一点
     cache_minutes: int = 60
 
 
 class AniListConfig(BaseModel):
-    """AniList GraphQL 配置（公开 API，**完全不需要账号和 key**）。"""
+    """AniList GraphQL 配置（公开 API，**完全不需要账号和 key**）。
+    delay 参数统一在 common/rate_limiter.py 定义。
+    """
     enabled: bool = True
     base_url: str = 'https://graphql.anilist.co'
-    request_delay: float = 1.0
     timeout_seconds: int = 15
     cache_minutes: int = 240        # 4 小时；番剧排行变化慢
 

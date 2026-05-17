@@ -7,6 +7,8 @@ import logging
 import time
 from typing import Optional, Dict, List, Tuple
 
+from common.rate_limiter import quota_guard, TMDB_DELAY
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,24 +21,28 @@ class TMDBClient:
     def __init__(
         self,
         api_key: str,
-        delay: float = 30.0,
+        delay: float = TMDB_DELAY,
         max_retries: int = 3,
         language: str = "zh-CN",
+        batch: bool = False,
     ):
         """
         初始化TMDB客户端
 
         Args:
             api_key: TMDB API密钥 (v3 auth)
-            delay: 两次请求之间的最小间隔（秒）。默认 30 偏保守，避免风控
+            delay: 两次请求之间的最小间隔（秒）。默认从 rate_limiter 常量读取
             max_retries: 收到 429/5xx 时的最大重试次数（累加退避）
             language: 默认显示语言（zh-CN / en-US 等），所有请求自动注入；
                       调用方在 params 里传 language 可临时覆盖
+            batch: True 表示当前实例服务于批量任务（UI 批量动作按钮 / 后台 worker），
+                   会接受额外的 batch 配额（分钟/小时/日）约束。
         """
         self.api_key = api_key
         self.delay = delay
         self.max_retries = max_retries
         self.language = language
+        self.batch = batch
         self.last_request_time = 0.0
 
     def _rate_limit(self):
@@ -56,6 +62,9 @@ class TMDBClient:
         if params:
             default_params.update(params)
 
+        # 保底层：先检查全局暂停 / 批量配额
+        quota_guard.acquire('tmdb', batch=self.batch)
+
         for attempt in range(self.max_retries + 1):
             self._rate_limit()
             try:
@@ -66,6 +75,8 @@ class TMDBClient:
 
             # 命中 429 或 5xx：退避后重试
             if response.status_code == 429 or response.status_code >= 500:
+                if response.status_code == 429:
+                    quota_guard.report_limited('tmdb', f'HTTP 429 {endpoint}')
                 if attempt >= self.max_retries:
                     logger.error(
                         f"TMDB请求失败（已重试 {attempt} 次）: {endpoint} HTTP {response.status_code}"
@@ -88,6 +99,7 @@ class TMDBClient:
 
             try:
                 response.raise_for_status()
+                quota_guard.report_success('tmdb')
                 return response.json()
             except requests.exceptions.HTTPError as e:
                 logger.error(f"TMDB请求失败: {endpoint} - {e}")

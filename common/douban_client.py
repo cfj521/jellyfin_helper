@@ -19,7 +19,6 @@ import hashlib
 import json
 import logging
 import re
-import threading
 import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
@@ -27,80 +26,21 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from common.rate_limiter import quota_guard
+
 logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# 全局熔断（豆瓣进程内所有 DoubanClient 实例共享）
+# 全局熔断 —— 已迁移到 common/rate_limiter.py (quota_guard)
 # ============================================================================
-# 任意路径（前台 / 后台 prefetch / ratings 回填 / metadata 修复）触发请求都先过
-# 这层；连续 N 次失败 → 进 cooldown，期间所有路径直接返回 None，不发请求。
+# 豆瓣的熔断/限流保护统一由 quota_guard 管理（源名: 'douban'）。
 # 失败计入条件（按可观察到的"被限/被识破"信号）：
 #   - HTTP 403 / 429 / 503（豆瓣反爬常见状态码）
 #   - PoW 挑战页且求解失败
 #   - 网络异常（连超时、连接拒绝等）
 #   - 上层（fetch_subject_summary）识别到反爬/登录拦截 → 显式 report_antibot()
 # 成功清零：HTTP 200 且不是 PoW 挑战页 / 反爬页。
-class _GlobalBreaker:
-    def __init__(self):
-        self._lock = threading.RLock()
-        self._consecutive_failures = 0
-        self._cooldown_until = 0.0
-        self._max_failures = 5
-        self._cooldown_seconds = 3600
-        self._last_blocked_log_at = 0.0
-
-    def configure(self, max_failures: int, cooldown_seconds: int):
-        with self._lock:
-            self._max_failures = max(1, int(max_failures))
-            self._cooldown_seconds = max(60, int(cooldown_seconds))
-
-    def is_open(self) -> Tuple[bool, float]:
-        """返回 (是否熔断中, 剩余秒数)。"""
-        with self._lock:
-            remaining = self._cooldown_until - time.time()
-            return (remaining > 0, max(0.0, remaining))
-
-    def report_success(self):
-        with self._lock:
-            if self._consecutive_failures:
-                self._consecutive_failures = 0
-
-    def report_failure(self, reason: str):
-        with self._lock:
-            self._consecutive_failures += 1
-            n = self._consecutive_failures
-            if n >= self._max_failures:
-                self._cooldown_until = time.time() + self._cooldown_seconds
-                self._consecutive_failures = 0
-                logger.error(
-                    f"豆瓣【全局熔断】触发 ({reason}): 连续 {n} 次失败 → "
-                    f"暂停所有请求 {self._cooldown_seconds}s"
-                )
-            else:
-                logger.warning(
-                    f"豆瓣请求失败 ({reason}): 连续 {n}/{self._max_failures}"
-                )
-
-    def maybe_log_blocked(self, op: str):
-        """熔断期内被拦截的请求日志：节流到 60s 一条，避免刷屏。"""
-        with self._lock:
-            now = time.time()
-            if now - self._last_blocked_log_at < 60:
-                return
-            self._last_blocked_log_at = now
-            remaining = max(0.0, self._cooldown_until - now)
-            logger.warning(f"豆瓣熔断中：跳过 {op} (剩余 {remaining:.0f}s)")
-
-    def force_reset(self):
-        """诊断/手动恢复用：清零状态。"""
-        with self._lock:
-            self._consecutive_failures = 0
-            self._cooldown_until = 0.0
-            self._last_blocked_log_at = 0.0
-
-
-_GLOBAL_BREAKER = _GlobalBreaker()
 
 
 # 大搜索页（www.douban.com/search）—— 初始 HTML 不带结果（SPA），保留仅为兼容引用
@@ -150,26 +90,26 @@ class DoubanRating:
 class DoubanClient:
     """豆瓣评分爬虫，懒拉取场景使用。"""
 
-    # ---- 全局熔断（进程内所有实例共享，见模块顶部 _GlobalBreaker）----
-    @classmethod
-    def configure_global_breaker(cls, max_failures: int, cooldown_seconds: int):
-        """应用启动时调一次，从 settings 读阈值配置全局熔断。"""
-        _GLOBAL_BREAKER.configure(max_failures, cooldown_seconds)
+    # ---- 全局熔断（委托给 common/rate_limiter.quota_guard，源名 'douban'）----
+    # 熔断参数已在 rate_limiter.py 的 SOURCE_CONFIGS 中定义，无需运行时配置
 
     @classmethod
     def breaker_status(cls) -> Tuple[bool, float]:
         """(open, remaining_seconds)。worker 在循环顶端 peek 用。"""
-        return _GLOBAL_BREAKER.is_open()
+        s = quota_guard.status('douban')
+        is_open = s['is_circuit_open'] or s['is_paused']
+        remaining = max(s['circuit_remaining_sec'], s['paused_remaining_sec'])
+        return (is_open, remaining)
 
     @classmethod
     def report_antibot(cls):
         """上层识别到反爬/登录拦截页（HTTP 200 但内容被掉包）时显式上报失败。"""
-        _GLOBAL_BREAKER.report_failure('antibot_page')
+        quota_guard.report_limited('douban', '反爬/登录拦截页')
 
     @classmethod
     def reset_breaker(cls):
         """诊断 / 手动恢复用。"""
-        _GLOBAL_BREAKER.force_reset()
+        quota_guard.reset('douban')
 
     def __init__(
         self,
@@ -177,11 +117,13 @@ class DoubanClient:
         delay: float = 5.0,
         max_retries: int = 1,
         timeout: float = 15.0,
+        batch: bool = False,
     ):
         self.user_agent = user_agent
         self.delay = delay
         self.max_retries = max_retries
         self.timeout = timeout
+        self.batch = batch
         self._last_request_time = 0.0
         self._session = requests.Session()
         self._session.headers.update({
@@ -262,10 +204,12 @@ class DoubanClient:
         return resp.text
 
     def _get(self, url: str, params: Optional[dict] = None) -> Optional[str]:
-        # 全局熔断：任意路径触发请求都先 peek，open 时不发请求直接返回 None
-        open_, _ = _GLOBAL_BREAKER.is_open()
-        if open_:
-            _GLOBAL_BREAKER.maybe_log_blocked(url)
+        # 全局配额保护：如果之前触发过限流/熔断，等暂停结束再继续
+        # blocking=False → 不阻塞，只做 peek；熔断期内直接返回 None（和旧 _GlobalBreaker 行为一致）
+        # batch=self.batch：worker 调用方建实例时传 batch=True，会额外受 batch 配额约束
+        remaining = quota_guard.acquire('douban', batch=self.batch, blocking=False)
+        if remaining > 0:
+            logger.debug(f"豆瓣配额保护中：跳过 {url} (剩余 {remaining:.0f}s)")
             return None
 
         for attempt in range(self.max_retries + 1):
@@ -274,14 +218,14 @@ class DoubanClient:
                 resp = self._session.get(url, params=params, timeout=self.timeout)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"豆瓣请求异常: {url} - {e}")
-                _GLOBAL_BREAKER.report_failure(f'network_exception:{type(e).__name__}')
+                quota_guard.report_limited('douban', f'网络异常: {type(e).__name__}')
                 return None
 
             if resp.status_code == 429 or resp.status_code in (403, 503):
                 # 反爬触发：豆瓣经常返回 403/503
                 if attempt >= self.max_retries:
                     logger.warning(f"豆瓣访问受限 HTTP {resp.status_code} {url}")
-                    _GLOBAL_BREAKER.report_failure(f'http_{resp.status_code}')
+                    quota_guard.report_limited('douban', f'HTTP {resp.status_code}')
                     return None
                 backoff = (attempt + 1) * max(self.delay * 2, 10.0)
                 logger.warning(f"豆瓣 {resp.status_code}，{backoff}s 后重试")
@@ -290,7 +234,7 @@ class DoubanClient:
 
             if resp.status_code != 200:
                 logger.warning(f"豆瓣 HTTP {resp.status_code}: {url}")
-                _GLOBAL_BREAKER.report_failure(f'http_{resp.status_code}')
+                quota_guard.report_limited('douban', f'HTTP {resp.status_code}')
                 return None
 
             # PoW 反爬挑战页：~3KB 的"载入中..."shim，JS 算 SHA-512 PoW 再 submit
@@ -299,15 +243,14 @@ class DoubanClient:
                 logger.info(f"豆瓣返回 PoW 挑战页 {url}，求解中…")
                 solved = self._try_solve_pow(resp.text, resp.url or url)
                 if solved:
-                    # PoW 成功 = 真请求成功，清零熔断计数
-                    _GLOBAL_BREAKER.report_success()
+                    quota_guard.report_success('douban')
                     return solved
-                # PoW 失败 → 计入失败 + 同一 attempt 内直接放弃（重试也大概率拿同一个挑战）
-                _GLOBAL_BREAKER.report_failure('pow_solve_failed')
+                # PoW 失败 → 计入失败 + 同一 attempt 内直接放弃
+                quota_guard.report_limited('douban', 'PoW 求解失败')
                 return None
 
             # HTTP 200 + 非 PoW → 成功，清零失败计数
-            _GLOBAL_BREAKER.report_success()
+            quota_guard.report_success('douban')
             return resp.text
         return None
 
