@@ -1206,6 +1206,129 @@
         </el-card>
       </el-tab-pane>
 
+      <!-- ============ 可用性检测 ============ -->
+      <el-tab-pane name="diagnostics">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><Monitor /></el-icon>
+            <span>可用性检测</span>
+          </div>
+        </template>
+
+        <!-- 本地（DB / 系统命令行工具）：打开 tab 自动跑 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><Aim /></el-icon>
+              <span>本地环境</span>
+              <el-tag size="small" type="info" effect="plain">自动检测，无网络成本</el-tag>
+              <el-button
+                size="small"
+                :icon="Refresh"
+                style="margin-left: auto"
+                :loading="diagSystemLoading"
+                @click="loadDiagnosticsSystem"
+              >重新检测</el-button>
+            </div>
+          </template>
+          <el-table
+            :data="diagSystemItems"
+            stripe
+            size="small"
+            v-loading="diagSystemLoading"
+            empty-text="加载中..."
+          >
+            <el-table-column label="项目" prop="label" min-width="220" />
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag size="small" :type="diagTagType(row.status)" effect="plain">
+                  {{ diagStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="信息" prop="message" min-width="380" show-overflow-tooltip />
+            <el-table-column label="耗时" width="100">
+              <template #default="{ row }">
+                <span class="muted">{{ row.elapsed_ms ? `${row.elapsed_ms} ms` : '-' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="form-hint" style="margin-top: 8px">
+            未找到的工具：缺失会导致对应功能退化（不崩溃）。安装指引见 README「系统级依赖」章节
+          </div>
+        </el-card>
+
+        <!-- 网络服务：手动按钮触发 -->
+        <el-card
+          v-for="group in diagServiceGroups"
+          :key="group.key"
+          shadow="never"
+          class="cfg-card"
+        >
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge" :class="group.badgeClass">{{ group.badge }}</span>
+              <span>{{ group.title }}</span>
+              <el-tag size="small" type="info" effect="plain">{{ group.hint }}</el-tag>
+              <el-button
+                size="small"
+                :icon="VideoPlay"
+                style="margin-left: auto"
+                :disabled="!group.items.some(i => i.enabled)"
+                :loading="diagBatchLoading[group.key]"
+                @click="runDiagnosticsGroup(group)"
+              >测试本组全部</el-button>
+            </div>
+          </template>
+          <el-table :data="group.items" stripe size="small">
+            <el-table-column label="服务" prop="label" min-width="200" />
+            <el-table-column label="启用" width="80">
+              <template #default="{ row }">
+                <el-tag v-if="row.enabled" size="small" type="success" effect="plain">已配置</el-tag>
+                <el-tag v-else size="small" type="info" effect="plain">未启用</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag
+                  v-if="row.result"
+                  size="small"
+                  :type="diagTagType(row.result.status)"
+                  effect="plain"
+                >
+                  {{ diagStatusLabel(row.result.status) }}
+                </el-tag>
+                <span v-else class="muted">未测</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="信息" min-width="320" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.result">{{ row.result.message }}</span>
+                <span v-else class="muted">点右侧「测试」获取结果</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="耗时" width="100">
+              <template #default="{ row }">
+                <span class="muted">{{ row.result?.elapsed_ms ? `${row.result.elapsed_ms} ms` : '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100" align="right">
+              <template #default="{ row }">
+                <el-button
+                  size="small"
+                  link
+                  :disabled="!row.enabled"
+                  :loading="row.loading"
+                  @click="runDiagnosticsItem(row)"
+                >
+                  测试
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-tab-pane>
+
       <!-- ============ 用户管理 ============ -->
       <el-tab-pane name="users" v-if="isAdmin">
         <template #label>
@@ -1305,10 +1428,10 @@ import {
   Refresh, Check, Connection, Link, Lock,
   Files, Plus, Delete, ArrowUp, ArrowDown, Right,
   Document, User, Loading, VideoPlay, VideoPause, Warning,
-  Aim, Download,
+  Aim, Download, Monitor,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, adultApi, logsApi, jellyfinApi, authApi } from '@/api'
+import { configApi, adultApi, logsApi, jellyfinApi, authApi, diagnosticsApi } from '@/api'
 import SourcePool from '@/components/SourcePool.vue'
 
 const activeTab = ref('basic')
@@ -1987,7 +2110,109 @@ watch(activeTab, (v) => {
     refreshLogLevel()
     loadLogs()
   }
+  if (v === 'diagnostics') {
+    if (!diagSystemItems.value.length) loadDiagnosticsSystem()
+    if (!diagServices.value.length) loadDiagnosticsServices()
+  }
 })
+
+// ============================================================================
+// 可用性检测 tab
+// ============================================================================
+const diagSystemItems = ref([])
+const diagSystemLoading = ref(false)
+const diagServices = ref([])             // 后端返回的服务列表（含 enabled）
+const diagServiceResults = reactive({})  // { 'group/name': { status, message, elapsed_ms, ... } }
+const diagItemLoading = reactive({})     // { 'group/name': true/false }
+const diagBatchLoading = reactive({})    // { groupKey: true/false }
+
+const diagStatusLabel = (s) => ({
+  ok: '正常',
+  fail: '失败',
+  not_configured: '未配置',
+}[s] || s || '?')
+
+const diagTagType = (s) => ({
+  ok: 'success',
+  fail: 'danger',
+  not_configured: 'info',
+}[s] || 'info')
+
+const loadDiagnosticsSystem = async () => {
+  diagSystemLoading.value = true
+  try {
+    const r = await diagnosticsApi.system()
+    diagSystemItems.value = r.data.items || []
+  } catch (e) {
+    ElMessage.error('加载本地环境检测失败: ' + (e?.message || e))
+  } finally {
+    diagSystemLoading.value = false
+  }
+}
+
+const loadDiagnosticsServices = async () => {
+  try {
+    const r = await diagnosticsApi.services()
+    diagServices.value = r.data.items || []
+  } catch (e) {
+    ElMessage.error('加载服务列表失败: ' + (e?.message || e))
+  }
+}
+
+// 按组组织 + 给每行注入 result/loading 响应式字段
+const diagServiceGroups = computed(() => {
+  const meta = {
+    core:     { title: '核心服务',                 badge: 'CORE', badgeClass: 'qbit',    hint: 'Jellyfin 主链路' },
+    download: { title: '下载链路',                 badge: 'DL',   badgeClass: 'jackett', hint: 'qBittorrent / Jackett' },
+    metadata: { title: '元数据 / 评分 / 推荐源',   badge: 'META', badgeClass: 'tmdb',    hint: '按已启用项测试' },
+    subtitle: { title: '字幕源',                   badge: 'SUB',  badgeClass: 'assrt',   hint: '按已启用项测试' },
+    adult:    { title: '成人刮削源',               badge: '18+',  badgeClass: 'mdblist', hint: '逐站可达性' },
+  }
+  const groups = {}
+  for (const it of diagServices.value) {
+    const key = `${it.group}/${it.name}`
+    const row = {
+      ...it,
+      result: diagServiceResults[key] || null,
+      loading: !!diagItemLoading[key],
+    }
+    if (!groups[it.group]) {
+      groups[it.group] = { key: it.group, items: [], ...meta[it.group] }
+    }
+    groups[it.group].items.push(row)
+  }
+  return Object.values(groups)
+})
+
+const runDiagnosticsItem = async (row) => {
+  const key = `${row.group}/${row.name}`
+  diagItemLoading[key] = true
+  try {
+    const r = await diagnosticsApi.check(row.group, row.name)
+    diagServiceResults[key] = r.data
+  } catch (e) {
+    diagServiceResults[key] = {
+      status: 'fail',
+      message: e?.response?.data?.detail || e?.message || String(e),
+      elapsed_ms: 0,
+    }
+  } finally {
+    diagItemLoading[key] = false
+  }
+}
+
+const runDiagnosticsGroup = async (group) => {
+  diagBatchLoading[group.key] = true
+  try {
+    // 串行跑（避免同时打太多外部请求）
+    for (const row of group.items) {
+      if (!row.enabled) continue
+      await runDiagnosticsItem(row)
+    }
+  } finally {
+    diagBatchLoading[group.key] = false
+  }
+}
 
 // 字节人类化格式（与日志元信息显示用）
 const formatBytes = (b) => {

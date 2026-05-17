@@ -479,6 +479,16 @@ export const logsApi = {
   files: () => api.get('/api/logs/files'),
 }
 
+// 可用性检测 API
+export const diagnosticsApi = {
+  // 本地：DB + 系统命令行工具（无网络）
+  system: () => api.get('/api/diagnostics/system'),
+  // 列出所有可手动测试的网络服务（含 enabled 状态）
+  services: () => api.get('/api/diagnostics/services'),
+  // 单项手动测试
+  check: (group, name) => api.post(`/api/diagnostics/check/${group}/${name}`),
+}
+
 // 配置相关 API
 export const configApi = {
   get: () => api.get('/api/config'),
