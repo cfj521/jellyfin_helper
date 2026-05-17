@@ -1,11 +1,31 @@
-# Jellyfin Tools 配置文件示例
+# Jellyfin Helper 配置文件示例
 # 复制为 config.yaml 后填入你自己的值。
-# 切勿把填好的 config.yaml 提交到公开仓库（已在 .gitignore 中排除）。
+# config.yaml 已在 .gitignore 中排除，切勿提交到公开仓库。
 
+# ============================================================================
+# 认证（JWT + 用户列表）
+# ============================================================================
+# - secret_key：JWT 签名密钥；生产环境改成随机字符串
+#   (随机生成方法：python -c "import secrets; print(secrets.token_urlsafe(32))")
+# - token_expire_hours：登录态有效期；720 = 30 天
+# - users：硬编码账号列表；启动时同步进数据库 users 表，role 取 admin / guest
+auth:
+  secret_key: "change-me-to-a-random-string"
+  token_expire_hours: 720
+  users:
+    - username: admin
+      password: "CHANGE_ME"
+      role: admin
+    # - username: guest
+    #   password: "guest"
+    #   role: guest
+
+# ============================================================================
 # 服务端口（前后端都从这里读）
 # 也可被环境变量 BACKEND_PORT / FRONTEND_PORT 临时覆盖
+# ============================================================================
 server:
-  backend_port: 8000      # 后端 (FastAPI / uvicorn) 监听端口
+  backend_port: 8099      # 后端 (FastAPI / uvicorn) 监听端口
   frontend_port: 5173     # 前端 (vite dev server) 端口
 
 # 数据库配置 (PostgreSQL)
@@ -19,6 +39,9 @@ database:
 # Jellyfin 配置
 jellyfin:
   host: "http://127.0.0.1:8096"
+  # 公网访问地址（可选）：UI 在生成 Jellyfin 链接时优先用 external_url
+  # 仅服务端转发 / 浏览器跳转用，内部 API 调用始终走 host
+  external_url: ""
   api_key: "your_jellyfin_api_key"
   # 可选：jellyfin SQLite 数据库本地可达路径（path → item 反查直读，绕开 REST API）
   # 同机部署典型路径：/var/lib/jellyfin/data/jellyfin.db
@@ -132,13 +155,13 @@ jackett:
   default_keywords: ""
 
 # qBittorrent 配置（下载管理）
+# 注意：下载根路径在 dispatch.download_path 配，配额功能从那里读真实容量
 qbittorrent:
   host: "http://127.0.0.1:8080"
   username: "admin"
   password: "CHANGE_ME"
-  download_path: "/downloads"
 
-  # 配额管理：limit 动态读 download_path 真实容量（shutil.disk_usage）
+  # 配额管理：limit 动态读 dispatch.download_path 真实容量（shutil.disk_usage）
   # 后端 stat 不到下载盘 → 整个配额功能禁用（不监视、不强清，UI 灰态）
   quota:
     enabled: true
@@ -157,7 +180,13 @@ qbittorrent:
 # 入库流水线：完成后自动转移到 Jellyfin 库 + 字幕/音轨后处理
 dispatch:
   enabled: true
+  # 下载根路径（同时也是 qBittorrent 配额功能读取容量的目录）
+  download_path: "/downloads"
   poll_interval_seconds: 30
+  # 孤儿种子认领周期（兜底处理 qB Web 直接加 / Jackett RSS 推过来的种子）
+  adopt_interval_seconds: 300
+  # trash 目录过期清理周期
+  trash_interval_seconds: 86400
   worker_concurrency: 1         # 单 worker 串行
   trash_dir: "/downloads/.trash"
   default_move_mode: copy
