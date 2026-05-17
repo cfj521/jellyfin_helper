@@ -110,7 +110,7 @@ const details = computed(() => r.value.details || [])
 const filterStatus = ref('all')
 const search = ref('')
 const page = ref(1)
-const pageSize = 50
+const pageSize = 100
 
 const STATUS_META = {
   success:   { label: '成功',     type: 'success', icon: '✓' },

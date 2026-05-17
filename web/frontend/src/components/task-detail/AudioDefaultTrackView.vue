@@ -5,7 +5,8 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane v-if="apply.executed" :label="`应用结果 (${appliedDetails.length})`" name="applied">
         <el-empty v-if="!appliedDetails.length" description="无" />
-        <el-table v-else :data="appliedDetails" stripe size="small">
+        <template v-else>
+        <el-table :data="pagedApplied" stripe size="small">
           <el-table-column label="文件" min-width="240">
             <template #default="{ row }">
               <span class="path">{{ row.name || row.path }}</span>
@@ -28,6 +29,15 @@
           </el-table-column>
           <el-table-column prop="error" label="错误信息" />
         </el-table>
+        <el-pagination
+          v-if="appliedDetails.length > pageSize"
+          v-model:current-page="appliedPage"
+          :page-size="pageSize"
+          :total="appliedDetails.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
+        </template>
       </el-tab-pane>
 
       <el-tab-pane :label="`候选列表 (${candidates.length})`" name="candidates">
@@ -36,7 +46,8 @@
           预览模式：以下是按当前规则建议修改默认音轨的文件，但未实际写入
         </div>
         <el-empty v-if="!candidates.length" description="所有文件默认音轨都已正确" />
-        <el-table v-else :data="candidates" stripe size="small">
+        <template v-else>
+        <el-table :data="pagedCandidates" stripe size="small">
           <el-table-column label="文件" min-width="220">
             <template #default="{ row }">
               <span class="path">{{ row.name }}</span>
@@ -72,16 +83,35 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="candidates.length > pageSize"
+          v-model:current-page="candidatesPage"
+          :page-size="pageSize"
+          :total="candidates.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
+        </template>
       </el-tab-pane>
 
       <el-tab-pane :label="`跳过文件 (${skipped.length})`" name="skipped">
         <el-empty v-if="!skipped.length" description="无" />
-        <el-table v-else :data="skipped" stripe size="small">
+        <template v-else>
+        <el-table :data="pagedSkipped" stripe size="small">
           <el-table-column label="文件" min-width="280">
             <template #default="{ row }">{{ row.name || row.path }}</template>
           </el-table-column>
           <el-table-column prop="reason" label="跳过原因" />
         </el-table>
+        <el-pagination
+          v-if="skipped.length > pageSize"
+          v-model:current-page="skippedPage"
+          :page-size="pageSize"
+          :total="skipped.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
+        </template>
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -111,6 +141,24 @@ const cards = computed(() => [
         tip: '预览模式（未写入）' },
 ])
 
+const pageSize = 100
+const appliedPage = ref(1)
+const candidatesPage = ref(1)
+const skippedPage = ref(1)
+
+const pagedApplied = computed(() => {
+  const s = (appliedPage.value - 1) * pageSize
+  return appliedDetails.value.slice(s, s + pageSize)
+})
+const pagedCandidates = computed(() => {
+  const s = (candidatesPage.value - 1) * pageSize
+  return candidates.value.slice(s, s + pageSize)
+})
+const pagedSkipped = computed(() => {
+  const s = (skippedPage.value - 1) * pageSize
+  return skipped.value.slice(s, s + pageSize)
+})
+
 const LANG_LABEL = {
   chs: '简中', cht: '繁中', yue: '粤语', eng: '英语', jpn: '日语', kor: '韩语',
 }
@@ -132,4 +180,9 @@ const activeTab = ref(apply.value.executed ? 'applied' : 'candidates')
   margin-bottom: 12px;
 }
 .path { word-break: break-all; }
+.pager {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
 </style>

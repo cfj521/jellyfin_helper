@@ -34,9 +34,10 @@
         <span>正在扫描...</span>
       </div>
 
-      <el-collapse v-else v-model="expandedDirs" class="dir-list">
+      <template v-else>
+      <el-collapse v-model="expandedDirs" class="dir-list">
         <el-collapse-item
-          v-for="d in visibleDirs"
+          v-for="d in pagedDirs"
           :key="d.path"
           :name="d.path"
         >
@@ -148,6 +149,15 @@
           </el-table>
         </el-collapse-item>
       </el-collapse>
+      <el-pagination
+        v-if="visibleDirs.length > dirPageSize"
+        v-model:current-page="dirPage"
+        :page-size="dirPageSize"
+        :total="visibleDirs.length"
+        layout="total, prev, pager, next"
+        class="pager"
+      />
+      </template>
     </el-card>
 
     <!-- 标注对话框（单个 / 批量共用） -->
@@ -235,9 +245,16 @@ const allVideosCount = computed(() =>
   directories.value.reduce((sum, d) => sum + (d.videos?.length || 0), 0)
 )
 
+const dirPageSize = 100
+const dirPage = ref(1)
+
 const visibleDirs = computed(() => {
   if (filterMode.value === 'all') return directories.value
   return missingDirs.value
+})
+const pagedDirs = computed(() => {
+  const s = (dirPage.value - 1) * dirPageSize
+  return visibleDirs.value.slice(s, s + dirPageSize)
 })
 const visibleVideosOf = (d) => {
   if (filterMode.value === 'all') return d.videos || []
@@ -271,7 +288,7 @@ watch(visibleDirs, (newDirs) => {
   }
 }, { immediate: true })
 
-watch(filterMode, () => { expandedDirs.value = [] })
+watch(filterMode, () => { expandedDirs.value = []; dirPage.value = 1 })
 
 const mediaTypeLabel = (t) => ({
   movie: '电影', tv: '剧集', series: '剧集', mixed: '混合',
@@ -401,6 +418,12 @@ const computeBaseMissing = (v) => {
   color: var(--jt-text-secondary);
   font-size: 13px;
   justify-content: center;
+}
+
+.pager {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .dir-list {

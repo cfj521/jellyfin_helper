@@ -114,7 +114,7 @@ const files = computed(() => r.value.scanned_files || [])
 const filterStatus = ref('all')
 const search = ref('')
 const page = ref(1)
-const pageSize = 50
+const pageSize = 100
 
 const STATUS_META = {
   new:              { label: '新增',     color: '#10b981', icon: '✨' },

@@ -33,9 +33,10 @@
         <span>正在扫描，发现的待改名字幕会逐步出现...</span>
       </div>
 
-      <el-collapse v-else v-model="expandedDirs" class="dir-list">
+      <template v-else>
+      <el-collapse v-model="expandedDirs" class="dir-list">
         <el-collapse-item
-          v-for="g in groupedDirs"
+          v-for="g in pagedGroupedDirs"
           :key="g.directory"
           :name="g.directory"
         >
@@ -80,6 +81,15 @@
           </el-table>
         </el-collapse-item>
       </el-collapse>
+      <el-pagination
+        v-if="groupedDirs.length > dirPageSize"
+        v-model:current-page="dirPage"
+        :page-size="dirPageSize"
+        :total="groupedDirs.length"
+        layout="total, prev, pager, next"
+        class="pager"
+      />
+      </template>
     </el-card>
   </div>
 </template>
@@ -116,6 +126,9 @@ const cards = computed(() => {
   return cardList
 })
 
+const dirPageSize = 100
+const dirPage = ref(1)
+
 const hasFailures = computed(() => details.value.some(d => d.success === false))
 
 // 按目录分组
@@ -129,6 +142,11 @@ const groupedDirs = computed(() => {
     groups.get(key).items.push(d)
   }
   return Array.from(groups.values())
+})
+
+const pagedGroupedDirs = computed(() => {
+  const s = (dirPage.value - 1) * dirPageSize
+  return groupedDirs.value.slice(s, s + dirPageSize)
 })
 
 // 默认展开前 3 个
@@ -172,6 +190,12 @@ const langLabel = (code) => LANG_LABEL[code?.toLowerCase()] || code || ''
   color: var(--jt-text-secondary);
   font-size: 13px;
   justify-content: center;
+}
+
+.pager {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .dir-list {
