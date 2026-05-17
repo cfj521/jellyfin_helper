@@ -150,12 +150,27 @@ def _check_qbittorrent() -> Tuple[bool, str]:
 
 
 def _check_jackett() -> Tuple[bool, str]:
+    """
+    不复用 JackettClient.test_connection()：它内部 r.json() 把 XML 响应崩掉。
+    Jackett 真正的 API 是 Torznab/RSS（application/rss+xml），ping 用 ?t=caps：
+      响应是 <?xml ?> <caps>...</caps>，包含 <caps> 字符串即视为 ok。
+    """
     if not settings.jackett_host or not settings.jackett_api_key:
         return False, '未配置 host / api_key'
-    from common.jackett_client import JackettClient
-    client = JackettClient(settings.jackett_host, settings.jackett_api_key)
     try:
-        return (True, 'caps 拉取 ok') if client.test_connection() else (False, '请求失败')
+        url = settings.jackett_host.rstrip('/') + '/api/v2.0/indexers/all/results/torznab/api'
+        r = requests.get(
+            url,
+            params={'apikey': settings.jackett_api_key, 't': 'caps'},
+            timeout=15,
+        )
+        if r.status_code == 200 and '<caps' in r.text:
+            # 顺手数一下 indexer 数（caps 里每个 indexer 一个 <indexer> tag）
+            n = r.text.count('<indexer ')
+            return True, f'Torznab caps ok（聚合 {n} 个 indexer）' if n else 'Torznab caps ok'
+        if r.status_code == 401:
+            return False, 'HTTP 401（api_key 无效）'
+        return False, f'HTTP {r.status_code}（响应不含 <caps>）'
     except Exception as e:
         return False, f'{type(e).__name__}: {e}'
 
@@ -298,11 +313,17 @@ def _check_assrt() -> Tuple[bool, str]:
     from common.rate_limiter import ASSRT_DELAY
     client = AssrtClient(token=settings.assrt_api_token, request_delay=ASSRT_DELAY)
     try:
-        q = client.quota() or {}
-        avail = (q.get('result') or {}).get('avail_count')
-        if avail is not None:
+        q = client.quota()
+        # assrt API 的 user 字段在不同情况下可能是 dict / str / 空 —— 加防御
+        if not isinstance(q, dict):
+            return True, 'quota 端点 ok（token 有效）'
+        # 字段名按 assrt 文档可能 result.avail_count（v1 部分版本）或顶层 avail_count
+        avail = q.get('avail_count')
+        if avail is None and isinstance(q.get('result'), dict):
+            avail = q['result'].get('avail_count')
+        if isinstance(avail, int):
             return True, f'剩余配额 {avail} 次/天'
-        return True, 'quota 端点 ok'
+        return True, 'quota 端点 ok（token 有效）'
     except Exception as e:
         return False, f'{type(e).__name__}: {e}'
 
