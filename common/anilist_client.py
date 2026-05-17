@@ -144,7 +144,7 @@ class AniListClient:
         self,
         base_url: str = 'https://graphql.anilist.co',
         request_delay: float = 1.0,
-        timeout: int = 15,
+        timeout: int = 30,
         batch: bool = False,
     ):
         self.base_url = base_url.rstrip('/')
