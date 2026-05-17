@@ -588,9 +588,6 @@
                 — 公开 endpoint 无需 OAuth，只用 Client ID
               </div>
             </el-form-item>
-            <el-form-item label="超时(秒)">
-              <el-input-number v-model="form.trakt.timeout_seconds" :min="5" :max="120" :step="5" />
-            </el-form-item>
             <el-form-item label="缓存 TTL(分钟)">
               <el-input-number v-model="form.trakt.cache_minutes" :min="1" :max="1440" :step="10" />
               <div class="form-hint">实时观看活动信号建议短一点（默认 60 min）</div>
@@ -615,9 +612,6 @@
               <div class="form-hint">
                 公开 GraphQL，<b>不需要账号 / API key</b>。番剧元数据 / 排行优势：原生日文标题、季度划分、社区评分
               </div>
-            </el-form-item>
-            <el-form-item label="超时(秒)">
-              <el-input-number v-model="form.anilist.timeout_seconds" :min="5" :max="120" :step="5" />
             </el-form-item>
             <el-form-item label="缓存 TTL(分钟)">
               <el-input-number v-model="form.anilist.cache_minutes" :min="1" :max="10080" :step="30" />
@@ -1531,13 +1525,11 @@ const blank = () => ({
     enabled: false,
     client_id: '',
     base_url: 'https://api.trakt.tv',
-    timeout_seconds: 15,
     cache_minutes: 60,
   },
   anilist: {
     enabled: true,
     base_url: 'https://graphql.anilist.co',
-    timeout_seconds: 15,
     cache_minutes: 240,
   },
   douban_lists: {

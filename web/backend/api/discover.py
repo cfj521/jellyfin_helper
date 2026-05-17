@@ -921,7 +921,6 @@ def get_trakt(
         client_id=cfg.client_id,
         base_url=cfg.base_url,
         request_delay=TRAKT_DELAY,
-        timeout=cfg.timeout_seconds,
     )
 
     try:
@@ -1010,7 +1009,6 @@ def get_anilist(
     client = AniListClient(
         base_url=cfg.base_url,
         request_delay=ANILIST_DELAY,
-        timeout=cfg.timeout_seconds,
     )
 
     try:
@@ -1414,7 +1412,6 @@ def get_anilist_detail(anilist_id: int, refresh: bool = False):
     client = AniListClient(
         base_url=cfg.base_url,
         request_delay=ANILIST_DELAY,
-        timeout=cfg.timeout_seconds,
     )
     try:
         detail = client.detail(int(anilist_id))

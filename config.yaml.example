@@ -225,14 +225,12 @@ trakt:
   enabled: false
   client_id: ""                 # 64 位十六进制
   base_url: "https://api.trakt.tv"
-  timeout_seconds: 15
   cache_minutes: 60             # Trakt 是实时观看活动，缓存 1 小时即可
 
 # AniList：番剧专用；公开 GraphQL，**完全不需要账号和 key**
 anilist:
   enabled: true
   base_url: "https://graphql.anilist.co"
-  timeout_seconds: 15
   cache_minutes: 240            # 番剧排行变化慢，4 小时
 
 # 豆瓣片单：白名单形式
