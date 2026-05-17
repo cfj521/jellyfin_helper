@@ -200,7 +200,7 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 
 打开 **前端 → 配置 → 可用性检测**（左侧导航第一项，进页面就在）。一屏看清楚：
 
-- **本地环境**（进入即跑，零网络成本）：PostgreSQL · FFmpeg · FFprobe · MKVPropEdit · unrar / bsdtar
+- **本地环境**（进入即跑，零网络成本）：FFmpeg · FFprobe · MKVPropEdit · unrar / bsdtar
 - **网络服务**（手动按钮）：Jellyfin · qBittorrent · Jackett · TMDB · 豆瓣 · MDBList · Trakt · AniList · Wikidata · LLM · 字幕源 · 成人刮削站
 
 每项显示 `状态 / 信息 / 耗时`。未启用的源灰显，按钮禁用。**遇到问题先来这里看一眼，能省一半排查时间**。
@@ -291,7 +291,7 @@ conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 
 ### 后端启动失败
 
-1. 检查 PostgreSQL 是否可达，库和用户是否已创建（可用性检测「PostgreSQL」会直接告诉你能不能 SELECT）
+1. 检查 PostgreSQL 是否可达，库和用户是否已创建（DB 连不上后端进程根本起不来，**到不了配置页**——直接看启动日志）
 2. 确认 `config.yaml` 的 `database` 段填写正确
 3. 确认 `requirements.txt` 全部装好
 4. 确认系统级依赖已安装（可用性检测「本地环境」会逐项显示）

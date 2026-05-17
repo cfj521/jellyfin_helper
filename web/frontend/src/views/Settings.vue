@@ -2103,6 +2103,11 @@ watch(activeTab, (v) => {
   if (v === 'diagnostics') {
     if (!diagSystemItems.value.length) loadDiagnosticsSystem()
     if (!diagServices.value.length) loadDiagnosticsServices()
+    // 核心服务自动跑（jellyfin / qb / jackett）。已有结果不重跑，点测试按钮可手动刷新
+    const coreKeys = ['core/jellyfin', 'download/qbittorrent', 'download/jackett']
+    if (coreKeys.every(k => !diagServiceResults[k])) {
+      runDiagnosticsCore()
+    }
   }
 })
 
@@ -2149,11 +2154,20 @@ const loadDiagnosticsServices = async () => {
   }
 }
 
+// 后端 group 保留语义分类（core / download / ...），UI 合并展示：
+// core + download 共属"核心服务 & 下载链路"一段
+const _GROUP_DISPLAY_MAP = {
+  core:     'core',
+  download: 'core',
+  metadata: 'metadata',
+  subtitle: 'subtitle',
+  adult:    'adult',
+}
+
 // 按组组织 + 给每行注入 result/loading 响应式字段
 const diagServiceGroups = computed(() => {
   const meta = {
-    core:     { title: '核心服务',                 badge: 'CORE', badgeClass: 'qbit',    hint: 'Jellyfin 主链路' },
-    download: { title: '下载链路',                 badge: 'DL',   badgeClass: 'jackett', hint: 'qBittorrent / Jackett' },
+    core:     { title: '核心服务 & 下载链路',      badge: 'CORE', badgeClass: 'qbit',    hint: 'Jellyfin · qBittorrent · Jackett' },
     metadata: { title: '元数据 / 评分 / 推荐源',   badge: 'META', badgeClass: 'tmdb',    hint: '按已启用项测试' },
     subtitle: { title: '字幕源',                   badge: 'SUB',  badgeClass: 'assrt',   hint: '按已启用项测试' },
     adult:    { title: '成人刮削源',               badge: '18+',  badgeClass: 'mdblist', hint: '逐站可达性' },
@@ -2166,10 +2180,11 @@ const diagServiceGroups = computed(() => {
       result: diagServiceResults[key] || null,
       loading: !!diagItemLoading[key],
     }
-    if (!groups[it.group]) {
-      groups[it.group] = { key: it.group, items: [], ...meta[it.group] }
+    const displayKey = _GROUP_DISPLAY_MAP[it.group] || it.group
+    if (!groups[displayKey]) {
+      groups[displayKey] = { key: displayKey, items: [], ...meta[displayKey] }
     }
-    groups[it.group].items.push(row)
+    groups[displayKey].items.push(row)
   }
   return Object.values(groups)
 })
@@ -2202,6 +2217,33 @@ const runDiagnosticsGroup = async (group) => {
   } finally {
     diagBatchLoading[group.key] = false
   }
+}
+
+// 核心服务自动检测：jellyfin / qBittorrent / Jackett 都是用户自己的局域网服务，
+// 不像第三方源会限流 / 触发反爬 —— 进入诊断页就并行跑一次，结果立即可见
+// 第三方源（TMDB / 豆瓣 / 字幕源 / 成人源）继续手动按钮触发
+const _AUTO_CHECK_TARGETS = [
+  { group: 'core',     name: 'jellyfin' },
+  { group: 'download', name: 'qbittorrent' },
+  { group: 'download', name: 'jackett' },
+]
+
+const runDiagnosticsCore = async () => {
+  // 等服务列表先加载完，否则 enabled 标记拿不到（不强依赖，但有了 enabled 检查更友好）
+  if (!diagServices.value.length) {
+    await loadDiagnosticsServices()
+  }
+  // 并行跑（局域网请求，毫秒级；任意一个挂死不会拖累其他两个）
+  await Promise.all(
+    _AUTO_CHECK_TARGETS.map(({ group, name }) => {
+      const enabledMap = Object.fromEntries(
+        diagServices.value.map(it => [`${it.group}/${it.name}`, it.enabled])
+      )
+      // 未配置的跳过（避免无意义请求）
+      if (!enabledMap[`${group}/${name}`]) return Promise.resolve()
+      return runDiagnosticsItem({ group, name })
+    })
+  )
 }
 
 // 字节人类化格式（与日志元信息显示用）
@@ -2316,7 +2358,8 @@ onMounted(() => {
   // 默认 tab 是 diagnostics → 首次进入主动加载（watch 不会触发，因为 activeTab 没变化）
   if (activeTab.value === 'diagnostics') {
     loadDiagnosticsSystem()
-    loadDiagnosticsServices()
+    // 加载 services 列表完后自动跑核心三项（jellyfin / qb / jackett）
+    loadDiagnosticsServices().then(() => runDiagnosticsCore())
   }
   // 运行中每 3 秒轮询一次；闲时 10 秒一次（保留检测重启 / 别处启动）
   actressPollTimer = setInterval(() => {
