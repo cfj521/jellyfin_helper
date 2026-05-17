@@ -1,5 +1,0 @@
-考虑涉及到的应用都整体打包为docker
-
-$ENV:ANTHROPIC_MODEL="qwen/qwen3.6-27b"
-$ENV:ANTHROPIC_API_KEY="sk-lm-YwRn0DEy:5S2aYjbOLLKwrT7qjg7L"
-$ENV:ANTHROPIC_BASE_URL="http://localhost:1234"
