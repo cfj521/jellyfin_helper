@@ -1378,7 +1378,7 @@ def run_all_orchestrator(
                 f"[{idx+1}/{total_steps}] {step['label']}",
             )
 
-            child = create_task(db, step['name'], f"[run-all #{parent_task_id}] {step['label']}")
+            child = create_task(db, step['name'], f"一键修复#{parent_task_id} 子任务：{step['label']}")
             record = {
                 'step': step['name'],
                 'label': step['label'],
