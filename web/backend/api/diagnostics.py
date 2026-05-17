@@ -30,10 +30,8 @@ from typing import Callable, Dict, List, Tuple
 
 import requests
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import text
 
 from web.backend.config import settings
-from web.backend.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -83,25 +81,15 @@ def _check_binary(name: str, label: str, args=('--version',)) -> Dict:
                             f'{type(e).__name__}: {e}')
 
 
-def _check_database() -> Dict:
-    t0 = time.time()
-    try:
-        with SessionLocal() as db:
-            db.execute(text('SELECT 1'))
-        elapsed = int((time.time() - t0) * 1000)
-        return _make_result('database', 'PostgreSQL', 'system', 'ok',
-                            'SELECT 1 ok', elapsed)
-    except Exception as e:
-        return _make_result('database', 'PostgreSQL', 'system', 'fail',
-                            f'{type(e).__name__}: {e}')
-
-
 @router.get("/system")
 def diagnostics_system():
-    """本地零成本检查：DB + 系统命令行工具。打开配置页就自动跑。"""
+    """本地零成本检查：系统命令行工具。打开配置页就自动跑。
+
+    注：不检测 PostgreSQL —— DB 连不上整个后端根本起不来，这个 endpoint
+    自身就响应不了，所以"DB 可用"是这里能跑就成立的隐含前提。
+    """
     return {
         'items': [
-            _check_database(),
             _check_binary('ffmpeg', 'FFmpeg'),
             _check_binary('ffprobe', 'FFprobe'),
             _check_binary('mkvpropedit', 'MKVPropEdit (mkvtoolnix)'),
