@@ -116,7 +116,7 @@ from web.backend.api import (
     subtitle, metadata, media, stats, tasks, config_api,
     discover, resourcesearch, downloadpipeline,
     medialibraries, audio, maintenance, ratings, logs as logs_api, dispatch,
-    img_proxy, auth,
+    img_proxy, auth, diagnostics,
 )
 
 
@@ -301,6 +301,7 @@ app.include_router(ratings.router, prefix="/api/ratings", tags=["评分聚合"])
 app.include_router(logs_api.router, prefix="/api", tags=["日志查看"])
 app.include_router(dispatch.router, prefix="/api/dispatch", tags=["下载入库流水线"])
 app.include_router(img_proxy.router, prefix="/api", tags=["图片反代"])
+app.include_router(diagnostics.router, prefix="/api/diagnostics", tags=["可用性检测"])
 
 # 成人内容仅在配置开启时挂载
 if settings.adult_enabled:
