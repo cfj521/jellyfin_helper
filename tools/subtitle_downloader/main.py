@@ -319,11 +319,7 @@ class _AssrtProvider(_Provider):
             target.write_bytes(content)
             return {"status": "success", "subtitle": target.name, "language": guessed, "source": self.name}
 
-        # ---- 5b. 压缩包：解压挑最佳（按 preferred_langs + preferred_formats）----
-        files = _assrt.extract_subtitles_from_archive(content, ext)
-        if not files:
-            return {"status": "failed", "error": f"未识别压缩格式（{ext or '?'}），请改用手动下载"}
-
+        # ---- 5b. 压缩包：picker 模式 —— 先列名挑最佳，再单文件解压（省整包解压成本）----
         # 包元数据 fallback：assrt 包里很多字幕文件是裸 release 名（无 lang token），
         # 但 detail.lang.langlist 已声明整包语言 —— 不传 fallback 会让全包 score 并列(1,9999)
         lang_block = detail.get('lang') or {}
@@ -332,17 +328,24 @@ class _AssrtProvider(_Provider):
         )
         pkg_fallback = '.'.join(pkg_lang_codes) if pkg_lang_codes else None
 
-        # 自动下载链只下"一份"—— 严格按用户偏好挑最优 (lang × format)，不再多格式重复
-        # 同时按视频文件名集号过滤（包内是季全集时挑 E?? 命中的那个）
-        picked = _assrt.pick_best_subtitle(
-            files, languages, self.preferred_formats,
-            fallback_lang=pkg_fallback,
-            video_filename=video_path.name,
-        )
-        if not picked:
+        # picker 闭包：拿到压缩包内字幕文件名列表 → 按 preferred_langs/formats + 集数 挑 best name
+        def _picker(names: list) -> Optional[str]:
+            return _assrt.pick_best_subtitle_name(
+                names, languages, self.preferred_formats,
+                fallback_lang=pkg_fallback,
+                video_filename=video_path.name,
+            )
+
+        files = _assrt.extract_subtitles_from_archive(content, ext, picker=_picker)
+        if not files:
             return {"status": "not_found"}
 
-        best_name, best_data, best_lang = picked
+        best_name, best_data = files[0]
+        best_lang = (
+            _assrt.guess_lang_from_filename(best_name)
+            or pkg_fallback
+            or (languages[0] if languages else 'chs')
+        )
         sub_ext = Path(best_name).suffix.lower() or '.srt'
         target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(best_lang)}{sub_ext}"
         if target.exists():
