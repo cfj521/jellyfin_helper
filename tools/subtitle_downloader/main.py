@@ -530,7 +530,33 @@ class SubtitleDownloader:
 
         last_failure: Optional[Dict] = None
 
+        # 懒导入避免 common ↔ tools 循环
+        from common.rate_limiter import quota_guard
+
+        # 队列按 sub.sources 顺序逐一尝试；任一源处于 pause 即跳过（不阻塞等待）
+        # —— 多源 fallback 的核心语义就是这个：限流的源让位给可用源
         for provider in self.providers:
+            # provider.name 已跟 quota_guard 的 source key 对齐
+            qs = quota_guard.status(provider.name)
+            if qs.get('is_paused'):
+                remaining = qs.get('paused_remaining_sec') or 0
+                until_ts = qs.get('paused_until_ts')
+                until_str = ''
+                if until_ts:
+                    import datetime as _dt
+                    until_str = _dt.datetime.fromtimestamp(until_ts).strftime('%H:%M')
+                logger.info(
+                    f"[{provider.name}] 暂停中（剩 {remaining:.0f}s"
+                    f"{f'，恢复于 {until_str}' if until_str else ''}），"
+                    f"跳过 → 试下一个源"
+                )
+                last_failure = {
+                    "status": "skipped",
+                    "error": f"{provider.name} 暂停中（恢复于 {until_str or '稍后'}）",
+                    "source": provider.name,
+                }
+                continue
+
             logger.info(f"[{provider.name}] 搜索字幕: {video_path.name}")
             try:
                 result = provider.try_download(video_path, languages, dry_run)
