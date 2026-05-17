@@ -160,26 +160,31 @@ def _check_qbittorrent() -> Tuple[bool, str]:
 
 def _check_jackett() -> Tuple[bool, str]:
     """
-    不复用 JackettClient.test_connection()：它内部 r.json() 把 XML 响应崩掉。
-    Jackett 真正的 API 是 Torznab/RSS（application/rss+xml），ping 用 ?t=caps：
-      响应是 <?xml ?> <caps>...</caps>，包含 <caps> 字符串即视为 ok。
+    Jackett 不开放无认证的版本端点，改用 ?t=indexers（Jackett 扩展，返回所有
+    indexer 列表 XML，每个有 configured="true|false"）数已启用的索引器数量。
+    端点失败则退到 ?t=caps（Torznab 标准）只验 apikey 有效，显示 "running"。
     """
     if not settings.jackett_host or not settings.jackett_api_key:
         return False, '未配置 host / api_key'
+    base = settings.jackett_host.rstrip('/') + '/api/v2.0/indexers/all/results/torznab/api'
     try:
-        url = settings.jackett_host.rstrip('/') + '/api/v2.0/indexers/all/results/torznab/api'
         r = requests.get(
-            url,
-            params={'apikey': settings.jackett_api_key, 't': 'caps'},
+            base, params={'apikey': settings.jackett_api_key, 't': 'indexers'},
+            timeout=15,
+        )
+        if r.status_code == 200 and '<indexers' in r.text:
+            n = r.text.count('configured="true"')
+            return True, f'{n} indexers'
+        if r.status_code == 401:
+            return False, 'HTTP 401（api_key 无效）'
+        # 不支持 t=indexers 时降级到 caps 只验可达性
+        r = requests.get(
+            base, params={'apikey': settings.jackett_api_key, 't': 'caps'},
             timeout=15,
         )
         if r.status_code == 200 and '<caps' in r.text:
-            # Jackett 不开放无认证版本端点；显示 indexer 数量作为有意义的状态
-            n = r.text.count('<indexer ')
-            return True, f'{n} indexers' if n else 'running'
-        if r.status_code == 401:
-            return False, 'HTTP 401（api_key 无效）'
-        return False, f'HTTP {r.status_code}（响应不含 <caps>）'
+            return True, 'running'
+        return False, f'HTTP {r.status_code}'
     except Exception as e:
         return False, f'{type(e).__name__}: {e}'
 
