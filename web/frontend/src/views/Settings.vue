@@ -25,6 +25,129 @@
     </div>
 
     <el-tabs v-model="activeTab" class="config-tabs" tab-position="left">
+      <!-- ============ 可用性检测（放最前，进入页面立即跑本地零成本检查） ============ -->
+      <el-tab-pane name="diagnostics">
+        <template #label>
+          <div class="tab-label">
+            <el-icon><Monitor /></el-icon>
+            <span>可用性检测</span>
+          </div>
+        </template>
+
+        <!-- 本地（DB / 系统命令行工具）：打开 tab 自动跑 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <el-icon><Aim /></el-icon>
+              <span>本地环境</span>
+              <el-tag size="small" type="info" effect="plain">自动检测，无网络成本</el-tag>
+              <el-button
+                size="small"
+                :icon="Refresh"
+                style="margin-left: auto"
+                :loading="diagSystemLoading"
+                @click="loadDiagnosticsSystem"
+              >重新检测</el-button>
+            </div>
+          </template>
+          <el-table
+            :data="diagSystemItems"
+            stripe
+            size="small"
+            v-loading="diagSystemLoading"
+            empty-text="加载中..."
+          >
+            <el-table-column label="项目" prop="label" min-width="220" />
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag size="small" :type="diagTagType(row.status)" effect="plain">
+                  {{ diagStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="信息" prop="message" min-width="380" show-overflow-tooltip />
+            <el-table-column label="耗时" width="100">
+              <template #default="{ row }">
+                <span class="muted">{{ row.elapsed_ms ? `${row.elapsed_ms} ms` : '-' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="form-hint" style="margin-top: 8px">
+            未找到的工具：缺失会导致对应功能退化（不崩溃）。安装指引见 README「系统级依赖」章节
+          </div>
+        </el-card>
+
+        <!-- 网络服务：手动按钮触发 -->
+        <el-card
+          v-for="group in diagServiceGroups"
+          :key="group.key"
+          shadow="never"
+          class="cfg-card"
+        >
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge" :class="group.badgeClass">{{ group.badge }}</span>
+              <span>{{ group.title }}</span>
+              <el-tag size="small" type="info" effect="plain">{{ group.hint }}</el-tag>
+              <el-button
+                size="small"
+                :icon="VideoPlay"
+                style="margin-left: auto"
+                :disabled="!group.items.some(i => i.enabled)"
+                :loading="diagBatchLoading[group.key]"
+                @click="runDiagnosticsGroup(group)"
+              >测试本组全部</el-button>
+            </div>
+          </template>
+          <el-table :data="group.items" stripe size="small">
+            <el-table-column label="服务" prop="label" min-width="200" />
+            <el-table-column label="启用" width="80">
+              <template #default="{ row }">
+                <el-tag v-if="row.enabled" size="small" type="success" effect="plain">已配置</el-tag>
+                <el-tag v-else size="small" type="info" effect="plain">未启用</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag
+                  v-if="row.result"
+                  size="small"
+                  :type="diagTagType(row.result.status)"
+                  effect="plain"
+                >
+                  {{ diagStatusLabel(row.result.status) }}
+                </el-tag>
+                <span v-else class="muted">未测</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="信息" min-width="320" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.result">{{ row.result.message }}</span>
+                <span v-else class="muted">点右侧「测试」获取结果</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="耗时" width="100">
+              <template #default="{ row }">
+                <span class="muted">{{ row.result?.elapsed_ms ? `${row.result.elapsed_ms} ms` : '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100" align="right">
+              <template #default="{ row }">
+                <el-button
+                  size="small"
+                  link
+                  :disabled="!row.enabled"
+                  :loading="row.loading"
+                  @click="runDiagnosticsItem(row)"
+                >
+                  测试
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-tab-pane>
+
       <!-- ============ 基础配置（Jellyfin） ============ -->
       <el-tab-pane name="basic">
         <template #label>
@@ -1206,129 +1329,6 @@
         </el-card>
       </el-tab-pane>
 
-      <!-- ============ 可用性检测 ============ -->
-      <el-tab-pane name="diagnostics">
-        <template #label>
-          <div class="tab-label">
-            <el-icon><Monitor /></el-icon>
-            <span>可用性检测</span>
-          </div>
-        </template>
-
-        <!-- 本地（DB / 系统命令行工具）：打开 tab 自动跑 -->
-        <el-card shadow="never" class="cfg-card">
-          <template #header>
-            <div class="cfg-card-head">
-              <el-icon><Aim /></el-icon>
-              <span>本地环境</span>
-              <el-tag size="small" type="info" effect="plain">自动检测，无网络成本</el-tag>
-              <el-button
-                size="small"
-                :icon="Refresh"
-                style="margin-left: auto"
-                :loading="diagSystemLoading"
-                @click="loadDiagnosticsSystem"
-              >重新检测</el-button>
-            </div>
-          </template>
-          <el-table
-            :data="diagSystemItems"
-            stripe
-            size="small"
-            v-loading="diagSystemLoading"
-            empty-text="加载中..."
-          >
-            <el-table-column label="项目" prop="label" min-width="220" />
-            <el-table-column label="状态" width="120">
-              <template #default="{ row }">
-                <el-tag size="small" :type="diagTagType(row.status)" effect="plain">
-                  {{ diagStatusLabel(row.status) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="信息" prop="message" min-width="380" show-overflow-tooltip />
-            <el-table-column label="耗时" width="100">
-              <template #default="{ row }">
-                <span class="muted">{{ row.elapsed_ms ? `${row.elapsed_ms} ms` : '-' }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div class="form-hint" style="margin-top: 8px">
-            未找到的工具：缺失会导致对应功能退化（不崩溃）。安装指引见 README「系统级依赖」章节
-          </div>
-        </el-card>
-
-        <!-- 网络服务：手动按钮触发 -->
-        <el-card
-          v-for="group in diagServiceGroups"
-          :key="group.key"
-          shadow="never"
-          class="cfg-card"
-        >
-          <template #header>
-            <div class="cfg-card-head">
-              <span class="badge" :class="group.badgeClass">{{ group.badge }}</span>
-              <span>{{ group.title }}</span>
-              <el-tag size="small" type="info" effect="plain">{{ group.hint }}</el-tag>
-              <el-button
-                size="small"
-                :icon="VideoPlay"
-                style="margin-left: auto"
-                :disabled="!group.items.some(i => i.enabled)"
-                :loading="diagBatchLoading[group.key]"
-                @click="runDiagnosticsGroup(group)"
-              >测试本组全部</el-button>
-            </div>
-          </template>
-          <el-table :data="group.items" stripe size="small">
-            <el-table-column label="服务" prop="label" min-width="200" />
-            <el-table-column label="启用" width="80">
-              <template #default="{ row }">
-                <el-tag v-if="row.enabled" size="small" type="success" effect="plain">已配置</el-tag>
-                <el-tag v-else size="small" type="info" effect="plain">未启用</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="120">
-              <template #default="{ row }">
-                <el-tag
-                  v-if="row.result"
-                  size="small"
-                  :type="diagTagType(row.result.status)"
-                  effect="plain"
-                >
-                  {{ diagStatusLabel(row.result.status) }}
-                </el-tag>
-                <span v-else class="muted">未测</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="信息" min-width="320" show-overflow-tooltip>
-              <template #default="{ row }">
-                <span v-if="row.result">{{ row.result.message }}</span>
-                <span v-else class="muted">点右侧「测试」获取结果</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="耗时" width="100">
-              <template #default="{ row }">
-                <span class="muted">{{ row.result?.elapsed_ms ? `${row.result.elapsed_ms} ms` : '-' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="100" align="right">
-              <template #default="{ row }">
-                <el-button
-                  size="small"
-                  link
-                  :disabled="!row.enabled"
-                  :loading="row.loading"
-                  @click="runDiagnosticsItem(row)"
-                >
-                  测试
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-tab-pane>
-
       <!-- ============ 用户管理 ============ -->
       <el-tab-pane name="users" v-if="isAdmin">
         <template #label>
@@ -1434,7 +1434,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, adultApi, logsApi, jellyfinApi, authApi, diagnosticsApi } from '@/api'
 import SourcePool from '@/components/SourcePool.vue'
 
-const activeTab = ref('basic')
+// 默认 tab 设为「可用性检测」（位列第一，进入页面立即跑本地零成本检查）
+const activeTab = ref('diagnostics')
 const loading = ref(false)
 const saving = ref(false)
 
@@ -2323,6 +2324,11 @@ onMounted(() => {
   loadJellyfinLibraries()
   refreshActressStatus()
   loadUsers()
+  // 默认 tab 是 diagnostics → 首次进入主动加载（watch 不会触发，因为 activeTab 没变化）
+  if (activeTab.value === 'diagnostics') {
+    loadDiagnosticsSystem()
+    loadDiagnosticsServices()
+  }
   // 运行中每 3 秒轮询一次；闲时 10 秒一次（保留检测重启 / 别处启动）
   actressPollTimer = setInterval(() => {
     refreshActressStatus()
