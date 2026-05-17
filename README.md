@@ -196,6 +196,15 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 - 前端：http://localhost:5173
 - API 文档（Swagger）：http://localhost:8000/docs
 
+### 5. 首次启动验证 ★
+
+打开 **前端 → 配置 → 可用性检测**（左侧导航第一项，进页面就在）。一屏看清楚：
+
+- **本地环境**（进入即跑，零网络成本）：PostgreSQL · FFmpeg · FFprobe · MKVPropEdit · unrar / bsdtar
+- **网络服务**（手动按钮）：Jellyfin · qBittorrent · Jackett · TMDB · 豆瓣 · MDBList · Trakt · AniList · Wikidata · LLM · 字幕源 · 成人刮削站
+
+每项显示 `状态 / 信息 / 耗时`。未启用的源灰显，按钮禁用。**遇到问题先来这里看一眼，能省一半排查时间**。
+
 ---
 
 ## 系统级依赖
@@ -224,7 +233,8 @@ choco install ffmpeg mkvtoolnix
 conda install -c conda-forge ffmpeg mkvtoolnix unrar
 ```
 
-验证：`ffprobe -version` / `mkvpropedit --version` / `unrar`，能输出版本号即可。
+验证：命令行用 `ffprobe -version` / `mkvpropedit --version` / `unrar` 输出版本号即可。
+也可以直接打开 **前端 → 配置 → 可用性检测**，本地环境列里一目了然哪个工具在 PATH 上。
 
 ---
 
@@ -273,18 +283,29 @@ conda install -c conda-forge ffmpeg mkvtoolnix unrar
 
 ## 常见问题
 
+> **先去配置页 → 可用性检测**（左侧导航第一项）。本地环境会自动跑、网络服务可一键测，多数问题在那里就能看到根因。
+
 ### 后端启动失败
 
-1. 检查 PostgreSQL 是否可达，库和用户是否已创建
+1. 检查 PostgreSQL 是否可达，库和用户是否已创建（可用性检测「PostgreSQL」会直接告诉你能不能 SELECT）
 2. 确认 `config.yaml` 的 `database` 段填写正确
 3. 确认 `requirements.txt` 全部装好
-4. 确认系统级依赖已安装（`ffprobe -version` / `mkvpropedit --version`）
+4. 确认系统级依赖已安装（可用性检测「本地环境」会逐项显示）
 
 ### 前端无法连接后端
 
 1. 确认后端已启动在 `config.yaml` 中配置的端口
 2. 检查 `vite.config.js` 中的代理配置
 3. 检查 `cors_origins`（默认 `["*"]`）
+
+### 第三方源拉不到数据
+
+打开 **可用性检测** → 找到对应源（TMDB / 豆瓣 / Jellyfin / qB / Jackett ...）点「测试」。结果里会显示具体 HTTP 状态码或异常类型：
+
+- `HTTP 401 / 403`：api_key / 凭据错
+- `HTTP 429`：被限流；rate_limiter 会自动暂停（任务详情页 QuotaStatusPanel 看具体剩余配额）
+- `Connection*` 异常：网络 / 代理问题
+- `not_configured`：还没填 key 或 enabled=false
 
 ### 数据库连接错误
 
