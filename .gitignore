@@ -18,6 +18,7 @@ env/
 *.egg-info/
 
 # Node.js / 前端
+dist/
 node_modules/
 dist-ssr/
 .vite/
