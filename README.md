@@ -131,6 +131,7 @@ jellyfin-helper/
 - Node.js 20+
 - PostgreSQL 12+（先建库和用户）
 - 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
+- 系统级工具（见下方「系统级依赖」章节）
 
 ### 1. 配置
 
@@ -197,6 +198,58 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 
 ---
 
+## 系统级依赖
+
+除 Python 包（`requirements.txt`）外，部分功能依赖以下系统工具。**非必需**——缺失时对应功能自动退化（仅扫描/建议，不写入），不会崩溃。
+
+| 工具 | 用途 | 缺失时影响 |
+|---|---|---|
+| **ffmpeg / ffprobe** | 音轨扫描、字幕内嵌轨探测 | 无法检测内嵌字幕和音轨信息 |
+| **mkvtoolnix (mkvpropedit)** | 修改 MKV 文件默认音轨 flag | 音轨管理仅返回建议，不实际写入 |
+| **unrar** 或 **bsdtar** | 解压 rar 格式字幕包 | rar 字幕包无法解压，zip/7z 不受影响 |
+
+安装：
+
+```bash
+# Debian / Ubuntu
+sudo apt install ffmpeg mkvtoolnix unrar
+
+# macOS
+brew install ffmpeg mkvtoolnix
+
+# Windows (Chocolatey)
+choco install ffmpeg mkvtoolnix
+
+# Conda
+conda install -c conda-forge ffmpeg mkvtoolnix unrar
+```
+
+验证：`ffprobe -version` / `mkvpropedit --version` / `unrar`，能输出版本号即可。
+
+---
+
+## 数据库
+
+表会在首次启动时自动创建，无需手动建表。
+
+| 表名 | 说明 |
+|---|---|
+| `users` | 用户账号（JWT 认证） |
+| `tasks` | 后台任务记录 |
+| `scan_reports` | 扫描报告存档 |
+| `actors` | 演员信息缓存 |
+| `media_items` | 媒体文件元数据 |
+| `media_metadata` | 媒体扩展元数据（海报、简介等） |
+| `media_ratings` | 评分聚合（豆瓣 / TMDB / Trakt / MDBList） |
+| `video_annotations` | 视频标注（硬字幕标记等） |
+| `adult_items` | 成人内容元数据（可选） |
+| `adult_actresses` | 演员资料库（成人内容，可选） |
+| `download_dispatch_map` | 下载入库映射（torrent → 目标路径） |
+| `kv_cache` | 通用 KV 缓存 |
+| `llm_classify_cache` | LLM 分类结果缓存 |
+
+---
+
 ## 外部服务
 
 详见 [docs/external-services.md](docs/external-services.md)。摘要：
@@ -215,6 +268,31 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 - 开发者向：[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) —— 模块组织、添加新 router 的流程、调试技巧
 - 第三方服务：[docs/external-services.md](docs/external-services.md) —— 调用频率、地理屏蔽、OpenClash 分流示例
 - 历史 PRD / 决策记录：[docs/archive/](docs/archive/) —— 已实现功能的设计文档归档
+
+---
+
+## 常见问题
+
+### 后端启动失败
+
+1. 检查 PostgreSQL 是否可达，库和用户是否已创建
+2. 确认 `config.yaml` 的 `database` 段填写正确
+3. 确认 `requirements.txt` 全部装好
+4. 确认系统级依赖已安装（`ffprobe -version` / `mkvpropedit --version`）
+
+### 前端无法连接后端
+
+1. 确认后端已启动在 `config.yaml` 中配置的端口
+2. 检查 `vite.config.js` 中的代理配置
+3. 检查 `cors_origins`（默认 `["*"]`）
+
+### 数据库连接错误
+
+```bash
+psql -h <host> -p 5432 -U jellyfin_helper -d jellyfin_helper
+```
+
+连不上时依次排查：网络、防火墙、`pg_hba.conf` 是否允许该 IP、用户密码、数据库是否存在。
 
 ---
 
