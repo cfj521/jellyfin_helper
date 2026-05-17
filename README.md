@@ -200,7 +200,7 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 
 打开 **前端 → 配置 → 可用性检测**（左侧导航第一项，进页面就在）。一屏看清楚：
 
-- **本地环境**（进入即跑，零网络成本）：FFmpeg · FFprobe · MKVPropEdit · unrar / bsdtar
+- **本地环境**（进入即跑，零网络成本）：FFmpeg · FFprobe · MKVPropEdit · bsdtar
 - **网络服务**（手动按钮）：Jellyfin · qBittorrent · Jackett · TMDB · 豆瓣 · MDBList · Trakt · AniList · Wikidata · LLM · 字幕源 · 成人刮削站
 
 每项显示 `状态 / 信息 / 耗时`。未启用的源灰显，按钮禁用。**遇到问题先来这里看一眼，能省一半排查时间**。
@@ -215,25 +215,24 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 |---|---|---|
 | **ffmpeg / ffprobe** | 音轨扫描、字幕内嵌轨探测 | 无法检测内嵌字幕和音轨信息 |
 | **mkvtoolnix (mkvpropedit)** | 修改 MKV 文件默认音轨 flag | 音轨管理仅返回建议，不实际写入 |
-| **unrar** 或 **bsdtar** | 解压 rar 格式字幕包 | rar 字幕包无法解压，zip/7z 不受影响 |
+| **bsdtar (libarchive ≥ 3.6)** | 解压 rar / 7z 字幕包 | rar 字幕包无法解压，zip 不受影响 |
 
-> `bsdtar` 二者择一即可，rarfile 库会自动找能用的那个。Ubuntu 24.04 起 `unrar` 不在默认 `main` 源（需 enable `multiverse`），所以 **推荐装 `libarchive-tools`（提供 bsdtar）**，无需额外配置源，顺带能解 7z / iso / cab 等格式。
+> **bsdtar 的 libarchive 版本要 ≥ 3.6 才支持 RAR5**（现代字幕包基本都是 RAR5）。对照表：Ubuntu 22.04+ / Debian 12+ / macOS Homebrew / conda-forge 都满足。Ubuntu 20.04 / Debian 11 自带 libarchive 3.4，解 RAR5 会失败 —— 建议升级发行版，或者从 conda-forge 装。
 
 安装：
 
 ```bash
-# Debian / Ubuntu —— 推荐 libarchive-tools，免开 multiverse
+# Debian / Ubuntu 22.04+ / Debian 12+
 sudo apt install ffmpeg mkvtoolnix libarchive-tools
-# 如果偏好 unrar（rar5 兼容性最佳，但需 multiverse 源）：
-# sudo add-apt-repository multiverse && sudo apt install unrar
 
 # macOS（自带 bsdtar，无需额外装）
 brew install ffmpeg mkvtoolnix
 
 # Windows (Chocolatey)
 choco install ffmpeg mkvtoolnix
+# bsdtar 通过 conda 装：见下
 
-# Conda（跨平台一键，bsdtar 由 libarchive 自带）
+# Conda（跨平台一键，libarchive 3.7+ 自带 bsdtar，支持 RAR5）
 conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 ```
 

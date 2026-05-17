@@ -14,22 +14,15 @@
         v-for="item in activeItems"
         :key="item.source"
         class="source-row"
-        :class="{ 'is-circuit': item.is_circuit_open }"
       >
         <div class="source-info">
           <span class="source-name">{{ item.source }}</span>
-          <el-tag
-            :type="item.is_circuit_open ? 'danger' : 'warning'"
-            size="small"
-            effect="plain"
-          >
-            {{ item.is_circuit_open ? '熔断中' : '暂停中' }}
-          </el-tag>
+          <el-tag type="warning" size="small" effect="plain">暂停中</el-tag>
           <span class="source-desc">{{ item.description }}</span>
         </div>
         <div class="source-meta">
-          <span class="remaining">
-            剩余 {{ formatRemaining(item.is_circuit_open ? item.circuit_remaining_sec : item.paused_remaining_sec) }}
+          <span class="resume-at" :title="`unix ts ${item.paused_until_ts}`">
+            恢复于 {{ formatResumeAt(item.paused_until_ts) }}
           </span>
           <span class="hit-count">累计触发 {{ item.total_hits }} 次</span>
           <el-button
@@ -56,21 +49,25 @@ const allStatus = ref({})
 let timer = null
 
 const activeItems = computed(() => {
-  return Object.values(allStatus.value).filter(
-    (s) => s.is_paused || s.is_circuit_open
-  )
+  return Object.values(allStatus.value).filter((s) => s.is_paused)
 })
 
 const hasActiveIssues = computed(() => activeItems.value.length > 0)
 
-const formatRemaining = (sec) => {
-  if (!sec || sec <= 0) return '0s'
-  if (sec < 60) return `${Math.ceil(sec)}s`
-  const m = Math.floor(sec / 60)
-  const s = Math.ceil(sec % 60)
-  if (m < 60) return `${m}m${String(s).padStart(2, '0')}s`
-  const h = Math.floor(m / 60)
-  return `${h}h${String(m % 60).padStart(2, '0')}m`
+// 显示恢复时间点（绝对时刻），不显示剩余倒计时 —— 这个面板不自动刷新，
+// 倒计时会越过越不准；时间点是静态的，用户一眼能判断"是不是过去时间了"
+const formatResumeAt = (unixTs) => {
+  if (!unixTs) return '-'
+  const d = new Date(unixTs * 1000)
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  if (sameDay) return `今天 ${hh}:${mm}`
+  // 不同日：带月-日
+  const M = String(d.getMonth() + 1).padStart(2, '0')
+  const D = String(d.getDate()).padStart(2, '0')
+  return `${M}-${D} ${hh}:${mm}`
 }
 
 const loadStatus = async () => {
@@ -136,11 +133,6 @@ onUnmounted(() => {
   background: var(--el-color-warning-light-9);
   border: 1px solid var(--el-color-warning-light-5);
   border-radius: 6px;
-
-  &.is-circuit {
-    background: var(--el-color-danger-light-9);
-    border-color: var(--el-color-danger-light-5);
-  }
 }
 
 .source-info {
@@ -164,7 +156,7 @@ onUnmounted(() => {
   gap: 12px;
   font-size: 12px;
 
-  .remaining {
+  .resume-at {
     font-family: monospace;
     color: var(--el-color-warning-dark-2);
     font-weight: 500;

@@ -90,16 +90,15 @@ class DoubanRating:
 class DoubanClient:
     """豆瓣评分爬虫，懒拉取场景使用。"""
 
-    # ---- 全局熔断（委托给 common/rate_limiter.quota_guard，源名 'douban'）----
-    # 熔断参数已在 rate_limiter.py 的 SOURCE_CONFIGS 中定义，无需运行时配置
+    # ---- 全局限流（委托给 common/rate_limiter.quota_guard，源名 'douban'）----
+    # 限流参数（hard delay / pause / batch 配额）已在 rate_limiter.SOURCE_CONFIGS 中定义。
+    # 不再单独设熔断 —— batch 配额 + pause + report_limited 已经能覆盖原熔断语义。
 
     @classmethod
-    def breaker_status(cls) -> Tuple[bool, float]:
-        """(open, remaining_seconds)。worker 在循环顶端 peek 用。"""
+    def is_paused(cls) -> Tuple[bool, float]:
+        """(paused, remaining_seconds)。worker 在循环顶端 peek 用。"""
         s = quota_guard.status('douban')
-        is_open = s['is_circuit_open'] or s['is_paused']
-        remaining = max(s['circuit_remaining_sec'], s['paused_remaining_sec'])
-        return (is_open, remaining)
+        return (s['is_paused'], s['paused_remaining_sec'])
 
     @classmethod
     def report_antibot(cls):
@@ -107,7 +106,7 @@ class DoubanClient:
         quota_guard.report_limited('douban', '反爬/登录拦截页')
 
     @classmethod
-    def reset_breaker(cls):
+    def reset(cls):
         """诊断 / 手动恢复用。"""
         quota_guard.reset('douban')
 

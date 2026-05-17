@@ -144,13 +144,6 @@ async def lifespan(app: FastAPI):
     from web.backend.api.auth import sync_users_from_config
     sync_users_from_config()
 
-    # 豆瓣全局熔断参数已在 rate_limiter.SOURCE_CONFIGS 中定义，无需运行时配置
-    from common.rate_limiter import DOUBAN_BREAKER_MAX_FAILURES, DOUBAN_BREAKER_COOLDOWN
-    logger.info(
-        f"豆瓣全局熔断: max_failures={DOUBAN_BREAKER_MAX_FAILURES} "
-        f"cooldown={DOUBAN_BREAKER_COOLDOWN}s（rate_limiter 常量）"
-    )
-
     # 处理上次未完成的孤儿任务（必须在 API 路由 import 完成、注册表填充后才调用）
     try:
         from web.backend.task_restart import restart_orphan_tasks

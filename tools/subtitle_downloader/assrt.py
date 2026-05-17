@@ -10,6 +10,7 @@
 - detail 返回的 url 是临时签名，**不能缓存**，每次下载现取
 """
 import io
+import os
 import re
 import time
 import zipfile
@@ -253,13 +254,24 @@ class AssrtClient:
         推断顺序：content magic bytes (最可靠) → URL 后缀 → content-type
         实测 assrt 的 URL 经常 .zip 后缀但内容是裸 srt，反向也有；
         所以先嗅探 magic 字节，URL/header 只兜底。
+
+        **配额计数**：dl.assrt.net 也走 quota_guard + _wait_quota，
+        和 _request 共用同一个 60s 滑动窗口。assrt 端 20/min 是否覆盖 dl
+        没有明确文档，但实测 batch 时 dl 不计数会让自家计算和服务器计算
+        错开 ~50%（一个命中 video = search+detail+dl 三次实际请求），
+        撞 30900 的真正元凶。
         """
+        # 保底层：先检查全局暂停 / batch 配额；记录时间戳
+        quota_guard.acquire('assrt', batch=self.batch)
+        self._wait_quota()
         try:
             resp = self.session.get(url, timeout=60, stream=True)
             resp.raise_for_status()
             content = resp.content
         except requests.RequestException as e:
             raise AssrtError(-1, f"下载失败: {e}")
+        # 成功 → 重置连续限流计数（同 _request 的尾部行为）
+        quota_guard.report_success('assrt')
 
         ext = _sniff_subtitle_ext(content)
         if not ext:
@@ -374,7 +386,7 @@ def extract_subtitles_from_archive(content: bytes, ext: str) -> List[Tuple[str, 
     按格式分派；多种探测信号（magic / ext）任一命中即试：
         zip           → zipfile (stdlib)
         7z            → py7zr (纯 Python) → bsdtar 兜底
-        rar           → rarfile (运行时调 bsdtar/unrar) → bsdtar 直接兜底
+        rar           → bsdtar (libarchive >= 3.6 支持 RAR5)
         tar / tar.gz / tar.bz2 / tar.xz / tar.zst → tarfile (stdlib，自动解压)
         gz (单文件)   → gzip 解压后整体当字幕落
 
@@ -393,9 +405,10 @@ def extract_subtitles_from_archive(content: bytes, ext: str) -> List[Tuple[str, 
     if ext == '.7z' or head6 == b'7z\xbc\xaf\x27\x1c':
         return _extract_7z(content) or _extract_via_bsdtar(content, hint_ext='.7z')
 
-    # rar：rarfile 先试，失败 bsdtar 兜底
+    # rar：直接走 bsdtar（libarchive >= 3.6 支持 RAR5）
+    # 老路径 rarfile + unrar 已删 —— bsdtar 单进程一次解决，省 PyPI 依赖 + 子进程开销
     if ext == '.rar' or head4 == b'Rar!':
-        return _extract_rar(content) or _extract_via_bsdtar(content, hint_ext='.rar')
+        return _extract_via_bsdtar(content, hint_ext='.rar')
 
     # tar 系列：tarfile 自动识别 gz/bz2/xz 透明解压
     if ext in ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz'):
@@ -464,46 +477,6 @@ def _extract_7z(content: bytes) -> List[Tuple[str, bytes]]:
                             out.append((name, f.read()))
     except Exception as e:
         logger.warning(f"7z 解析失败（py7zr）: {e}")
-        return []
-    return out
-
-
-def _extract_rar(content: bytes) -> List[Tuple[str, bytes]]:
-    """rarfile：自身没有解码能力，调 bsdtar/unrar/7z 子进程。失败返回 []。"""
-    try:
-        import rarfile
-    except ImportError:
-        return []
-    # rarfile 默认找 unrar.exe；Windows 上常没装。这里强制让它用 bsdtar（libarchive，
-    # miniconda Library/bin 自带，已经在 PATH 上）。bsdtar 不存在再回退默认搜索。
-    import shutil as _shutil
-    if _shutil.which('bsdtar') and getattr(rarfile, 'UNRAR_TOOL', 'unrar') == 'unrar':
-        rarfile.UNRAR_TOOL = 'bsdtar'
-    out: List[Tuple[str, bytes]] = []
-    try:
-        # rarfile 要求文件对象，BytesIO 可用
-        with rarfile.RarFile(io.BytesIO(content)) as rf:
-            for info in rf.infolist():
-                if info.is_dir():
-                    continue
-                name = info.filename
-                if not name.lower().endswith(SUB_EXTENSIONS):
-                    continue
-                try:
-                    out.append((name, rf.read(info)))
-                except Exception as e:
-                    logger.warning(f"读取 rar 内 {name} 失败: {e}")
-    except rarfile.NeedFirstVolume:
-        logger.warning("rar 是分卷的首卷以外部分，跳过")
-        return []
-    except rarfile.BadRarFile as e:
-        logger.warning(f"rar 解析失败: {e}")
-        return []
-    except rarfile.RarCannotExec as e:
-        logger.warning(f"rar 需要外部 unrar/bsdtar，未在 PATH 上: {e}")
-        return []
-    except Exception as e:
-        logger.warning(f"rar 处理异常: {e}")
         return []
     return out
 
