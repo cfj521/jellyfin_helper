@@ -334,6 +334,18 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     return {"message": "任务已删除"}
 
 
+def _extract_child_task_ids(task: Task) -> List[int]:
+    """从 run_all 父任务的 result.steps 中提取所有子任务 ID。"""
+    if not task.result:
+        return []
+    try:
+        data = json.loads(task.result)
+        steps = data.get('steps') or []
+        return [s['task_id'] for s in steps if isinstance(s, dict) and s.get('task_id')]
+    except Exception:
+        return []
+
+
 @router.post("/{task_id}/cancel")
 def cancel_task(task_id: int, db: Session = Depends(get_db)):
     """取消任务"""
@@ -355,6 +367,24 @@ def cancel_task(task_id: int, db: Session = Depends(get_db)):
     snapshot = _build_task_snapshot(task)
     db.commit()
     _publish_task_update(snapshot, terminal=True)
+
+    # run_all 类型的父任务：同时取消所有正在运行的子任务
+    # result.steps 里记录了每个子任务的 task_id
+    child_cancelled = 0
+    if task.task_type == 'run_all':
+        child_ids = _extract_child_task_ids(task)
+        for cid in child_ids:
+            child = db.query(Task).filter(Task.id == cid).first()
+            if child and child.status in ('pending', 'running'):
+                child.status = 'cancelled'
+                child.completed_at = datetime.utcnow()
+                child.message = '父任务取消'
+                cs = _build_task_snapshot(child)
+                db.commit()
+                _publish_task_update(cs, terminal=True)
+                child_cancelled += 1
+        if child_cancelled:
+            logger.info(f"run_all #{task_id}: 级联取消 {child_cancelled} 个子任务")
 
     return {"message": "任务已取消"}
 

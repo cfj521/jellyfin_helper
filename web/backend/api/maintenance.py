@@ -1292,7 +1292,10 @@ def run_all_orchestrator(
         import threading
 
         # 不阻塞主流程的步骤（海报/演员图修复耗时长但不影响后续字幕/音轨）
-        _NON_BLOCKING_STEPS = {'poster_fix', 'actor_fix'}
+        # 不阻塞主流程但自身串行的步骤组：poster_fix → actor_fix（共享 TMDB 限速）
+        _BG_SERIAL_STEPS = ('poster_fix', 'actor_fix')
+        # 独立后台步骤
+        _NON_BLOCKING_STEPS = {'audio_default_track'}
 
         def _run_step_sync(step: Dict, child_id: int):
             """在当前线程执行 step runner"""
@@ -1369,7 +1372,15 @@ def run_all_orchestrator(
                 logger.warning(f"父任务增量写入失败: {e}")
 
         # ---- 主循环：阻塞步骤串行，非阻塞步骤并行 ----
-        bg_threads: List[Dict] = []  # [{thread, record, child_id, step_name}]
+        bg_threads: List[Dict] = []  # [{thread, records:[...], items:[{child_id,step_name}]}]
+
+        # 收集 poster_fix → actor_fix 的 step/child/record，稍后统一放进一个串行线程
+        _bg_serial_pending: List[Dict] = []  # [{step, child_id, record}]
+
+        def _run_serial_group(group: List[Dict]):
+            """在单个后台线程内串行执行一组步骤（poster_fix → actor_fix）"""
+            for item in group:
+                _run_step_background(item['step'], item['child_id'])
 
         for idx, step in enumerate(steps):
             base_pct = int(100 * idx / total_steps)
@@ -1391,8 +1402,32 @@ def run_all_orchestrator(
             }
             step_records.append(record)
 
-            if step['name'] in _NON_BLOCKING_STEPS:
-                # 海报/演员图修复：后台线程运行，不阻塞后续步骤
+            if step['name'] in _BG_SERIAL_STEPS:
+                # poster_fix / actor_fix：先收集，等凑齐后放进同一个后台线程串行执行
+                _bg_serial_pending.append({
+                    'step': step,
+                    'child_id': child.id,
+                    'record': record,
+                })
+                # 最后一个串行步骤入列后，启动后台线程
+                if len(_bg_serial_pending) == len(_BG_SERIAL_STEPS):
+                    t = threading.Thread(
+                        target=_run_serial_group,
+                        args=(_bg_serial_pending[:],),
+                        name="run-all-bg-poster-actor",
+                        daemon=True,
+                    )
+                    t.start()
+                    bg_threads.append({
+                        'thread': t,
+                        'items': [
+                            {'child_id': p['child_id'], 'step_name': p['step']['name'], 'record': p['record']}
+                            for p in _bg_serial_pending
+                        ],
+                    })
+                    _flush_parent_result()
+            elif step['name'] in _NON_BLOCKING_STEPS:
+                # 独立后台步骤（如 audio_default_track）
                 t = threading.Thread(
                     target=_run_step_background,
                     args=(step, child.id),
@@ -1402,11 +1437,8 @@ def run_all_orchestrator(
                 t.start()
                 bg_threads.append({
                     'thread': t,
-                    'record': record,
-                    'child_id': child.id,
-                    'step_name': step['name'],
+                    'items': [{'child_id': child.id, 'step_name': step['name'], 'record': record}],
                 })
-                # 立即 flush 一次（前端可看到"运行中"状态）
                 _flush_parent_result()
             else:
                 # 阻塞步骤：等完成后再继续
@@ -1419,22 +1451,36 @@ def run_all_orchestrator(
                 elif record['status'] == 'failed':
                     failed_count += 1
 
+                # auto_identify 完成后：若实际修复了条目，立即刷新受影响库
+                # 后续并行步骤（海报/演员图/音轨）依赖 Jellyfin 侧元数据已更新
+                if step['name'] == 'auto_identify' and not dry_run:
+                    ai_summary = record.get('summary') or {}
+                    if (ai_summary.get('fixed_count') or 0) > 0:
+                        affected = list({lid for lid in lib_map.values() if lid})
+                        if affected:
+                            update_task_progress(
+                                db, parent_task_id, base_pct,
+                                f"识别修复完成，刷新 Jellyfin（{len(affected)} 个库）...",
+                            )
+                            _refresh_libraries(affected)
+
                 _flush_parent_result()
 
         # ---- 等待后台步骤完成 ----
         if bg_threads:
             update_task_progress(
                 db, parent_task_id, 95,
-                f"等待海报/演员图修复完成（{len(bg_threads)} 个后台任务）...",
+                f"等待后台任务完成（{len(bg_threads)} 个线程）...",
             )
-            for item in bg_threads:
-                item['thread'].join()
+            for bg in bg_threads:
+                bg['thread'].join()
                 db.expire_all()
-                _collect_child_result(item['child_id'], item['step_name'], item['record'])
-                if item['record']['status'] == 'completed':
-                    success_count += 1
-                elif item['record']['status'] == 'failed':
-                    failed_count += 1
+                for item in bg['items']:
+                    _collect_child_result(item['child_id'], item['step_name'], item['record'])
+                    if item['record']['status'] == 'completed':
+                        success_count += 1
+                    elif item['record']['status'] == 'failed':
+                        failed_count += 1
             _flush_parent_result()
 
         # ===== 最后统一触发 Jellyfin 刷新 =====
