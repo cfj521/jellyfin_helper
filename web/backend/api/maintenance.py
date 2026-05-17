@@ -1288,56 +1288,61 @@ def run_all_orchestrator(
         success_count = 0
         failed_count = 0
 
-        for idx, step in enumerate(steps):
-            base_pct = int(100 * idx / total_steps)
-            update_task_progress(
-                db, parent_task_id, base_pct,
-                f"[{idx+1}/{total_steps}] {step['label']}",
-            )
+        # ---- 辅助：执行单个 step 并收集结果 ----
+        import threading
 
-            child = create_task(db, step['name'], f"[run-all #{parent_task_id}] {step['label']}")
-            record = {
-                'step': step['name'],
-                'label': step['label'],
-                'task_id': child.id,
-                'status': 'running',
-                'started_at': None,
-                'completed_at': None,
-                'message': None,
-                'summary': None,
-            }
+        # 不阻塞主流程的步骤（海报/演员图修复耗时长但不影响后续字幕/音轨）
+        _NON_BLOCKING_STEPS = {'poster_fix', 'actor_fix'}
+
+        def _run_step_sync(step: Dict, child_id: int):
+            """在当前线程执行 step runner"""
             try:
-                step['runner'](child.id)
+                step['runner'](child_id)
             except Exception as e:
                 logger.exception(f"step {step['name']} 抛异常")
                 try:
-                    complete_task(db, child.id, {'error': str(e)}, success=False)
+                    _db = SessionLocal()
+                    complete_task(_db, child_id, {'error': str(e)}, success=False)
+                    _db.close()
                 except Exception:
                     pass
 
-            db.expire_all()
-            ch = db.query(_Task).filter(_Task.id == child.id).first()
-            if ch:
-                child_result = None
-                if ch.result:
-                    try:
-                        child_result = _json.loads(ch.result)
-                    except Exception:
-                        child_result = {'raw': ch.result}
-                record['status'] = ch.status
-                record['started_at'] = ch.started_at.isoformat() if ch.started_at else None
-                record['completed_at'] = ch.completed_at.isoformat() if ch.completed_at else None
-                record['message'] = ch.message
-                record['summary'] = _summarize_step_result(step['name'], child_result)
-                if ch.status == 'completed':
-                    success_count += 1
-                elif ch.status == 'failed':
-                    failed_count += 1
+        def _run_step_background(step: Dict, child_id: int):
+            """在独立线程执行 step runner（海报/演员图等非阻塞步骤）"""
+            try:
+                step['runner'](child_id)
+            except Exception as e:
+                logger.exception(f"[bg] step {step['name']} 抛异常")
+                try:
+                    _db = SessionLocal()
+                    complete_task(_db, child_id, {'error': str(e)}, success=False)
+                    _db.close()
+                except Exception:
+                    pass
 
-            step_records.append(record)
+        def _collect_child_result(child_id: int, step_name: str, record: Dict):
+            """从 DB 读取子任务最终状态，填充 record dict"""
+            _db = SessionLocal()
+            try:
+                ch = _db.query(_Task).filter(_Task.id == child_id).first()
+                if ch:
+                    child_result = None
+                    if ch.result:
+                        try:
+                            child_result = _json.loads(ch.result)
+                        except Exception:
+                            child_result = {'raw': ch.result}
+                    record['status'] = ch.status
+                    record['started_at'] = ch.started_at.isoformat() if ch.started_at else None
+                    record['completed_at'] = ch.completed_at.isoformat() if ch.completed_at else None
+                    record['message'] = ch.message
+                    record['summary'] = _summarize_step_result(step_name, child_result)
+            finally:
+                _db.close()
 
-            # 增量写入父任务 result —— 运行中的详情页就能看到瀑布图
-            # 注意：合并 create_task 时写入的 initial_message 等元信息，避免覆盖
+        def _flush_parent_result():
+            """增量写入父任务 result —— 运行中的详情页就能看到瀑布图"""
+            nonlocal success_count, failed_count
             try:
                 parent = db.query(_Task).filter(_Task.id == parent_task_id).first()
                 if parent:
@@ -1362,6 +1367,75 @@ def run_all_orchestrator(
                     db.commit()
             except Exception as e:
                 logger.warning(f"父任务增量写入失败: {e}")
+
+        # ---- 主循环：阻塞步骤串行，非阻塞步骤并行 ----
+        bg_threads: List[Dict] = []  # [{thread, record, child_id, step_name}]
+
+        for idx, step in enumerate(steps):
+            base_pct = int(100 * idx / total_steps)
+            update_task_progress(
+                db, parent_task_id, base_pct,
+                f"[{idx+1}/{total_steps}] {step['label']}",
+            )
+
+            child = create_task(db, step['name'], f"[run-all #{parent_task_id}] {step['label']}")
+            record = {
+                'step': step['name'],
+                'label': step['label'],
+                'task_id': child.id,
+                'status': 'running',
+                'started_at': None,
+                'completed_at': None,
+                'message': None,
+                'summary': None,
+            }
+            step_records.append(record)
+
+            if step['name'] in _NON_BLOCKING_STEPS:
+                # 海报/演员图修复：后台线程运行，不阻塞后续步骤
+                t = threading.Thread(
+                    target=_run_step_background,
+                    args=(step, child.id),
+                    name=f"run-all-bg-{step['name']}",
+                    daemon=True,
+                )
+                t.start()
+                bg_threads.append({
+                    'thread': t,
+                    'record': record,
+                    'child_id': child.id,
+                    'step_name': step['name'],
+                })
+                # 立即 flush 一次（前端可看到"运行中"状态）
+                _flush_parent_result()
+            else:
+                # 阻塞步骤：等完成后再继续
+                _run_step_sync(step, child.id)
+
+                db.expire_all()
+                _collect_child_result(child.id, step['name'], record)
+                if record['status'] == 'completed':
+                    success_count += 1
+                elif record['status'] == 'failed':
+                    failed_count += 1
+
+                _flush_parent_result()
+
+        # ---- 等待后台步骤完成 ----
+        if bg_threads:
+            update_task_progress(
+                db, parent_task_id, 95,
+                f"等待海报/演员图修复完成（{len(bg_threads)} 个后台任务）...",
+            )
+            for item in bg_threads:
+                item['thread'].join()
+                db.expire_all()
+                _collect_child_result(item['child_id'], item['step_name'], item['record'])
+                if item['record']['status'] == 'completed':
+                    success_count += 1
+                elif item['record']['status'] == 'failed':
+                    failed_count += 1
+            _flush_parent_result()
 
         # ===== 最后统一触发 Jellyfin 刷新 =====
         # 判断哪些 step 实际产生了 Jellyfin 元数据/文件层面的改动；
