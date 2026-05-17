@@ -27,10 +27,18 @@ lxml>=5.0.0
 # ── 压缩包解压（字幕源常以 zip/rar/7z 打包）──
 # zip / tar / tar.gz / tar.bz2 / tar.xz / gz 走 stdlib（zipfile / tarfile / gzip），无依赖
 # 7z：py7zr 纯 Python 实现，零外部依赖
-# rar：rarfile 是 wrapper，运行时需要 bsdtar / unrar / 7z 之一在 PATH 上
-#      （miniconda 自带 bsdtar；Linux/macOS 一般有 unrar 或 bsdtar）
+# rar：rarfile 是 wrapper，运行时需要系统级工具之一在 PATH 上：
+#      ★ 推荐：apt install unrar       （Debian/Ubuntu）
+#        或：  apt install libarchive-tools  （提供 bsdtar）
+#        或：  conda install -c conda-forge unrar
+#      如果 unrar/bsdtar 都不在 PATH，rarfile 会报 "Cannot find working tool"
 py7zr>=0.20.0
 rarfile>=4.0
+
+# ── 系统级工具（非 pip，安装方式见 README）──
+# ffmpeg/ffprobe — 音轨扫描、字幕内嵌轨探测
+# mkvtoolnix (mkvpropedit) — 修改 MKV 默认音轨
+# unrar / bsdtar — 解压 rar 字幕包（见上方 rarfile 注释）
 
 # ── 认证 ──
 python-jose[cryptography]>=3.3.0
