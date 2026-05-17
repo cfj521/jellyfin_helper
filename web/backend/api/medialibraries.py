@@ -2028,6 +2028,24 @@ def check_api_key():
             is_admin = False
             admin_check_msg = f'权限探测异常：{e}'
 
+    # ③ db_path 可读性检测（仅在配置了路径时检查）
+    db_path = settings.jellyfin_db_path
+    db_check = None
+    if db_path:
+        import os
+        p = db_path.strip()
+        if os.path.isfile(p):
+            if os.access(p, os.R_OK):
+                try:
+                    size_mb = round(os.path.getsize(p) / 1024 / 1024, 1)
+                    db_check = {'ok': True, 'message': f'可读（{size_mb} MB）', 'path': p}
+                except Exception as e:
+                    db_check = {'ok': False, 'message': f'stat 失败：{e}', 'path': p}
+            else:
+                db_check = {'ok': False, 'message': '文件存在但无读权限', 'path': p}
+        else:
+            db_check = {'ok': False, 'message': '文件不存在', 'path': p}
+
     return {
         'ok': is_admin,
         'reachable': True,
@@ -2035,6 +2053,7 @@ def check_api_key():
         'server_name': server_name,
         'server_version': server_version,
         'message': admin_check_msg,
+        'db_check': db_check,
     }
 
 
