@@ -89,8 +89,8 @@ const cards = computed(() => [
   { label: '作用范围', value: r.value.scope_label   ?? '—', color: '#94a3b8' },
 ])
 
-const STATUS_LABELS = { pending: '等待', running: '运行中', completed: '完成', failed: '失败', cancelled: '已取消' }
-const STATUS_TAGS = { pending: 'info', running: 'primary', completed: 'success', failed: 'danger', cancelled: 'info' }
+const STATUS_LABELS = { pending: '等待', running: '运行中', completed: '完成', success: '完成', failed: '失败', cancelled: '已取消' }
+const STATUS_TAGS = { pending: 'info', running: 'primary', completed: 'success', success: 'success', failed: 'danger', cancelled: 'info' }
 const statusLabel = (s) => STATUS_LABELS[s] || s
 const statusTagType = (s) => STATUS_TAGS[s] || 'info'
 

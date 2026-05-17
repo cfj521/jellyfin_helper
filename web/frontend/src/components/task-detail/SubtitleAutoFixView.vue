@@ -87,7 +87,7 @@
             v-model:current-page="scanPage"
             v-model:page-size="pageSize"
             :total="scanDetails.length"
-            :page-sizes="[20, 50, 100, 200]"
+            :page-sizes="[50, 100, 200, 500]"
             layout="total, sizes, prev, pager, next, jumper"
             small
             background
@@ -138,7 +138,7 @@
             v-model:current-page="downloadPage"
             v-model:page-size="pageSize"
             :total="downloadDetails.length"
-            :page-sizes="[20, 50, 100, 200]"
+            :page-sizes="[50, 100, 200, 500]"
             layout="total, sizes, prev, pager, next, jumper"
             small
             background
@@ -180,7 +180,7 @@ watch(downloadDetails, (v) => {
 }, { immediate: true })
 
 // 分页（两 tab 共享 pageSize，便于用户保留偏好；当前页独立）
-const pageSize = ref(50)
+const pageSize = ref(100)
 const scanPage = ref(1)
 const downloadPage = ref(1)
 // 任务还在运行时数据持续追加，自动 reset 到第 1 页可能打断阅读；保持当前页即可。

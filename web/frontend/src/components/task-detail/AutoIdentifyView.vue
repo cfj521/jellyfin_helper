@@ -5,9 +5,9 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="`已修复 (${groups.applied.length})`" name="applied">
         <el-empty v-if="!groups.applied.length" description="无" />
+        <template v-else>
         <el-table
-          v-else
-          :data="groups.applied"
+          :data="pagedApplied"
           stripe
           size="small"
           :row-class-name="lowConfRowClass"
@@ -87,11 +87,21 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="groups.applied.length > pageSize"
+          v-model:current-page="appliedPage"
+          :page-size="pageSize"
+          :total="groups.applied.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
+        </template>
       </el-tab-pane>
 
       <el-tab-pane :label="`未匹配 (${groups.no_match.length})`" name="no_match">
         <el-empty v-if="!groups.no_match.length" description="无" />
-        <el-table v-else :data="groups.no_match" stripe size="small">
+        <template v-else>
+        <el-table :data="pagedNoMatch" stripe size="small">
           <el-table-column label="原路径 / 名称" min-width="320">
             <template #default="{ row }">
               <div class="item-cell">
@@ -109,15 +119,34 @@
           </el-table-column>
           <el-table-column prop="error" label="原因" />
         </el-table>
+        <el-pagination
+          v-if="groups.no_match.length > pageSize"
+          v-model:current-page="noMatchPage"
+          :page-size="pageSize"
+          :total="groups.no_match.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
+        </template>
       </el-tab-pane>
 
       <el-tab-pane v-if="groups.failed.length" :label="`失败 (${groups.failed.length})`" name="failed">
-        <el-table :data="groups.failed" stripe size="small">
+        <template v-if="groups.failed.length">
+        <el-table :data="pagedFailed" stripe size="small">
           <el-table-column label="项目" min-width="280">
             <template #default="{ row }">{{ row.item_name }}</template>
           </el-table-column>
           <el-table-column prop="error" label="错误" />
         </el-table>
+        <el-pagination
+          v-if="groups.failed.length > pageSize"
+          v-model:current-page="failedPage"
+          :page-size="pageSize"
+          :total="groups.failed.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
+        </template>
       </el-tab-pane>
 
       <el-tab-pane v-if="skipped.length" :label="`已跳过 (${skipped.length})`" name="skipped">
@@ -128,7 +157,7 @@
           title="按库类型检查目录内主体文件，无主体的目录直接跳过（多为字幕包 / 缩略图缓存 / 孤儿 NFO 目录）"
           style="margin-bottom: 8px"
         />
-        <el-table :data="skipped" stripe size="small">
+        <el-table :data="pagedSkipped" stripe size="small">
           <el-table-column prop="path" label="路径" min-width="320" show-overflow-tooltip />
           <el-table-column prop="item_name" label="名称" min-width="180" show-overflow-tooltip />
           <el-table-column prop="collection_type" label="库类型" width="120" />
@@ -140,6 +169,14 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="skipped.length > pageSize"
+          v-model:current-page="skippedPage"
+          :page-size="pageSize"
+          :total="skipped.length"
+          layout="total, prev, pager, next"
+          class="pager"
+        />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -167,12 +204,35 @@ const cards = computed(() => [
   { label: '未匹配',     value: r.value.no_match_count     ?? 0, color: '#ef4444' },
 ])
 
+const pageSize = 100
+const appliedPage = ref(1)
+const noMatchPage = ref(1)
+const failedPage = ref(1)
+const skippedPage = ref(1)
+
 const skipped = computed(() => r.value.skipped || [])
 const groups = computed(() => ({
   applied:  details.value.filter(d => d.applied || d.error === '(预览模式)' && d.first_candidate),
   no_match: details.value.filter(d => !d.applied && d.error && d.error !== '(预览模式)' && d.error.includes('未找到')),
   failed:   details.value.filter(d => !d.applied && d.error && d.error !== '(预览模式)' && !d.error.includes('未找到')),
 }))
+
+const pagedApplied = computed(() => {
+  const s = (appliedPage.value - 1) * pageSize
+  return groups.value.applied.slice(s, s + pageSize)
+})
+const pagedNoMatch = computed(() => {
+  const s = (noMatchPage.value - 1) * pageSize
+  return groups.value.no_match.slice(s, s + pageSize)
+})
+const pagedFailed = computed(() => {
+  const s = (failedPage.value - 1) * pageSize
+  return groups.value.failed.slice(s, s + pageSize)
+})
+const pagedSkipped = computed(() => {
+  const s = (skippedPage.value - 1) * pageSize
+  return skipped.value.slice(s, s + pageSize)
+})
 
 const lowConfCount = computed(() => groups.value.applied.filter(d => d.low_confidence).length)
 
@@ -229,5 +289,10 @@ const activeTab = ref(groups.value.applied.length ? 'applied' : 'no_match')
 }
 :deep(.row-low-confidence:hover > td) {
   background-color: var(--jt-warning-tint) !important;
+}
+.pager {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 </style>
