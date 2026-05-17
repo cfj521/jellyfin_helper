@@ -342,6 +342,15 @@ def _check_shooter() -> Tuple[bool, str]:
 
 # ---- 成人刮削源（按 settings.adult_sources 启用项） ----
 
+# 各源在 UI 显示的标签：直接用域名形式，跟前端 sourceLabels 保持一致
+_ADULT_SOURCE_LABELS = {
+    'missav':     'missav.ai/cn/',
+    'javbus':     'javbus.com',
+    'javdb':      'javdb.com',
+    'javlibrary': 'javlibrary.com/cn/',
+    'avbase':     'avbase.net',
+}
+
 def _check_adult_source(name: str) -> Tuple[bool, str]:
     """对单个 adult scraper 做可达性检测：访问 base_url 看状态码。"""
     from tools.adult_manager.scrapers.manager import ScraperManager
@@ -405,7 +414,7 @@ def diagnostics_list_services():
             'label': label,
             'enabled': _is_enabled(group, name),
         })
-    # 成人刮削源：按 settings.adult_sources 动态生成
+    # 成人刮削源：按 settings.adult_sources 动态生成；label 用域名形式
     for entry in (settings.adult_sources or []):
         if isinstance(entry, dict):
             n = entry.get('name')
@@ -416,7 +425,7 @@ def diagnostics_list_services():
             items.append({
                 'group': 'adult',
                 'name': n,
-                'label': f'刮削源 · {n}',
+                'label': _ADULT_SOURCE_LABELS.get(n, n),
                 'enabled': enabled,
             })
     return {'items': items}
@@ -452,7 +461,7 @@ def _is_enabled(group: str, name: str) -> bool:
 def diagnostics_check(group: str, name: str):
     """对单个服务做一次实际检测。"""
     if group == 'adult':
-        label = f'刮削源 · {name}'
+        label = _ADULT_SOURCE_LABELS.get(name, name)
         fn = lambda: _check_adult_source(name)
     else:
         entry = _REGISTRY.get((group, name))

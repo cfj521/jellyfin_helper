@@ -934,16 +934,14 @@
           </template>
 
           <p class="form-hint" style="margin-bottom: 12px">
-            按顺序尝试，第一个命中即返回。可拖动 / 上下调优先级，可自定义镜像 URL。
+            按顺序尝试，第一个命中即返回。可拖动 / 上下调优先级。镜像地址由代码常量管理，不在前端配置。
           </p>
 
           <SourcePool
             v-model="form.adult.sources"
             :all-keys="allSourceKeys"
             :labels="sourceLabels"
-            :default-base-urls="defaultBaseUrls"
             :min-items="1"
-            allow-base-url
           />
         </el-card>
 
@@ -1477,19 +1475,13 @@ const dirty = ref(false)
 let initialSnapshot = ''
 let watchStarted = false
 
+// 成人刮削源：UI 标签直接用域名（移除自定义镜像编辑，base_url 由后端常量决定）
 const sourceLabels = {
-  missav: 'MissAV',
-  javbus: 'JavBus',
-  javdb: 'JavDB',
-  javlibrary: 'JavLibrary',
-  avbase: 'AvBase',
-}
-const defaultBaseUrls = {
-  missav: 'https://missav.ai/cn',
-  javbus: 'https://www.javbus.com',
-  javdb: 'https://javdb.com',
-  javlibrary: 'https://www.javlibrary.com/cn',
-  avbase: 'https://www.avbase.net',
+  missav:     'missav.ai/cn/',
+  javbus:     'javbus.com',
+  javdb:      'javdb.com',
+  javlibrary: 'javlibrary.com/cn/',
+  avbase:     'avbase.net',
 }
 const allSourceKeys = Object.keys(sourceLabels)
 
@@ -1879,16 +1871,13 @@ const confirmSave = async () => {
 
   saving.value = true
   try {
-    // 清理 sources：去掉空 base_url 字段以保持 yaml 整洁
+    // 清理 sources：UI 不再支持自定义 base_url，保存时只保留 name + enabled
+    // 即便老 config.yaml 里残留 base_url 字段，下次保存也会被清掉（镜像地址由代码常量管理）
     const cleanedAdult = {
       ...form.adult,
       sources: form.adult.sources
         .filter(s => s.name)
-        .map(s => {
-          const out = { name: s.name, enabled: !!s.enabled }
-          if (s.base_url) out.base_url = s.base_url
-          return out
-        }),
+        .map(s => ({ name: s.name, enabled: !!s.enabled })),
       // 保存即视为"用户已确认过"
       auto_detect: false,
     }

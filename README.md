@@ -217,23 +217,27 @@ vite 自动读 `config.yaml` 的 `server.frontend_port`。
 | **mkvtoolnix (mkvpropedit)** | 修改 MKV 文件默认音轨 flag | 音轨管理仅返回建议，不实际写入 |
 | **unrar** 或 **bsdtar** | 解压 rar 格式字幕包 | rar 字幕包无法解压，zip/7z 不受影响 |
 
+> `bsdtar` 二者择一即可，rarfile 库会自动找能用的那个。Ubuntu 24.04 起 `unrar` 不在默认 `main` 源（需 enable `multiverse`），所以 **推荐装 `libarchive-tools`（提供 bsdtar）**，无需额外配置源，顺带能解 7z / iso / cab 等格式。
+
 安装：
 
 ```bash
-# Debian / Ubuntu
-sudo apt install ffmpeg mkvtoolnix unrar
+# Debian / Ubuntu —— 推荐 libarchive-tools，免开 multiverse
+sudo apt install ffmpeg mkvtoolnix libarchive-tools
+# 如果偏好 unrar（rar5 兼容性最佳，但需 multiverse 源）：
+# sudo add-apt-repository multiverse && sudo apt install unrar
 
-# macOS
+# macOS（自带 bsdtar，无需额外装）
 brew install ffmpeg mkvtoolnix
 
 # Windows (Chocolatey)
 choco install ffmpeg mkvtoolnix
 
-# Conda
-conda install -c conda-forge ffmpeg mkvtoolnix unrar
+# Conda（跨平台一键，bsdtar 由 libarchive 自带）
+conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 ```
 
-验证：命令行用 `ffprobe -version` / `mkvpropedit --version` / `unrar` 输出版本号即可。
+验证：命令行 `ffprobe -version` / `mkvpropedit --version` / `bsdtar --version` 输出版本号即可。
 也可以直接打开 **前端 → 配置 → 可用性检测**，本地环境列里一目了然哪个工具在 PATH 上。
 
 ---
