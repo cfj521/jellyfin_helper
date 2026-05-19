@@ -139,6 +139,15 @@
         </el-button>
         <!-- 常规操作（右侧）-->
         <div class="footer-actions">
+          <el-button
+            :icon="Document"
+            :loading="regeneratingNfo"
+            :disabled="!item?.id"
+            title="根据当前元数据重新生成 NFO 文件（写到视频同目录）"
+            @click="regenerateNfo"
+          >
+            重新生成 NFO
+          </el-button>
           <el-button @click="visible = false">取消</el-button>
           <el-button
             type="primary"
@@ -156,7 +165,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Delete } from '@element-plus/icons-vue'
+import { Upload, Delete, Document } from '@element-plus/icons-vue'
 import { adultApi, authedImgUrl } from '@/api'
 
 const props = defineProps({
@@ -174,6 +183,26 @@ const form = ref(null)
 const saving = ref(false)
 const uploading = ref(false)
 const clearing = ref(false)
+const regeneratingNfo = ref(false)
+
+// 重新生成 NFO：根据 DB 当前元数据（不重新刮）写 NFO 到视频同目录
+const regenerateNfo = async () => {
+  if (!props.item?.id) return
+  regeneratingNfo.value = true
+  try {
+    const r = await adultApi.regenerateNfo(props.item.id)
+    if (r?.data?.ok) {
+      ElMessage.success(`NFO 已生成: ${r.data.nfo_path || ''}`)
+      emit('saved')   // 通知父组件刷新（nfo_path 会变）
+    } else {
+      ElMessage.error('NFO 生成失败')
+    }
+  } catch (e) {
+    // axios 拦截器会弹错；这里只兜底
+  } finally {
+    regeneratingNfo.value = false
+  }
+}
 const coverPreviewError = ref(false)
 // item.id 变化导致 cache buster 变化，避免上传后浏览器还显示老缩略图
 const coverCacheBust = ref(Date.now())
