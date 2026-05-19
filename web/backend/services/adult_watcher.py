@@ -581,6 +581,18 @@ class AdultWatcher:
                         logger.warning(f"NFO 写入失败 {code}: {e}")
 
                 # ---- 短事务 2：回写 ----
+                # 资源完整性判定：cover 和 nfo 都写盘成功才算"完整刮削"
+                # 任一失败 → source 标 'partial'（保留 title/cover_url 等元数据，
+                # 让"修复识别错误"任务下次可识别这是个未完成条目，走轻补救路径）
+                assets_complete = bool(new_poster_path) and bool(new_nfo_path)
+                # final_source 完整：保留 'merged:javbus,...' 原值
+                # final_source partial：写成 'partial:javbus,...' —— 保留原源列表，
+                #   下次"修复识别错误"补救后能还原成 'merged:xxx'
+                orig_source = d.get('source') or ''
+                final_source = orig_source if assets_complete else (
+                    orig_source.replace('merged:', 'partial:') if orig_source.startswith('merged:')
+                    else 'partial:' + orig_source if orig_source else 'partial'
+                )
                 with SessionLocal() as db:
                     item = db.query(AdultItem).filter(AdultItem.id == item_id).first()
                     if not item:
@@ -593,7 +605,7 @@ class AdultWatcher:
                     item.tags = _json.dumps(d.get('tags') or [], ensure_ascii=False)
                     item.cover_url = d.get('cover_url')
                     item.rating = d.get('rating')
-                    item.source = d.get('source')
+                    item.source = final_source
                     if new_poster_path:
                         item.poster_path = new_poster_path
                     if new_nfo_path:

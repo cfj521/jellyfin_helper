@@ -1034,6 +1034,28 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                 file_path = item.file_path
                 existing_poster = item.poster_path
                 existing_nfo = item.nfo_path
+                item_source = item.source or ''
+                # partial 分支：元数据已刮但 cover/nfo 写盘失败 → 不调外部 HTTP API，
+                # 直接用 DB 已有的数据补缺失资源；恢复成功后 source 提升回 'merged:xxx'
+                is_partial = item_source.startswith('partial')
+                partial_data = None
+                if is_partial:
+                    # 'partial:javbus,javdb' → orig_sources='javbus,javdb'
+                    # 'partial' → orig_sources='' （之前是 NULL/pending/not_found 时降级）
+                    orig_sources = item_source.split(':', 1)[1] if ':' in item_source else ''
+                    partial_data = {
+                        'code': item.code,
+                        'title': item.title,
+                        'release_date': item.release_date,
+                        'studio': item.studio,
+                        'director': item.director,
+                        'actors': json.loads(item.actors or '[]'),
+                        'tags': json.loads(item.tags or '[]'),
+                        'cover_url': item.cover_url,
+                        'rating': item.rating,
+                        # 补救成功后会用这个还原 merged:xxx；orig_sources 空时给个兜底
+                        'source': f'merged:{orig_sources}' if orig_sources else 'merged:unknown',
+                    }
 
             _log_attach(task_id, sub_key=code)
 
@@ -1046,28 +1068,32 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
 
             # ---- 慢操作（HTTP 刮削 / 下载 / 写文件）：不持有 DB 连接 ----
             try:
-                result = manager.scrape(code)
-                if not result:
-                    not_found += 1
-                    # 维护 scrape_attempts；达到阈值进 7 天 cooldown（不再让 watcher 反复打外站）
-                    cooldown_set = False
-                    with SessionLocal() as db:
-                        it = db.query(AdultItem).filter(AdultItem.id == item_id).first()
-                        if it:
-                            it.scrape_attempts = (it.scrape_attempts or 0) + 1
-                            it.last_scrape_at = datetime.utcnow()
-                            it.source = 'not_found'
-                            if it.scrape_attempts >= COOLDOWN_AFTER_FAILURES:
-                                it.cooldown_until = datetime.utcnow() + timedelta(days=COOLDOWN_DAYS)
-                                cooldown_set = True
-                            db.commit()
-                    details.append({
-                        "code": code, "status": "not_found",
-                        "auto_cooldown": cooldown_set,
-                    })
-                    continue
-
-                d = result.to_dict()
+                if is_partial and partial_data:
+                    # partial 补救：复用 DB 已有元数据，跳过外部 HTTP API
+                    logger.info(f"[{code}] partial 补救，仅补缺失资源（不调外部 API）")
+                    d = partial_data
+                else:
+                    result = manager.scrape(code)
+                    if not result:
+                        not_found += 1
+                        # 维护 scrape_attempts；达到阈值进 7 天 cooldown
+                        cooldown_set = False
+                        with SessionLocal() as db:
+                            it = db.query(AdultItem).filter(AdultItem.id == item_id).first()
+                            if it:
+                                it.scrape_attempts = (it.scrape_attempts or 0) + 1
+                                it.last_scrape_at = datetime.utcnow()
+                                it.source = 'not_found'
+                                if it.scrape_attempts >= COOLDOWN_AFTER_FAILURES:
+                                    it.cooldown_until = datetime.utcnow() + timedelta(days=COOLDOWN_DAYS)
+                                    cooldown_set = True
+                                db.commit()
+                        details.append({
+                            "code": code, "status": "not_found",
+                            "auto_cooldown": cooldown_set,
+                        })
+                        continue
+                    d = result.to_dict()
 
                 # 封面下载：DB 已记录 poster_path 且文件存在 → 跳过
                 new_poster_path: Optional[str] = None
@@ -1097,6 +1123,24 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                         except Exception as e:
                             logger.warning(f"NFO 写入失败 {code}: {e}")
 
+                # 资源完整性判定（atomic source 状态）：
+                #   - 本次下载/写入成功（new_*）或 之前已存在且文件可访问 → 算 ok
+                #   - user 主动不要（download_cover=False / write_nfo=False）→ 不强制
+                # 任一不 ok → source 标 'partial'，让"修复识别错误"下次轻补救
+                cover_ok = (not download_cover) or bool(new_poster_path) or (
+                    bool(existing_poster) and Path(existing_poster).exists()
+                )
+                nfo_ok = (not write_nfo) or bool(new_nfo_path) or (
+                    bool(existing_nfo) and Path(existing_nfo).exists()
+                )
+                assets_complete = cover_ok and nfo_ok
+                # final_source 同 watcher：保留原 sources 列表，方便下次补救还原
+                orig_source = d.get('source') or ''
+                final_source = orig_source if assets_complete else (
+                    orig_source.replace('merged:', 'partial:') if orig_source.startswith('merged:')
+                    else 'partial:' + orig_source if orig_source else 'partial'
+                )
+
                 # ---- 短事务 2：把抓到的元数据写回 ----
                 with SessionLocal() as db:
                     item = db.query(AdultItem).filter(AdultItem.id == item_id).first()
@@ -1110,7 +1154,7 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                     item.tags = json.dumps(d.get('tags') or [], ensure_ascii=False)
                     item.cover_url = d.get('cover_url')
                     item.rating = d.get('rating')
-                    item.source = d.get('source')
+                    item.source = final_source
                     if new_poster_path:
                         item.poster_path = new_poster_path
                     if new_nfo_path:
@@ -1335,17 +1379,77 @@ def list_actors(
 
 @router.get("/items/{item_id}/poster")
 def get_item_poster(item_id: int, db: Session = Depends(get_db)):
-    """返回番号海报图片 — 仅本地副本（DB.poster_path）。文件不存在就 404。"""
-    from fastapi.responses import FileResponse
+    """返回番号海报图片。
+
+    优先顺序：
+      1. 本地副本（DB.poster_path 指向的文件存在）
+      2. 兜底代理远端 cover_url（带反盗链 Referer 模拟浏览器拉，stream 返给前端）
+         —— 让"刮过但还没下载封面"的条目在 UI 上也能显示
+      3. 都没有 → 404
+    """
+    from fastapi.responses import FileResponse, StreamingResponse
     item = db.query(AdultItem).filter(AdultItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
-    if not item.poster_path:
-        raise HTTPException(status_code=404, detail="本地没有海报")
-    p = _local_path(item.poster_path)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="海报文件不存在")
-    return FileResponse(p, media_type='image/jpeg')
+
+    # ① 本地副本
+    if item.poster_path:
+        p = _local_path(item.poster_path)
+        if p.exists():
+            return FileResponse(p, media_type='image/jpeg')
+
+    # ② 远端代理（cover_url）
+    if item.cover_url:
+        return _proxy_cover_url(item.cover_url)
+
+    raise HTTPException(status_code=404, detail="本地没有海报且无远端 cover_url")
+
+
+def _proxy_cover_url(cover_url: str):
+    """代理远端封面 URL。各 JAV 图床都做反盗链，Referer 设为 URL 同 origin 通用。"""
+    from urllib.parse import urlparse
+    from fastapi.responses import StreamingResponse
+    try:
+        parsed = urlparse(cover_url)
+    except Exception:
+        raise HTTPException(status_code=502, detail="非法的 cover_url")
+    if parsed.scheme not in ('http', 'https'):
+        raise HTTPException(status_code=502, detail="cover_url 协议不支持")
+
+    headers = {
+        'Referer': f'{parsed.scheme}://{parsed.netloc}/',
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    }
+    try:
+        upstream = requests.get(cover_url, headers=headers, stream=True, timeout=15)
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f'拉取 cover 失败: {e}')
+
+    if upstream.status_code != 200:
+        raise HTTPException(
+            status_code=upstream.status_code,
+            detail=f'上游 {upstream.status_code}',
+        )
+
+    media_type = upstream.headers.get('Content-Type', 'image/jpeg')
+
+    def _iter():
+        try:
+            for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return StreamingResponse(
+        _iter(),
+        media_type=media_type,
+        headers={'Cache-Control': 'public, max-age=86400'},
+    )
 
 
 @router.post("/items/{item_id}/nfo")
@@ -2284,6 +2388,8 @@ def repair_metadata(
         query = query.filter(cond)
 
     # 未刮成功的捞起来；跳过用户主动 excluded（永久）和自动 cooldown 未到期的
+    # 'partial' 状态：元数据已刮但 cover/nfo 写盘失败 —— 也算"识别未完成"，
+    # 走 partial 分支只补缺的资源，不重新调外部 HTTP API（节省配额）
     from sqlalchemy import or_
     query = query.filter(
         AdultItem.excluded == False,  # noqa: E712
@@ -2295,6 +2401,7 @@ def repair_metadata(
             AdultItem.title == None,  # noqa: E711
             AdultItem.source == None,  # noqa: E711
             AdultItem.source.in_(['pending', 'not_found']),
+            AdultItem.source.like('partial%'),  # 'partial' 或 'partial:javbus,...'
         ),
     )
     candidates = [i.id for i in query.all()]
