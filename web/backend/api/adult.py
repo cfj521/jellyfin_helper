@@ -1035,12 +1035,32 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                 existing_poster = item.poster_path
                 existing_nfo = item.nfo_path
                 item_source = item.source or ''
-                # partial 分支：元数据已刮但 cover/nfo 写盘失败 → 不调外部 HTTP API，
-                # 直接用 DB 已有的数据补缺失资源；恢复成功后 source 提升回 'merged:xxx'
+                # partial 分支：元数据已刮但 cover/nfo 缺（写盘失败 / 物理文件被外部删）
+                # → 不调外部 HTTP API，直接用 DB 已有的数据补缺失资源；恢复成功后
+                # source 提升回 'merged:xxx'
                 is_partial = item_source.startswith('partial')
+                # 物理 / 字段校验：source 看起来完整但实际不完整 → 也走 partial
+                # 跟前端 gridHealthState 判定一致：
+                #   missingCover = (poster_path 字段空 AND cover_url 空) OR poster 物理文件缺
+                #   missingNfo   = nfo_path 字段空 OR nfo 物理文件缺
+                if not is_partial and item_source.startswith('merged') and item.title:
+                    poster_field_empty = not existing_poster and not item.cover_url
+                    nfo_field_empty = not existing_nfo
+                    poster_file_lost = bool(existing_poster) and not _local_path(existing_poster).exists()
+                    nfo_file_lost = bool(existing_nfo) and not _local_path(existing_nfo).exists()
+                    cover_bad = poster_field_empty or poster_file_lost
+                    nfo_bad = nfo_field_empty or nfo_file_lost
+                    if cover_bad or nfo_bad:
+                        is_partial = True
+                        logger.info(
+                            f"[{item.code}] DB 标完整但实际不完整 "
+                            f"(cover_bad={cover_bad}, nfo_bad={nfo_bad}) → 走轻补救"
+                        )
+
                 partial_data = None
                 if is_partial:
                     # 'partial:javbus,javdb' → orig_sources='javbus,javdb'
+                    # 'merged:javbus,javdb' → orig_sources='javbus,javdb'（物理缺场景）
                     # 'partial' → orig_sources='' （之前是 NULL/pending/not_found 时降级）
                     orig_sources = item_source.split(':', 1)[1] if ':' in item_source else ''
                     partial_data = {
@@ -2380,23 +2400,24 @@ def repair_metadata(
 
     dry_run=True 时：只算 candidates 数返回，不创建任务、不实际刮削。
     """
-    query = db.query(AdultItem).filter(AdultItem.code != None)  # noqa: E711
-    if library_id:
-        cond = _library_path_filter(library_id)
-        if cond is None:
-            raise HTTPException(status_code=400, detail="无法获取库路径")
-        query = query.filter(cond)
+    from sqlalchemy import or_, not_
 
-    # 未刮成功的捞起来；跳过用户主动 excluded（永久）和自动 cooldown 未到期的
-    # 'partial' 状态：元数据已刮但 cover/nfo 写盘失败 —— 也算"识别未完成"，
-    # 走 partial 分支只补缺的资源，不重新调外部 HTTP API（节省配额）
-    from sqlalchemy import or_
-    query = query.filter(
+    base = db.query(AdultItem).filter(
+        AdultItem.code != None,  # noqa: E711
         AdultItem.excluded == False,  # noqa: E712
         or_(
             AdultItem.cooldown_until == None,  # noqa: E711
             AdultItem.cooldown_until < datetime.utcnow(),
         ),
+    )
+    if library_id:
+        cond = _library_path_filter(library_id)
+        if cond is None:
+            raise HTTPException(status_code=400, detail="无法获取库路径")
+        base = base.filter(cond)
+
+    # 阶段 1：DB 字段层面"未完成"（title/source 字段标识）
+    stage1 = base.filter(
         or_(
             AdultItem.title == None,  # noqa: E711
             AdultItem.source == None,  # noqa: E711
@@ -2404,7 +2425,46 @@ def repair_metadata(
             AdultItem.source.like('partial%'),  # 'partial' 或 'partial:javbus,...'
         ),
     )
-    candidates = [i.id for i in query.all()]
+    candidate_ids = {i.id for i in stage1.all()}
+
+    # 阶段 2：DB 字段层面"健康度 yellow"（跟前端 gridHealthState 判定一致）
+    # source 看起来完整但 path 字段空 —— 即 BMW-034 这种历史遗留数据
+    #   missingCover = (poster_path 空 AND cover_url 空)  — 跟前端一致
+    #   missingNfo   = nfo_path 空
+    from sqlalchemy import and_
+    stage2_q = base.filter(
+        AdultItem.source != None,  # noqa: E711
+        AdultItem.source.notin_(['pending', 'not_found']),
+        not_(AdultItem.source.like('partial%')),
+        or_(
+            and_(
+                AdultItem.poster_path == None,  # noqa: E711
+                AdultItem.cover_url == None,    # noqa: E711
+            ),
+            AdultItem.nfo_path == None,  # noqa: E711
+        ),
+    )
+    for it in stage2_q.all():
+        if it.id not in candidate_ids:
+            candidate_ids.add(it.id)
+
+    # 阶段 3：DB 看起来完整但物理文件被外部删 → 也纳入
+    # 只 stat path 字段非空的（字段空已被阶段 2 cover）
+    stage3_q = base.filter(
+        AdultItem.source != None,  # noqa: E711
+        AdultItem.source.notin_(['pending', 'not_found']),
+        not_(AdultItem.source.like('partial%')),
+        or_(AdultItem.poster_path != None, AdultItem.nfo_path != None),  # noqa: E711
+    )
+    for it in stage3_q.all():
+        if it.id in candidate_ids:
+            continue
+        poster_lost = bool(it.poster_path) and not _local_path(it.poster_path).exists()
+        nfo_lost = bool(it.nfo_path) and not _local_path(it.nfo_path).exists()
+        if poster_lost or nfo_lost:
+            candidate_ids.add(it.id)
+
+    candidates = list(candidate_ids)
 
     if not candidates:
         return {"task_id": None, "status": "noop", "count": 0, "dry_run": dry_run}
