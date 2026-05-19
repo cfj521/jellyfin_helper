@@ -157,7 +157,7 @@
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, Delete } from '@element-plus/icons-vue'
-import { adultApi } from '@/api'
+import { adultApi, authedImgUrl } from '@/api'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -210,7 +210,7 @@ const coverPreviewSrc = computed(() => {
     return url
   }
   if (props.item?.id && props.item?.poster_path) {
-    return `/api/adult/items/${props.item.id}/poster?v=${coverCacheBust.value}`
+    return authedImgUrl(`/api/adult/items/${props.item.id}/poster?v=${coverCacheBust.value}`)
   }
   if (url) return url   // 没本地但有 URL，显示 URL
   return ''

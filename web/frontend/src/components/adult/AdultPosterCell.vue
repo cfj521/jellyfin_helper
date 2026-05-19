@@ -32,6 +32,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { authedImgUrl } from '@/api'
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -53,7 +54,8 @@ const src = computed(() => {
   if (props.item.image_url) return props.item.image_url
   if (props.item.id) {
     const base = `/api/adult/items/${props.item.id}/poster`
-    return cacheKey.value ? `${base}?v=${cacheKey.value}` : base
+    const url = cacheKey.value ? `${base}?v=${cacheKey.value}` : base
+    return authedImgUrl(url)
   }
   return ''
 })
