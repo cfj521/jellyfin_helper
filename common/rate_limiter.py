@@ -32,7 +32,7 @@ Douban          │ 无公开（403/429/503 反爬）     │ 5.0s            �
 Trakt           │ 未明确（低频可用）             │ 1.0s            │ ——                  │ 60s  / ——
 AniList         │ 90 req/min                     │ 1.0s            │ ——                  │ 60s  / ——
 Wikidata        │ 未明确（要求合规 UA）          │ 1.0s            │ 15/min 600/h 3000/d │ 60s  / 30min
-Adult Scraper   │ 各站独立（多为 Cloudflare 拦） │ 3.0s            │ 15/min 600/h 3000/d │ 180s / 1h
+Adult Scraper   │ 各站独立（多为 Cloudflare 拦） │ 3.0s            │ 15/min 600/h 3000/d │ 180s / 30min
 LLM             │ 取决于 provider (qwen/openai…) │ 1.0s            │ ——                  │ 60s  / ——
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -129,7 +129,7 @@ ANILIST_PAUSE: float = 60.0
 ADULT_SCRAPER_DELAY: float = 3.0
 ADULT_SCRAPER_BATCH_QUOTA: Tuple[int, int, int] = (15, 600, 3000)
 ADULT_SCRAPER_PAUSE: float = 180.0
-ADULT_SCRAPER_BATCH_PAUSE: float = 3600.0  # 1 h
+ADULT_SCRAPER_BATCH_PAUSE: float = 1800.0  # 30 min
 
 # ── LLM (qwen / deepseek / 本地) ── 限速取决于供应商，这里给个保底
 LLM_DELAY: float = 1.0
@@ -460,7 +460,10 @@ class QuotaGuard:
 
         waited = 0.0
 
-        # ① 等待已有暂停
+        # ① 等待已有暂停。分段 sleep（每段最多 5s）每段醒来重读 state，让
+        # quota_guard.reset() / 服务器端外部恢复 能在 ≤ 5s 内被感知 ——
+        # Python time.sleep() 不可中断，一次性长 sleep 会让 worker 死睡到原 deadline，
+        # 即使用户在 UI 手动重置也唤不醒。
         with self._lock:
             state = self._get_state(source)
             pause_left = max(0.0, state.paused_until - time.time())
@@ -469,8 +472,15 @@ class QuotaGuard:
             if not blocking:
                 return pause_left
             logger.debug(f"[QuotaGuard] {source} 暂停中，等待 {pause_left:.1f}s ...")
-            time.sleep(pause_left)
-            waited += pause_left
+            while True:
+                with self._lock:
+                    state = self._get_state(source)
+                    pause_left = max(0.0, state.paused_until - time.time())
+                if pause_left <= 0:
+                    break  # 已被 reset 或自然到期
+                chunk = min(pause_left, 5.0)
+                time.sleep(chunk)
+                waited += chunk
 
         # ② batch 配额检查（只在 batch=True 时启用配额暂停）
         # 关键：检查窗口看的是"所有"请求时间戳（不只是 batch 调用的）。否则
@@ -498,8 +508,16 @@ class QuotaGuard:
                 self._persist_save(source, time.time() + quota_pause)
                 if not blocking:
                     return quota_pause
-                time.sleep(quota_pause)
-                waited += quota_pause
+                # 同 ① —— 分段 sleep 让 reset 可感知
+                while True:
+                    with self._lock:
+                        state = self._get_state(source)
+                        pause_left = max(0.0, state.paused_until - time.time())
+                    if pause_left <= 0:
+                        break
+                    chunk = min(pause_left, 5.0)
+                    time.sleep(chunk)
+                    waited += chunk
 
         # ③ 记录请求时间戳（不论 batch / non-batch 都记，对齐服务器侧滑窗）
         with self._lock:
