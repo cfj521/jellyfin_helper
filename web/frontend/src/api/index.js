@@ -11,6 +11,17 @@ export const api = axios.create({
   paramsSerializer: { indexes: null },
 })
 
+// 给 <img src="..."> 这种浏览器原生发起的请求拼 JWT token
+// 原生 img/video/audio 不会自动带 Authorization header，但 auth_middleware 支持
+// ?token=xxx query 兜底（本来给 SSE EventSource 用）。这里复用同一个兜底。
+// 注意：URL 里带 token 会出现在浏览器 referer / history 里，仅用于受信任的同源资源（img 等）
+export const authedImgUrl = (path) => {
+  const token = localStorage.getItem('token') || ''
+  if (!token) return path
+  const sep = path.includes('?') ? '&' : '?'
+  return `${path}${sep}token=${encodeURIComponent(token)}`
+}
+
 // 请求拦截器：自动附加 JWT token
 api.interceptors.request.use(
   config => {

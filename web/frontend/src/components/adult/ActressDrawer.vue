@@ -106,7 +106,7 @@
             >
               <el-image
                 v-if="w.cover_url"
-                :src="`/api/adult/items/${w.id}/poster`"
+                :src="authedImgUrl(`/api/adult/items/${w.id}/poster`)"
                 fit="cover"
                 lazy
                 class="work-cover"
@@ -140,7 +140,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { Close, Link, Top, Loading } from '@element-plus/icons-vue'
-import { adultApi } from '@/api'
+import { adultApi, authedImgUrl } from '@/api'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
