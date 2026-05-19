@@ -53,33 +53,36 @@
           </template>
         </el-table-column>
 
-        <!-- 第二列：按 tab 过滤动态调整 -->
-        <!-- unrecognized：番号一直是 NULL，无意义 → 隐藏整列 -->
-        <!-- scraped：刮削后才有 title，专门展示刮削标题 -->
-        <!-- 其它：番号 -->
-        <el-table-column
-          v-if="filterStatus !== 'unrecognized'"
-          :label="secondColLabel"
-          :min-width="filterStatus === 'scraped' ? 240 : 140"
-          :width="filterStatus === 'scraped' ? undefined : 140"
-          show-overflow-tooltip
-        >
+        <!-- 番号 -->
+        <el-table-column label="番号" width="140">
           <template #default="{ row }">
-            <span v-if="filterStatus === 'scraped'">
-              <span v-if="row.title">{{ row.title }}</span>
-              <span v-else-if="row.error" class="error-msg">{{ row.error }}</span>
-              <span v-else class="muted">—</span>
-            </span>
-            <template v-else>
-              <span v-if="row.code" class="code">{{ row.code }}</span>
-              <span v-else class="muted">—</span>
-            </template>
+            <span v-if="row.code" class="code" :title="row.name">{{ row.code }}</span>
+            <span v-else class="muted" :title="row.name">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="文件名" min-width="320">
+        <!-- 标题（scraped 状态才有；其他 status 显示 — 或 error） -->
+        <el-table-column label="标题" min-width="320" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="filename" :title="row.name">{{ row.name }}</span>
+            <span v-if="row.title">{{ row.title }}</span>
+            <span v-else-if="row.error" class="error-msg">{{ row.error }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <!-- 源（scraped 状态记录命中的 scraper 列表，可能多值） -->
+        <el-table-column label="源" min-width="180">
+          <template #default="{ row }">
+            <template v-if="row.sources && row.sources.length">
+              <el-tag
+                v-for="s in row.sources"
+                :key="s"
+                size="small"
+                effect="plain"
+                style="margin-right: 4px"
+              >{{ s }}</el-tag>
+            </template>
+            <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
@@ -127,12 +130,6 @@ const STATUS_META = {
   scrape_not_found: { label: '刮削无果', color: '#f59e0b', icon: '🔍' },
   scrape_failed:    { label: '刮削失败', color: '#ef4444', icon: '⚠' },
 }
-
-// 第二列 label：跟 filterStatus 联动
-const secondColLabel = computed(() => {
-  if (filterStatus.value === 'scraped') return '刮削标题'
-  return '番号'
-})
 
 const statusInfo = (s) => STATUS_META[s] || { label: s || '?', color: '#64748b', icon: '·' }
 

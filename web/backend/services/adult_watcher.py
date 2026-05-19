@@ -605,11 +605,21 @@ class AdultWatcher:
                     db.commit()
                     title = item.title
 
+                # 解析 sources：result.source 形如 'merged:javbus,javdb' 或单源 'javbus'
+                raw_source = d.get('source') or ''
+                sources_list = (
+                    raw_source[len('merged:'):].split(',')
+                    if raw_source.startswith('merged:')
+                    else ([raw_source] if raw_source else [])
+                )
+                sources_list = [s.strip() for s in sources_list if s.strip()]
+
                 ok += 1
                 with SessionLocal() as db:
                     self._append_log(db, task_id, stats, {
                         "name": Path(file_path).name if file_path else code,
                         "status": "scraped", "code": code, "title": title,
+                        "sources": sources_list,
                     })
             except Exception as e:
                 logger.warning(f"刮削异常 {code}: {e}")
