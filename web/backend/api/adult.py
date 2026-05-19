@@ -1021,7 +1021,7 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                         "failed": failed,
                         "not_found": not_found,
                         "stopped_by_shutdown": True,
-                        "details": details[:200],
+                        "details": details,
                     }, success=False, final_message=f"已处理 {i}/{total}，进程关闭信号触发提前退出")
                 return
 
@@ -1205,7 +1205,7 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
                 "failed": failed,
                 "not_found": not_found,
                 "jellyfin_refreshed": refreshed,
-                "details": details[:200],
+                "details": details,
             })
 
     except Exception as e:
@@ -2210,7 +2210,7 @@ def _run_repair_covers(task_id: int, item_ids: List[int]):
                 complete_task(db, task_id, {
                     "total": total, "success": success, "failed": failed,
                     "stopped_by_shutdown": True,
-                    "details": details[:300],
+                    "details": details,
                 }, success=False, final_message=f"已处理 {idx}/{total}，进程关闭信号触发提前退出")
             return
 
@@ -2258,7 +2258,7 @@ def _run_repair_covers(task_id: int, item_ids: List[int]):
     with SessionLocal() as db:
         complete_task(db, task_id, {
             "total": total, "success": success, "failed": failed,
-            "details": details[:300],
+            "details": details,
         })
 
 

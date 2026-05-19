@@ -427,7 +427,7 @@ def run_cleanup_samples(
                     'skipped_count': len(skipped),
                     # 注意 partial 期间还有 _library_id 内部字段，结尾会清掉，
                     # 但 partial 状态下让前端看到没影响（前端不渲染未知字段）
-                    'details': sample_results[:500],
+                    'details': sample_results,
                     'dir_details': [],
                 } if should_emit else None),
             )
@@ -532,8 +532,8 @@ def run_cleanup_samples(
             'skipped_count': len(skipped),
             'errors': [r for r in sample_results + dir_results
                        if r.get('error') and r['error'] != '(预览模式)'],
-            'details': sample_results[:500],
-            'dir_details': dir_results[:200],
+            'details': sample_results,
+            'dir_details': dir_results,
             'libraries_refreshed': refreshed,
         })
 
@@ -733,7 +733,7 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                     'skipped': skipped[:500],
                     'fixed_count': fixed_count,
                     'no_match_count': no_match_count,
-                    'details': results[:500],
+                    'details': results,
                 } if should_emit else None),
             )
 
@@ -827,7 +827,7 @@ def run_auto_identify(task_id: int, target: Dict, dry_run: bool, skip_refresh: b
                 'fixed_count': fixed_count,
                 'no_match_count': no_match_count,
                 'errors': [r for r in results if r.get('error') and r['error'] != '(预览模式)'],
-                'details': results[:500],
+                'details': results,
                 'libraries_refreshed': refreshed,
             })
 
@@ -922,7 +922,7 @@ def run_normalize_paths(
                     'nested_count': len(results),
                     'moved_count': moved_count,
                     'skipped_count': idx - len(results),
-                    'details': results[:500],
+                    'details': results,
                 } if should_emit else None),
             )
 
@@ -996,7 +996,7 @@ def run_normalize_paths(
             'moved_count': moved_count,
             'skipped_count': total - len(results),
             'errors': [r for r in results if r.get('error') and r['error'] != '(预览模式)'],
-            'details': results[:500],
+            'details': results,
             'libraries_refreshed': refreshed,
         })
 
