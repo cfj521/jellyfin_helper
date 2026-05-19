@@ -248,7 +248,7 @@ def list_items(
 
     # 派生字段过滤「仅看健康有问题」：等价于前端 gridHealthState != 'green'/'excluded'/'cooldown'
     # 即不是完全完整的条目（缺 code / 缺 title / 没刮削 / cover 或 nfo 本地缺失）
-    # 用 SQL OR 表达；isnot(True) 在 PG 上是 'IS NOT TRUE'，包含 NULL+False
+    # 「本地落地」的判定：SQL 层只能看 path 是否 NULL（文件实际存在与否前端按需检查）
     if has_health_issue:
         from sqlalchemy import or_
         query = query.filter(or_(
@@ -256,8 +256,8 @@ def list_items(
             AdultItem.title.is_(None),
             AdultItem.source.is_(None),
             AdultItem.source.in_(['not_found', 'pending']),
-            AdultItem.cover_local_ok.isnot(True),
-            AdultItem.nfo_local_ok.isnot(True),
+            AdultItem.poster_path.is_(None),    # 封面没落地
+            AdultItem.nfo_path.is_(None),       # NFO 没落地
         ))
 
     # 排序下推：之前 hard-code 按 code 排，前端切换无效；现在支持 code/title/release_date
