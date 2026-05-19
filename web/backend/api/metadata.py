@@ -534,7 +534,7 @@ def run_actor_fix(
                         "no_image": no_image_count,
                         "skipped": skipped_count,
                         "scan_only": scan_only,
-                        "details": details[:500],
+                        "details": details,
                     } if should_emit else None),
                 )
 
@@ -650,7 +650,7 @@ def run_actor_fix(
                 "skipped": skipped_count,
                 "scan_only": scan_only,
                 "jellyfin_refreshed": refreshed,
-                "details": details[:500],  # 详情页用，最多保留 500 条
+                "details": details,  # 详情页用，最多保留 500 条
             })
 
     except Exception as e:
@@ -1323,7 +1323,7 @@ def run_poster_fix(
                     "failed": failed,
                     "not_found": not_found,
                     "scan_only": scan_only,
-                    "details": details[:300],
+                    "details": details,
                 } if should_emit else None),
             )
 
@@ -1364,7 +1364,7 @@ def run_poster_fix(
                 "not_found": not_found,
                 "scan_only": scan_only,
                 "jellyfin_refreshed": refreshed,
-                "details": details[:300],
+                "details": details,
             })
 
     except Exception as e:
@@ -1665,7 +1665,7 @@ def run_episode_still_fix(
                             "skipped": skipped_count,
                             "failed": failed_count,
                             "scan_only": scan_only,
-                            "details": details[:500],
+                            "details": details,
                         },
                     )
 
@@ -1742,7 +1742,7 @@ def run_episode_still_fix(
                 "skipped": skipped_count,
                 "failed": failed_count,
                 "scan_only": scan_only,
-                "details": details[:500],
+                "details": details,
             })
 
     except Exception as e:

@@ -589,7 +589,7 @@ def run_subtitle_rename(
                             'failed': len(all_results) - success_so_far,
                             'execute': execute,
                             'paths_processed': _idx,
-                            'details': all_results[:300],
+                            'details': all_results,
                         },
                     )
 
@@ -664,7 +664,7 @@ def run_subtitle_rename(
                     "execute": execute,
                     "paths_processed": len(paths),
                     "jellyfin_refreshed": refreshed,
-                    "details": all_results[:300],
+                    "details": all_results,
                 },
                 final_message=final_msg,
             )
@@ -798,7 +798,7 @@ def run_subtitle_download(
                 "failed": downloader.stats['failed'],
                 "skipped": downloader.stats['skipped'],
                 "dry_run": dry_run,
-                "details": details[:500],  # 保留前 500 条
+                "details": details,
             })
 
     except ValueError as e:
