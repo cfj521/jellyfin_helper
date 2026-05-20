@@ -45,6 +45,15 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src')
     }
   },
+  // 用 Sass 现代 JS API（默认还是 legacy，会持续抛 [legacy-js-api] 警告）。
+  // 现代 API 在 sass 1.65+ 起可用，本项目 sass ^1.69 兼容；且无任何 @import 语法依赖，
+  // 切换不会破坏现有样式（如需重启 dev 服后生效）。
+  // 'modern-compiler' 需要装 sass-embedded 包性能更好；'modern' 走自带 JS API 零新依赖
+  css: {
+    preprocessorOptions: {
+      scss: { api: 'modern' },
+    },
+  },
   server: {
     port: ports.frontend,
     proxy: {
