@@ -164,6 +164,7 @@ def push_download(
         stop_condition='MetadataReceived',
     )
     if not ok:
+        logger.error(f"qB 推送失败: title={request.title!r} src={src_hint!r} category={request.category!r} save_path={save_path!r}")
         raise HTTPException(status_code=500, detail="qBittorrent 推送失败（检查登录或种子链接）")
 
     # 拿到 hash —— magnet 里直接抠
@@ -463,3 +464,68 @@ def set_speed_limit(request: SpeedLimitRequest):
 def toggle_alt_speed():
     logger.info("/transfer-info/toggle-alt-speed: 切换备用限速")
     return {"ok": _qb().toggle_alt_speed_limits()}
+
+
+# ---------- 下载日志（给设置页"日志"tab 用） ----------
+
+_PHASE_LABEL = {
+    'analyzing': '分析中',
+    'dispatch_queued': '等待下载',
+    'downloading': '下载中',
+    'download_done': '下载完成',
+    'copying': '复制中',
+    'organizing': '整理中',
+    'jellyfin_recognizing': '等待入库',
+    'jellyfin_recognize_done': '已入库',
+    'subtitle_aligning': '字幕对齐',
+    'subtitle_fetching': '抓字幕',
+    'audio_track_order_adjusting': '调音轨',
+    'all_jobs_done': '全部完成',
+    'cleaned': '已清理',
+    'dismissed': '已驳回',
+}
+
+_STATUS_LABEL = {
+    'running': '进行中',
+    'succeeded': '成功',
+    'failed': '失败',
+    'warned': '有警告',
+    'skipped': '已跳过',
+    'needs_review': '待审核',
+    'metadata_pending': '等元数据',
+    'stalled': '停滞',
+    'paused': '已暂停',
+}
+
+
+@router.get("/logs")
+def download_logs(
+    limit: int = 100,
+    phase_status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """下载流水线日志：从 dispatch_map 拉取最近记录，按更新时间倒序。"""
+    from web.backend.database import DownloadDispatchMap
+
+    q = db.query(DownloadDispatchMap).order_by(DownloadDispatchMap.updated_at.desc())
+    if phase_status and phase_status != 'all':
+        q = q.filter(DownloadDispatchMap.phase_status == phase_status)
+    rows = q.limit(min(limit, 500)).all()
+
+    items = []
+    for r in rows:
+        items.append({
+            'torrent_hash': r.torrent_hash,
+            'title': r.title or '',
+            'media_type': r.media_type or '',
+            'phase': r.phase or '',
+            'phase_label': _PHASE_LABEL.get(r.phase, r.phase or ''),
+            'phase_status': r.phase_status or '',
+            'status_label': _STATUS_LABEL.get(r.phase_status, r.phase_status or ''),
+            'status_message': r.status_message or '',
+            'error_log': r.error_log or '',
+            'created_at': r.created_at.isoformat() if r.created_at else None,
+            'updated_at': r.updated_at.isoformat() if r.updated_at else None,
+        })
+
+    return {'items': items, 'count': len(items)}

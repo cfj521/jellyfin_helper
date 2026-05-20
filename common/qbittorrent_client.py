@@ -104,7 +104,10 @@ class QBittorrentClient:
                 timeout=self.timeout,
             )
             r.raise_for_status()
-            return r.text.strip().lower() == 'ok.'
+            ok = r.text.strip().lower() == 'ok.'
+            if not ok:
+                logger.error(f"qB 添加种子被拒: HTTP {r.status_code}, body={r.text.strip()!r}")
+            return ok
         except requests.exceptions.RequestException as e:
             logger.error(f"添加种子失败: {e}")
             return False

@@ -488,6 +488,7 @@ export const logsApi = {
   getLevel: () => api.get('/api/logs/level'),
   setLevel: (level) => api.post('/api/logs/level', { level }),
   files: () => api.get('/api/logs/files'),
+  downloadLogs: (params = {}) => api.get('/api/downloadpipeline/logs', { params }),
 }
 
 // 可用性检测 API

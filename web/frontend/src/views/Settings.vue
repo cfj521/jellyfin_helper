@@ -1274,7 +1274,14 @@
           </div>
         </template>
 
-        <el-card shadow="never" class="cfg-card">
+        <!-- 子 tab 切换：后端日志 / 下载日志 -->
+        <el-radio-group v-model="logsSubTab" size="small" style="margin-bottom: 16px">
+          <el-radio-button value="backend">后端日志</el-radio-button>
+          <el-radio-button value="download">下载日志</el-radio-button>
+        </el-radio-group>
+
+        <!-- ---- 后端日志 ---- -->
+        <el-card v-show="logsSubTab === 'backend'" shadow="never" class="cfg-card">
           <template #header>
             <div class="cfg-card-head">
               <span class="badge logs">LOG</span>
@@ -1328,6 +1335,86 @@
           </div>
 
           <pre ref="logsViewer" class="logs-viewer" v-loading="logsLoading">{{ logsContent || '（无日志）' }}</pre>
+        </el-card>
+
+        <!-- ---- 下载日志 ---- -->
+        <el-card v-show="logsSubTab === 'download'" shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge logs">DL</span>
+              <span>下载流水线日志</span>
+              <el-tag size="small" type="info" effect="plain">
+                {{ dlLogsData.length }} 条
+              </el-tag>
+            </div>
+          </template>
+
+          <div class="logs-toolbar">
+            <el-form-item label="状态筛选" label-width="100px" style="margin-bottom: 0">
+              <el-select v-model="dlLogsFilter" size="small" style="width: 130px" @change="loadDlLogs">
+                <el-option label="全部" value="all" />
+                <el-option label="失败" value="failed" />
+                <el-option label="待审核" value="needs_review" />
+                <el-option label="进行中" value="running" />
+                <el-option label="成功" value="succeeded" />
+              </el-select>
+            </el-form-item>
+            <div class="logs-actions">
+              <el-button size="small" :icon="Refresh" @click="loadDlLogs" :loading="dlLogsLoading">刷新</el-button>
+            </div>
+          </div>
+
+          <el-table
+            :data="dlLogsData"
+            v-loading="dlLogsLoading"
+            stripe
+            size="small"
+            max-height="600"
+            style="width: 100%"
+            :row-class-name="dlLogRowClass"
+          >
+            <el-table-column prop="title" label="标题" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="media_type" label="类型" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.media_type === 'movie' ? '' : 'success'" effect="plain">
+                  {{ row.media_type || '?' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="phase_label" label="阶段" width="110" align="center" />
+            <el-table-column prop="status_label" label="状态" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag
+                  size="small"
+                  :type="dlLogStatusType(row.phase_status)"
+                  effect="plain"
+                >{{ row.status_label }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="status_message" label="说明" min-width="200" show-overflow-tooltip />
+            <el-table-column label="时间" width="160" align="center">
+              <template #default="{ row }">
+                <span style="font-size: 12px; color: var(--jt-text-muted)">
+                  {{ formatDlLogTime(row.updated_at || row.created_at) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="错误" width="60" align="center">
+              <template #default="{ row }">
+                <el-popover
+                  v-if="row.error_log"
+                  trigger="hover"
+                  placement="left"
+                  :width="480"
+                >
+                  <template #reference>
+                    <el-icon style="color: var(--el-color-danger); cursor: pointer"><Warning /></el-icon>
+                  </template>
+                  <pre style="max-height: 300px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 0">{{ row.error_log }}</pre>
+                </el-popover>
+              </template>
+            </el-table-column>
+          </el-table>
         </el-card>
       </el-tab-pane>
 
@@ -1957,6 +2044,7 @@ const stopActressBuild = async () => {
 // ============================================================================
 // 日志查看 tab
 // ============================================================================
+const logsSubTab = ref('backend')     // 'backend' | 'download'
 const logsState = reactive({ file: '', size_bytes: 0, count: 0, level: '' })
 const logsContent = ref('')
 const logsLines = ref(500)
@@ -1966,6 +2054,43 @@ const logsLoading = ref(false)
 const logsAutoRefresh = ref(false)
 const logsViewer = ref(null)
 let logsPollTimer = null
+
+// ---- 下载日志 ----
+const dlLogsData = ref([])
+const dlLogsLoading = ref(false)
+const dlLogsFilter = ref('all')
+
+const loadDlLogs = async () => {
+  dlLogsLoading.value = true
+  try {
+    const r = await logsApi.downloadLogs({ limit: 100, phase_status: dlLogsFilter.value })
+    dlLogsData.value = r.data.items || []
+  } catch (e) {
+    ElMessage.error('下载日志加载失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    dlLogsLoading.value = false
+  }
+}
+
+const dlLogStatusType = (status) => {
+  if (status === 'failed') return 'danger'
+  if (status === 'succeeded') return 'success'
+  if (status === 'needs_review') return 'warning'
+  if (status === 'running' || status === 'metadata_pending') return ''
+  return 'info'
+}
+
+const dlLogRowClass = ({ row }) => {
+  if (row.phase_status === 'failed') return 'dl-log-row-failed'
+  return ''
+}
+
+const formatDlLogTime = (iso) => {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 const loadLogs = async () => {
   logsLoading.value = true
@@ -2098,11 +2223,20 @@ watch(logsAutoRefresh, (v) => {
   }
 })
 
+// 切换下载日志子 tab 时首次加载
+watch(logsSubTab, (v) => {
+  if (v === 'download' && !dlLogsData.value.length) loadDlLogs()
+})
+
 // 切到 logs tab 时首次加载
 watch(activeTab, (v) => {
   if (v === 'logs') {
-    refreshLogLevel()
-    loadLogs()
+    if (logsSubTab.value === 'backend') {
+      refreshLogLevel()
+      loadLogs()
+    } else {
+      loadDlLogs()
+    }
   }
   if (v === 'diagnostics') {
     if (!diagSystemItems.value.length) loadDiagnosticsSystem()
@@ -2546,6 +2680,10 @@ onBeforeRouteLeave(async () => {
   overflow: auto;
   white-space: pre;
   word-wrap: normal;
+}
+
+:deep(.dl-log-row-failed) {
+  background-color: rgba(245, 108, 108, 0.08) !important;
 }
 
 .form-hint {
