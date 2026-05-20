@@ -1739,7 +1739,9 @@ const metrics = computed(() => {
   const runtimeFmt = formatRuntime(jf.total_runtime_seconds || 0)
 
   // 4 项基础指标始终显示，4 项可选指标按 visibleStats 过滤
+  // 顺序：电影/剧集数（首位，最直观）→ 健康度 → 资源文件数 → 空间 / 时长
   const result = []
+  result.push({ label: '电影/剧集数', value: movieSeriesCount })
   if (visibleStats.value.health) {
     result.push({
       label: '总体健康度',
@@ -1751,7 +1753,6 @@ const metrics = computed(() => {
   }
   result.push(
     { label: resourceLabel, value: resourceValue },
-    { label: '电影/剧集数', value: movieSeriesCount },
     { label: '空间占用', value: sizeFmt.value, suffix: sizeFmt.suffix },
     { label: '总时长', value: runtimeFmt.value, suffix: runtimeFmt.suffix },
   )

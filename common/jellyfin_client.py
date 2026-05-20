@@ -335,7 +335,9 @@ class JellyfinClient:
     def get_episodes_of_season(
         self,
         season_id: str,
-        fields: str = "Path,ProductionYear,ImageTags,ProviderIds,RunTimeTicks,Overview,IndexNumber,ParentIndexNumber,SeasonName,SeriesName,SeriesId",
+        # MediaSources/MediaStreams 必带：否则 _extract_subtitle_langs 拿不到字幕流，
+        # 前端"字幕"列对所有集都显示 —（library 主列表 fields 已含这两项，保持一致）
+        fields: str = "Path,ProductionYear,ImageTags,ProviderIds,RunTimeTicks,Overview,IndexNumber,ParentIndexNumber,SeasonName,SeriesName,SeriesId,MediaSources,MediaStreams",
     ) -> List[Dict]:
         """
         拉某季下的所有 Episode（按 IndexNumber 排序）。
