@@ -107,6 +107,16 @@ def push_download(
         f"category={request.category!r} user_hint={request.user_hint_media_type!r} "
         f"category_desc={request.category_desc!r} → effective_hint={effective_hint!r}"
     )
+    try:
+        return _do_push_download(request, db, src_hint, effective_hint)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"push_download 未处理异常: title={request.title!r}")
+        raise HTTPException(status_code=500, detail="推送内部异常，详见后端日志")
+
+
+def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effective_hint: Optional[str]):
     if not settings.qbittorrent_host or not settings.qbittorrent_username:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     if not (request.magnet or request.torrent_url or request.torrent_file_b64):
