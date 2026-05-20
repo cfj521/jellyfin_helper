@@ -22,7 +22,7 @@ env/
 *.egg-info/
 
 # Node.js / 前端
-dist/
+web/frontend/dist/
 node_modules/
 dist-ssr/
 .vite/

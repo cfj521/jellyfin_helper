@@ -99,7 +99,9 @@ def preview_dispatch(request: PreviewRequest):
         tags=['dispatch-preview'],
     )
     if not ok:
-        raise HTTPException(status_code=502, detail='qB 添加失败')
+        # 把 qB 原始拒绝原因带出去（'Fails.' / 网络异常等），方便前端定位
+        qb_err = qb.last_add_error or '未知原因'
+        raise HTTPException(status_code=502, detail=f'qB 添加失败：{qb_err}')
 
     # 从 magnet 抠 hash
     info_hash = _extract_hash(request.magnet) if request.magnet else None

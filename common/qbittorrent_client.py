@@ -20,6 +20,9 @@ class QBittorrentClient:
         self.timeout = timeout
         self.session = requests.Session()
         self._logged_in = False
+        # 最近一次 add_torrent 失败的原因（HTTP 状态 + body 摘要 / 异常文本）。
+        # qB add API 拒绝时只回 'Fails.'，没有细节；调用方读这里把上下文带到前端 detail。
+        self.last_add_error: Optional[str] = None
 
     def login(self) -> bool:
         """登录获取 session cookie。"""
@@ -96,6 +99,7 @@ class QBittorrentClient:
         if stop_condition:
             data['stopCondition'] = stop_condition
 
+        self.last_add_error = None
         try:
             r = self.session.post(
                 f"{self.host}/api/v2/torrents/add",
@@ -104,11 +108,16 @@ class QBittorrentClient:
                 timeout=self.timeout,
             )
             r.raise_for_status()
-            ok = r.text.strip().lower() == 'ok.'
+            body = r.text.strip()
+            ok = body.lower() == 'ok.'
             if not ok:
-                logger.error(f"qB 添加种子被拒: HTTP {r.status_code}, body={r.text.strip()!r}")
+                # qB 加种被拒的常见原因：种子重复、默认保存路径不存在/无权限、category 不存在、
+                # 磁链/种子文件解析失败。API 只回 'Fails.'，更细的原因要看 qB 自己的日志。
+                self.last_add_error = f"HTTP {r.status_code} body={body!r}"
+                logger.error(f"qB 添加种子被拒: {self.last_add_error}")
             return ok
         except requests.exceptions.RequestException as e:
+            self.last_add_error = f"网络异常: {e}"
             logger.error(f"添加种子失败: {e}")
             return False
 

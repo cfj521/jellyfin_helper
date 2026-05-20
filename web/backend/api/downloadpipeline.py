@@ -152,18 +152,29 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
         if request.save_path else request.save_path
     )
 
-    # 上传文件场景：add_torrent 前先快照 qB 已有 hash 集合，添加后 diff 出新增的，
-    # 因为 qB add API 不返回 hash，文件场景也没 magnet 可抠。
+    # 推送前的 list_torrents：两个用途
+    #   1. magnet 场景 → 提前拿 info_hash 跟现有 hash 比，重复就 409 立返（qB 加种重复
+    #      会返 'Fails.' 但不给原因，提前拦截让前端看到明确文案）
+    #   2. 文件上传场景 → snapshot diff 拿新增的 hash（qB add API 不返回 hash）
     hashes_before: set = set()
-    if torrent_file_bytes is not None:
-        try:
-            hashes_before = {
-                (t.get('hash') or '').lower()
-                for t in (client.list_torrents() or [])
-                if t.get('hash')
-            }
-        except Exception:
-            pass
+    existing_torrents: List[Dict] = []
+    try:
+        existing_torrents = client.list_torrents() or []
+        hashes_before = {(t.get('hash') or '').lower() for t in existing_torrents if t.get('hash')}
+    except Exception as e:
+        logger.warning(f"推送前 list_torrents 失败（不阻断流程）: {e}")
+
+    # magnet 场景的预查重：能直接抠出 hash 时优先拦截重复，比让 qB 回 'Fails.' 友好得多
+    pre_hash = _extract_hash_from_magnet(request.magnet)
+    if pre_hash and pre_hash in hashes_before:
+        dup = next((t for t in existing_torrents if (t.get('hash') or '').lower() == pre_hash), None)
+        dup_name = (dup.get('name') if dup else '') or '(未知名称)'
+        dup_state = (dup.get('state') if dup else '') or ''
+        logger.warning(f"qB 已存在相同 hash 的种子：{pre_hash[:16]}.. name={dup_name!r} state={dup_state!r}")
+        raise HTTPException(
+            status_code=409,
+            detail=f"种子已在 qBittorrent 队列里（{dup_name}，状态 {dup_state}）",
+        )
 
     ok = client.add_torrent(
         magnet=request.magnet,
@@ -174,8 +185,25 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
         stop_condition='MetadataReceived',
     )
     if not ok:
-        logger.error(f"qB 推送失败: title={request.title!r} src={src_hint!r} category={request.category!r} save_path={save_path!r}")
-        raise HTTPException(status_code=500, detail="qBittorrent 推送失败（检查登录或种子链接）")
+        # 把上下文 + qB 原始错误带到 detail，前端 ElMessage 直接看到，不用翻后端日志
+        qb_err = client.last_add_error or '未知原因'
+        ctx_parts = []
+        if save_path:
+            ctx_parts.append(f"save_path={save_path}")
+        if request.category:
+            ctx_parts.append(f"category={request.category}")
+        ctx_str = ('（' + '，'.join(ctx_parts) + '）') if ctx_parts else ''
+        logger.error(
+            f"qB 推送失败: title={request.title!r} src={src_hint!r} "
+            f"category={request.category!r} save_path={save_path!r} qb_err={qb_err!r}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"qBittorrent 拒绝加种：{qb_err}{ctx_str}。"
+                "常见原因：qB 默认下载目录不存在/无权限 · 该 category 未在 qB 创建 · 磁链或种子文件损坏"
+            ),
+        )
 
     # 拿到 hash —— magnet 里直接抠
     info_hash = _extract_hash_from_magnet(request.magnet) or ''
