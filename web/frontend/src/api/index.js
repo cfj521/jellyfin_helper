@@ -289,7 +289,7 @@ export const jellyfinApi = {
   // 检查当前配置的 API key 是否有管理员权限（/Library/Media/Updated 需要）
   checkApiKey: () => api.post('/api/medialibraries/check-api-key'),
 
-  // 剧集 → 季 → 集 钻取（懒加载，30 分钟缓存；force=true 旁路缓存）
+  // 剧集 → 季 → 集 钻取（懒加载，TTL = cache.library_days，默认 7 天；force=true 旁路缓存）
   seasonsOfSeries: (seriesId, force = false) =>
     api.get(`/api/medialibraries/series/${seriesId}/seasons`, { params: { force } }),
   episodesOfSeason: (seasonId, force = false) =>

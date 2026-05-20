@@ -386,7 +386,7 @@ def get_library_genres(library_id: str):
 
 
 # ============================================================
-# Series → Season → Episode 钻取（带 30 分钟内存缓存）
+# Series → Season → Episode 钻取（DB 持久化缓存，TTL = settings.cache_library_days，默认 7 天）
 # ============================================================
 
 from common.jellyfin_client import JellyfinClient as _JfClientType  # alias for typing
@@ -682,11 +682,71 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
     }
 
 
+def _fetch_episodes_cached(season_id: str, force: bool = False) -> List[Dict]:
+    """单 Season 的 episodes 取数 + 缓存共享逻辑。
+
+    供 get_season_episodes 路由 / get_series_seasons 聚合 两个调用点用，
+    都走同一个 kv_cache 键，所以不会因为先后顺序产生重复请求。
+    """
+    cache_key = f"episodes:{season_id}"
+    if not force:
+        cached = _episodes_cache.get(cache_key)
+        if cached is not None and isinstance(cached, dict) and 'items' in cached:
+            return cached['items']
+
+    client = _client()
+    raw_items = client.get_episodes_of_season(season_id)
+    host = (settings.jellyfin_host or "").rstrip('/')
+    items = [_build_item_dict(i, host) for i in raw_items]
+    _episodes_cache.set(cache_key, {"count": len(items), "items": items})
+    return items
+
+
+def _enrich_season_aggregates(season: Dict) -> None:
+    """给一个 Season dict 就地补 child_count / total_runtime_min / subtitle_coverage。
+
+    数据来自 _fetch_episodes_cached（命中缓存就秒返）。
+    任何错误（拿不到集列表）都吞掉 —— 这是 best-effort 装饰，不能让父 seasons 端点挂掉。
+    """
+    sid = season.get('id')
+    if not sid:
+        return
+    try:
+        eps = _fetch_episodes_cached(sid)
+    except Exception as e:
+        logger.warning(f"季聚合失败 season_id={sid}: {e}")
+        return
+    if not eps:
+        return
+
+    # child_count：Jellyfin /Shows/{id}/Seasons 端点常不返 ChildCount，用 episodes 长度兜底
+    if season.get('child_count') is None:
+        season['child_count'] = len(eps)
+    # 总时长：子集 runtime_min 求和
+    total_min = sum(e.get('runtime_min') or 0 for e in eps)
+    if total_min > 0:
+        season['total_runtime_min'] = total_min
+    # 字幕覆盖：has-any-sub 计入分子（best-effort，跟前端老版本同语义）
+    total = len(eps)
+    with_sub = sum(1 for e in eps if (e.get('subtitle_langs') or []))
+    season['subtitle_coverage'] = {
+        'total_videos': total,
+        'with_required': with_sub,
+        'without_required': total - with_sub,
+        'coverage_pct': round(with_sub * 100 / total) if total else 0,
+    }
+
+
 @router.get("/series/{series_id}/seasons")
 def get_series_seasons(series_id: str, force: bool = False):
     """
-    拉某部剧的全部 Season（懒加载触发，30 分钟内存缓存）。
+    拉某部剧的全部 Season（懒加载触发）。
 
+    每个 Season 会预聚合 child_count / total_runtime_min / subtitle_coverage —— 通过
+    并行调 _fetch_episodes_cached 实现（命中 episodes 缓存就不发网络请求）。这样
+    Season 行不展开也能在 UI 上看到这些数据。
+
+    缓存：DB 持久化（kv_cache 表），TTL = settings.cache_library_days（默认 7 天）。
     force=true：旁路缓存，强制从 Jellyfin 重新拉取并刷新缓存。
     """
     cache_key = f"seasons:{series_id}"
@@ -703,6 +763,14 @@ def get_series_seasons(series_id: str, force: bool = False):
 
     host = (settings.jellyfin_host or "").rstrip('/')
     items = [_build_item_dict(i, host) for i in raw_items]
+
+    # 并行给每个 Season 补聚合数据（episodes 取数走自己 7d 缓存，命中即秒返）
+    # max_workers=8：长剧（>20 季）少见，8 路并行已经够 + 不至于把 Jellyfin 打爆
+    if items:
+        from concurrent.futures import ThreadPoolExecutor as _Pool
+        with _Pool(max_workers=8) as ex:
+            list(ex.map(_enrich_season_aggregates, items))
+
     payload = {"count": len(items), "items": items}
     _seasons_cache.set(cache_key, payload)
     return payload
@@ -711,25 +779,16 @@ def get_series_seasons(series_id: str, force: bool = False):
 @router.get("/seasons/{season_id}/episodes")
 def get_season_episodes(season_id: str, force: bool = False):
     """
-    拉某季的全部 Episode（按集号排序，30 分钟内存缓存）。
-    """
-    cache_key = f"episodes:{season_id}"
-    if not force:
-        cached = _episodes_cache.get(cache_key)
-        if cached is not None:
-            return cached
+    拉某季的全部 Episode（按集号排序）。
 
-    client = _client()
+    缓存：DB 持久化（kv_cache 表），TTL = settings.cache_library_days（默认 7 天）。
+    force=true：旁路缓存。
+    """
     try:
-        raw_items = client.get_episodes_of_season(season_id)
+        items = _fetch_episodes_cached(season_id, force=force)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"拉取集列表失败: {e}")
-
-    host = (settings.jellyfin_host or "").rstrip('/')
-    items = [_build_item_dict(i, host) for i in raw_items]
-    payload = {"count": len(items), "items": items}
-    _episodes_cache.set(cache_key, payload)
-    return payload
+    return {"count": len(items), "items": items}
 
 
 @router.post("/cache/clear-children")

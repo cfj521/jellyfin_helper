@@ -395,13 +395,13 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <!-- 时长：Movie / Episode 显示单作品时长；Series 显示总时长（聚合后才有）；Season 显示 — -->
+        <!-- 时长：Movie / Episode 显示单作品时长；Series / Season 显示总时长（Series 从后端聚合，Season 展开后实时算）-->
         <el-table-column label="时长" width="100" align="center" fixed="right">
           <template #default="{ row }">
             <span v-if="(row.type === 'Episode' || row.type === 'Movie') && row.runtime_min">
               {{ formatRuntimeMin(row.runtime_min) }}
             </span>
-            <span v-else-if="row.type === 'Series' && row.total_runtime_min">
+            <span v-else-if="(row.type === 'Series' || row.type === 'Season') && row.total_runtime_min">
               {{ formatTotalRuntime(row.total_runtime_min) }}
             </span>
             <span v-else class="muted">—</span>
@@ -496,6 +496,8 @@
             <span v-else-if="row.type === 'Season' && row.child_count != null">
               {{ row.child_count }} 集
             </span>
+            <!-- Episode 行不显示「集数」（本身就是单集，— 没意义）-->
+            <span v-else-if="row.type === 'Episode'"></span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
@@ -508,38 +510,52 @@
         >
           <template #default="{ row }">
             <div class="sub-cell">
-              <!-- 第一行：已有字幕语言 chip -->
-              <div class="sub-lang-row">
-                <el-tag
-                  v-for="l in (row.subtitle_langs || []).slice(0, 3)"
-                  :key="l"
-                  size="small"
-                  :type="subLangTagType(l)"
-                  effect="light"
-                  class="sub-lang-chip"
-                >{{ subLangLabel(l) }}</el-tag>
-                <el-tooltip
-                  v-if="(row.subtitle_langs?.length || 0) > 3"
-                  :content="row.subtitle_langs.slice(3).map(subLangLabel).join(' / ')"
-                  placement="top"
+              <!-- Series/Season：显示子项字幕覆盖统计 "X / Y"（来自最近一次 subtitle_scan
+                   或 Season 展开后的实时聚合，见 loadChildren）。比单写 — 直观很多 -->
+              <template v-if="row.type === 'Series' || row.type === 'Season'">
+                <span
+                  v-if="row.subtitle_coverage"
+                  :class="['sub-coverage', subtitleCoverageClass(row.subtitle_coverage.coverage_pct)]"
+                  :title="`有字幕 ${row.subtitle_coverage.with_required} / 共 ${row.subtitle_coverage.total_videos} 集`"
                 >
-                  <span class="sub-lang-more">+{{ row.subtitle_langs.length - 3 }}</span>
-                </el-tooltip>
-                <span v-if="!row.subtitle_langs?.length" class="muted">—</span>
-              </div>
+                  {{ row.subtitle_coverage.with_required }} / {{ row.subtitle_coverage.total_videos }}
+                </span>
+                <span v-else class="muted" title="展开查看子项后会聚合显示">—</span>
+              </template>
 
-              <!-- 第二行：下载字幕按钮（仅 Movie / Episode） -->
-              <el-button
-                v-if="(row.type === 'Movie' || row.type === 'Episode') && row.path"
-                size="small"
-                text
-                type="primary"
-                class="sub-dl-btn"
-                @click.stop="openSubtitleDownload(row)"
-              >
-                <el-icon><Search /></el-icon>
-                下载字幕
-              </el-button>
+              <!-- Movie / Episode：原行为，语言 chip + 下载字幕按钮 -->
+              <template v-else>
+                <div class="sub-lang-row">
+                  <el-tag
+                    v-for="l in (row.subtitle_langs || []).slice(0, 3)"
+                    :key="l"
+                    size="small"
+                    :type="subLangTagType(l)"
+                    effect="light"
+                    class="sub-lang-chip"
+                  >{{ subLangLabel(l) }}</el-tag>
+                  <el-tooltip
+                    v-if="(row.subtitle_langs?.length || 0) > 3"
+                    :content="row.subtitle_langs.slice(3).map(subLangLabel).join(' / ')"
+                    placement="top"
+                  >
+                    <span class="sub-lang-more">+{{ row.subtitle_langs.length - 3 }}</span>
+                  </el-tooltip>
+                  <span v-if="!row.subtitle_langs?.length" class="muted">—</span>
+                </div>
+
+                <el-button
+                  v-if="row.path"
+                  size="small"
+                  text
+                  type="primary"
+                  class="sub-dl-btn"
+                  @click.stop="openSubtitleDownload(row)"
+                >
+                  <el-icon><Search /></el-icon>
+                  下载字幕
+                </el-button>
+              </template>
             </div>
           </template>
         </el-table-column>
@@ -557,6 +573,8 @@
                 <span class="genre-more">+{{ row.genres.length - 2 }}</span>
               </el-tooltip>
             </div>
+            <!-- Season / Episode 没有独立的风格/类型概念，留空（不用 —）-->
+            <span v-else-if="row.type === 'Season' || row.type === 'Episode'"></span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
@@ -581,9 +599,11 @@
               >
                 字幕 {{ row.subtitle_coverage.coverage_pct }}%
               </span>
+              <!-- 评分占位 — Season/Episode 没有独立评分，留空；Series/Movie 没拉到时显示 — -->
               <span
                 v-if="row.community_rating == null
-                  && !((row.type === 'Series' || row.type === 'Movie') && ratingFor(row))"
+                  && !((row.type === 'Series' || row.type === 'Movie') && ratingFor(row))
+                  && row.type !== 'Season' && row.type !== 'Episode'"
                 class="muted"
               >—</span>
             </div>
@@ -591,8 +611,8 @@
         </el-table-column>
         <el-table-column label="TMDB" width="90" align="center" fixed="right">
           <template #default="{ row }">
-            <!-- Episode 没有独立 TMDB ID，直接 — -->
-            <span v-if="row.type === 'Episode'" class="muted">—</span>
+            <!-- Episode / Season 多数情况下不带独立 TMDB ID（Jellyfin TMDB 插件通常只挂 Series 层），留空 -->
+            <span v-if="row.type === 'Episode' || row.type === 'Season'"></span>
             <a
               v-else-if="row.tmdb_id"
               :href="tmdbUrl(row)"
@@ -1584,6 +1604,29 @@ const loadChildren = async (row, treeNode, resolve) => {
     } else if (row.type === 'Season') {
       const r = await jellyfinApi.episodesOfSeason(row.id)
       children = r.data.items || []
+      // 回填 Season.child_count：/Shows/{id}/Seasons 端点常不返子 ChildCount，
+      // 集数列只能用展开后实际拿到的 children.length 兜底（用户展开过的 Season 都能看到）
+      if (row.child_count == null) {
+        row.child_count = children.length
+      }
+      // Season 总时长：把子集 runtime_min 求和；Season 自身的 RunTimeTicks 是空的，
+      // 只能展开后聚合（跟 child_count / subtitle_coverage 一个套路）
+      const totalMin = children.reduce((s, e) => s + (e.runtime_min || 0), 0)
+      if (totalMin > 0) {
+        row.total_runtime_min = totalMin
+      }
+      // Season 字幕覆盖：用刚拉到的子集 subtitle_langs 实时聚合（has any sub → 计入分子）
+      // Series 同字段由后端 aggregates 给（精确按 required langs 算），此处仅 Season 用客户端 best-effort
+      if (children.length > 0) {
+        const total = children.length
+        const withSub = children.filter(e => (e.subtitle_langs?.length || 0) > 0).length
+        row.subtitle_coverage = {
+          total_videos: total,
+          with_required: withSub,
+          without_required: total - withSub,
+          coverage_pct: Math.round(withSub * 100 / total),
+        }
+      }
     }
     // 记入级联选择用的 children map
     childrenMap.value = { ...childrenMap.value, [row.id]: children }
@@ -3285,6 +3328,19 @@ body:has(.lib-detail-root) .app-main {
     &.sub-cov-good { color: var(--jt-success-text); border-color: var(--jt-success-border); background: var(--jt-success-tint); }
     &.sub-cov-warn { color: var(--jt-warning-text); border-color: var(--jt-warning-border); background: var(--jt-warning-tint); }
     &.sub-cov-bad  { color: var(--jt-danger-text); border-color: var(--jt-danger-border); background: var(--jt-danger-tint); }
+  }
+
+  // 字幕列 Series/Season 行的子项覆盖统计文本（"3 / 24"）
+  // 跟 subtitle-coverage-chip 共用三档颜色，但样式更轻量（不画 chip 边框）
+  .sub-coverage {
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    cursor: help;
+
+    &.sub-cov-good { color: var(--jt-success-text); }
+    &.sub-cov-warn { color: var(--jt-warning-text); }
+    &.sub-cov-bad  { color: var(--jt-danger-text); }
   }
 
   .tmdb-link {
