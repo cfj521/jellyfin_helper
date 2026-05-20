@@ -357,21 +357,30 @@ def regular_cleanup() -> Optional[Dict]:
             seeding_time = int(t.get('seeding_time') or 0)
             ratio = float(t.get('ratio') or 0)
             size = int(t.get('size') or 0)
+            state = (t.get('state') or '').lower()
 
-            # 不到最小做种 24h 不动
-            if seeding_time < min_hours * 3600:
-                continue
-            # 任一条件达成则清
+            # qB 已自停（pausedUP / stoppedUP）+ ratio 达标 → 任务自身已完成，
+            # 短路 min_hours 兜底直接放行；否则按原 24h floor + (ratio OR days) 走
             ratio_ok = ratio >= target_ratio
             days_ok = seeding_time >= min_days * 86400
-            if not (ratio_ok or days_ok):
-                continue
+            qb_self_stopped = state in ('pausedup', 'stoppedup')
+            short_circuit = qb_self_stopped and ratio_ok
 
+            if not short_circuit:
+                if seeding_time < min_hours * 3600:
+                    continue
+                if not (ratio_ok or days_ok):
+                    continue
+
+            reason = (
+                'qb-self-stopped+ratio' if short_circuit else
+                ('ratio' if ratio_ok else 'days')
+            )
             logger.info(
                 f"软清: 选中 {row.torrent_hash[:16]}.. ({t.get('name')!r}) "
                 f"size={size/1e9:.2f}GB ratio={ratio:.2f} "
-                f"seed_days={seeding_time/86400:.1f} "
-                f"reason={'ratio' if ratio_ok else 'days'}"
+                f"seed_h={seeding_time/3600:.1f} state={state} "
+                f"reason={reason}"
             )
 
             try:
@@ -381,6 +390,7 @@ def regular_cleanup() -> Optional[Dict]:
                         'hash': row.torrent_hash, 'name': t.get('name'),
                         'size_gb': round(size / 1e9, 2),
                         'ratio': ratio, 'seed_days': round(seeding_time / 86400, 1),
+                        'reason': reason,
                         'deleted_files': deleted_files,
                     })
                     if deleted_files:
