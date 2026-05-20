@@ -128,8 +128,7 @@ const state = computed(() => {
 const stateLabel = computed(() => {
   if (state.value === 'excluded') return '已排除'
   if (state.value === 'cooldown') {
-    const n = props.item.scrape_attempts || 0
-    return `冷却中（剩 ${cooldownRemainingDays.value} 天 / 失败 ${n} 次）`
+    return `识别冷却中：剩 ${cooldownRemainingDays.value} 天`
   }
   return ({
     green: '完整',

@@ -535,22 +535,25 @@ const statsLoading = ref(false)
 const statsMetrics = computed(() => {
   const s = statsData.value
   if (!s) return []
-  // 健康度：healthy / total —— "完全完整"占比（scraped + 有封面文件 + 有 NFO 文件 三件齐全）
+  // 健康度：healthy / (total - excluded) —— "完全完整"占比（scraped + 有封面文件 + 有 NFO 文件 三件齐全）
+  // 分母剔除已排除项：用户主动放弃的条目不应再压低健康度
   // 之前是 scraped/total，会忽略"已刮削但缺封面/NFO"的情况导致虚高
   const healthy = s.healthy ?? s.scraped ?? 0  // 后端老版本没 healthy 时 fallback 用 scraped
-  const healthRate = s.total ? Math.round((healthy / s.total) * 100) : 0
+  const excluded = s.excluded ?? 0
+  const healthDenom = Math.max(0, (s.total ?? 0) - excluded)
+  const healthRate = healthDenom ? Math.round((healthy / healthDenom) * 100) : 0
   return [
     { label: '总数', value: s.total, suffix: '' },
     {
       label: '健康度',
-      value: `${healthy} / ${s.total}`,
+      value: `${healthy} / ${healthDenom}`,
       suffix: ` (${healthRate}%)`,
-      warn: s.total && healthy < s.total,
+      warn: healthDenom && healthy < healthDenom,
     },
+    { label: '已排除',  value: excluded, suffix: '' },
     { label: '缺封面', value: s.missing_cover, suffix: '', warn: s.missing_cover > 0 },
     { label: '缺 NFO',  value: s.missing_nfo,   suffix: '', warn: s.missing_nfo > 0 },
     { label: '无码',    value: s.uncensored,    suffix: '' },
-    { label: '已排除',  value: s.excluded ?? 0, suffix: '' },
     { label: '排除冷却中',  value: s.cooling ?? 0,  suffix: '', warn: (s.cooling ?? 0) > 0 },
     { label: '占用空间', value: formatStatsSize(s), suffix: '' },
     { label: '总时长',  value: formatStatsDuration(s.total_duration_seconds), suffix: '' },
