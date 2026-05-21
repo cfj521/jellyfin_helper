@@ -22,7 +22,7 @@ from sqlalchemy import cast
 from sqlalchemy.dialects.postgresql import JSONB
 
 from tools.dispatch.quality import compare as quality_compare
-from web.backend.database import DownloadDispatchMap
+from backend.database import DownloadDispatchMap
 
 logger = logging.getLogger(__name__)
 

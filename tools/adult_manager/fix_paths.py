@@ -69,7 +69,7 @@ def fix_paths(apply: bool = False, limit: Optional[int] = None) -> dict:
     """返回 stats 字典。"""
     # 延迟 import 让 --help 不依赖 DB
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from web.backend.database import SessionLocal, AdultItem
+    from backend.database import SessionLocal, AdultItem
 
     stats = {
         'scanned': 0,

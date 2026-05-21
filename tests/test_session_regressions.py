@@ -5,8 +5,8 @@
   - lang_detect: UTF-16 LE/BE BOM 解码 + 无 BOM 启发式
   - common.mdblist_client.parse_ratings
   - common.wikidata_client._escape_sparql_literal / _build_query
-  - web.backend.api.medialibraries._TTLCache 行为
-  - web.backend.api._item_health: empty_season 检查
+  - backend.api.medialibraries._TTLCache 行为
+  - backend.api._item_health: empty_season 检查
   - common.tmdb_client get_episode_still_path 端点拼接（mock）
 """
 import sys
@@ -178,7 +178,7 @@ def test_wikidata_build_query_chinese():
 
 
 # ============================================================
-# 旧 _TTLCache 内存缓存类已下线（替换为 web.backend.cache_store 的 DB 持久化版）
+# 旧 _TTLCache 内存缓存类已下线（替换为 backend.cache_store 的 DB 持久化版）
 # 对应单测删除：cache_store 测试需要 DB session mock，不在这一档测试范围内。
 # ============================================================
 
@@ -188,7 +188,7 @@ def test_wikidata_build_query_chinese():
 # ============================================================
 
 def test_item_health_empty_season_warning():
-    from web.backend.api._item_health import compute_health
+    from backend.api._item_health import compute_health
 
     # 空 Season → empty_season 警告
     h = compute_health({
@@ -203,7 +203,7 @@ def test_item_health_empty_season_warning():
 
 
 def test_item_health_non_empty_season_ok():
-    from web.backend.api._item_health import compute_health
+    from backend.api._item_health import compute_health
 
     h = compute_health({
         'Type': 'Season',
@@ -217,7 +217,7 @@ def test_item_health_non_empty_season_ok():
 
 def test_item_health_no_name_mismatch_for_accented_title():
     """Shōgun 系列：Jellyfin Name 带音符号、文件夹用 ASCII 不应判 name_mismatch。"""
-    from web.backend.api._item_health import compute_health
+    from backend.api._item_health import compute_health
 
     h = compute_health({
         'Type': 'Series',
@@ -233,7 +233,7 @@ def test_item_health_no_name_mismatch_for_accented_title():
 
 def test_item_health_no_name_mismatch_for_dotted_directory():
     """Star.Wars.Andor 目录：".Andor" 不该被当扩展名截断成 "Star.Wars"。"""
-    from web.backend.api._item_health import compute_health
+    from backend.api._item_health import compute_health
 
     h = compute_health({
         'Type': 'Series',
@@ -251,7 +251,7 @@ def test_item_health_no_name_mismatch_for_dotted_directory():
 def test_item_health_no_name_mismatch_for_abbreviated_folder():
     """主标题缩写：文件夹用 'CSI'，Jellyfin 标题 'CSI: Crime Scene Investigation'。
     文件夹 token 完全落在标题里 → Containment(文件夹)=1.0，不应误报。"""
-    from web.backend.api._item_health import compute_health
+    from backend.api._item_health import compute_health
 
     h = compute_health({
         'Type': 'Series',
@@ -267,7 +267,7 @@ def test_item_health_no_name_mismatch_for_abbreviated_folder():
 
 def test_item_health_empty_series_still_warning():
     """旧的 empty_series 检查没被破坏。"""
-    from web.backend.api._item_health import compute_health
+    from backend.api._item_health import compute_health
 
     h = compute_health({
         'Type': 'Series',
@@ -320,7 +320,7 @@ def test_get_library_items_defaults_to_series_for_tvshows(monkeypatch):
     防止 tree-table 拿到 Series+Season+Episode 扁平混合列表。
     """
     from common.jellyfin_client import JellyfinClient
-    from web.backend.api import medialibraries as jf_module
+    from backend.api import medialibraries as jf_module
 
     captured: dict = {}
 
@@ -345,7 +345,7 @@ def test_get_library_items_defaults_to_series_for_tvshows(monkeypatch):
 
 def test_get_library_items_defaults_to_movie_for_movies(monkeypatch):
     from common.jellyfin_client import JellyfinClient
-    from web.backend.api import medialibraries as jf_module
+    from backend.api import medialibraries as jf_module
 
     captured: dict = {}
 
@@ -365,7 +365,7 @@ def test_get_library_items_defaults_to_movie_for_movies(monkeypatch):
 def test_get_library_items_explicit_type_overrides(monkeypatch):
     """显式传 item_type 应跳过自动推断。"""
     from common.jellyfin_client import JellyfinClient
-    from web.backend.api import medialibraries as jf_module
+    from backend.api import medialibraries as jf_module
 
     captured: dict = {}
 

@@ -165,7 +165,7 @@ tmdb:
 
 ```bash
 pip install -r requirements.txt
-python -m web.backend.run
+python -m backend.run
 ```
 
 端口优先级：环境变量 `BACKEND_PORT` > `config.yaml: server.backend_port` > 默认 8000。
@@ -174,10 +174,10 @@ python -m web.backend.run
 
 ```bash
 # bash
-BACKEND_RELOAD=1 python -m web.backend.run
+BACKEND_RELOAD=1 python -m backend.run
 
 # PowerShell
-$env:BACKEND_RELOAD='1'; python -m web.backend.run
+$env:BACKEND_RELOAD='1'; python -m backend.run
 ```
 
 ### 3. 前端
@@ -185,7 +185,7 @@ $env:BACKEND_RELOAD='1'; python -m web.backend.run
 新开终端：
 
 ```bash
-cd web/frontend
+cd frontend
 npm install
 npm run dev
 ```

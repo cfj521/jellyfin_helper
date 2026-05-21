@@ -59,8 +59,8 @@ def analyze_pending_rows() -> Dict:
     needs_review 的行不动（等用户审核），running 的才是要主动推进的。
     返回 stats {scanned, processed_auto, processed_review, still_waiting, errors}
     """
-    from web.backend.config import settings
-    from web.backend.database import SessionLocal, DownloadDispatchMap
+    from backend.config import settings
+    from backend.database import SessionLocal, DownloadDispatchMap
 
     if not settings.qbittorrent_configured:
         return _empty_stats()
@@ -127,7 +127,7 @@ def _analyze_one(qb, row, qb_t: Optional[Dict]) -> str:
     完整重复强制 needs_review，部分重复 qB skip 已有文件。
     """
     from tools.dispatch.identify import identify_media
-    from web.backend.database import SessionLocal, DownloadDispatchMap
+    from backend.database import SessionLocal, DownloadDispatchMap
 
     h = row.torrent_hash
 
@@ -182,7 +182,7 @@ def _analyze_one(qb, row, qb_t: Optional[Dict]) -> str:
     # ③ 重复检测
     duplicates = {'is_duplicate': False, 'type': 'none', 'existing': [], 'new': [], 'skip_file_indexes': []}
     try:
-        from web.backend.api.dispatch import _check_duplicates
+        from backend.api.dispatch import _check_duplicates
         duplicates = _check_duplicates(identified, files)
     except Exception as e:
         logger.warning(f"analyze: _check_duplicates 失败: {e}")
@@ -314,5 +314,5 @@ def _build_status_message(identified, target_info, duplicates, auto_ok, confiden
 
 def settings_default_move_mode() -> str:
     """按需取 default_move_mode，避免顶部 import settings 引入循环。"""
-    from web.backend.config import settings
+    from backend.config import settings
     return settings.dispatch.default_move_mode or 'copy'

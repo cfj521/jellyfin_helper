@@ -102,7 +102,7 @@ def verify_av_code(code: str) -> bool:
     code = code.upper().strip()
     # 优先查缓存
     try:
-        from web.backend.cache_store import get_cached, set_cached
+        from backend.cache_store import get_cached, set_cached
         cached = get_cached(_AV_VERIFY_SCOPE, code, ttl_seconds=_AV_VERIFY_TTL_DAYS * 86400)
         if isinstance(cached, dict) and 'verified' in cached:
             return bool(cached['verified'])
@@ -220,7 +220,7 @@ def extract_movie_info(torrent_name: str) -> Optional[Dict]:
 def _tmdb_client():
     """统一 TMDBClient 创建（缺 api_key 返回 None）。"""
     from common.tmdb_client import TMDBClient
-    from web.backend.config import settings
+    from backend.config import settings
     if not settings.tmdb_api_key:
         return None
     return TMDBClient(api_key=settings.tmdb_api_key, language=settings.tmdb_language)
@@ -420,7 +420,7 @@ def _pick_llm_title(hit: Dict, fallback: str) -> str:
     """从 LLM hit 里按用户语言偏好选 title。
     settings.metadata_scrape_language 控制：en* → 英文优先；zh* → 中文优先；其它 → native。"""
     try:
-        from web.backend.config import settings
+        from backend.config import settings
         lang = (settings.metadata_scrape_language or 'en').lower()
     except Exception:
         lang = 'en'
@@ -439,7 +439,7 @@ def _run_llm(torrent_name: str, files: List[Dict]) -> Optional[Dict]:
     """跑 LLM + TMDB 反查。失败 / 未启用返回 None。conf 是 LLM 自己给的，不再卡阈值。"""
     try:
         from common.llm_client import get_default_client
-        from web.backend.config import settings
+        from backend.config import settings
         if not (settings.llm.enabled and settings.llm.api_key):
             return None
         llm = get_default_client()
@@ -634,7 +634,7 @@ def _identify_chain(torrent_name: str, files: List[Dict]) -> Dict:
     # 读 prefer_first 开关
     prefer_llm_first = False
     try:
-        from web.backend.config import settings
+        from backend.config import settings
         prefer_llm_first = bool(getattr(settings.llm, 'prefer_first', False))
     except Exception:
         pass

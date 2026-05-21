@@ -30,7 +30,7 @@ try:
 except Exception:
     pass
 
-# 把项目根加入 sys.path，使 web.backend.* 可导入
+# 把项目根加入 sys.path，使 backend.* 可导入
 _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -49,7 +49,7 @@ def _to_local(jf_str) -> str:
     """DB 里 file_path 是 Jellyfin view → 本机视角（做磁盘 op / 比对 source/target）"""
     if not jf_str:
         return ''
-    from web.backend.path_translator import translate_path_with_settings
+    from backend.path_translator import translate_path_with_settings
     return translate_path_with_settings(str(jf_str)) or str(jf_str)
 
 
@@ -57,7 +57,7 @@ def _to_jf(local_str) -> str:
     """本机视角字符串 → Jellyfin view（写 DB / 按 DB.file_path 查）"""
     if not local_str:
         return ''
-    from web.backend.path_translator import reverse_translate_path_with_settings
+    from backend.path_translator import reverse_translate_path_with_settings
     return reverse_translate_path_with_settings(str(local_str)) or str(local_str)
 
 
@@ -139,7 +139,7 @@ def build_plan(source: Path, target: Path) -> Tuple[List[dict], List[str]]:
       'items': [{id, code, file_path, nfo_path, poster_path}],
     }]
     """
-    from web.backend.database import SessionLocal, AdultItem
+    from backend.database import SessionLocal, AdultItem
 
     db = SessionLocal()
     try:
@@ -275,7 +275,7 @@ def apply_plan(plans: List[dict], dry_run: bool = False) -> Tuple[int, int]:
     """
     返回 (moved_units, db_updated_items)
     """
-    from web.backend.database import SessionLocal, AdultItem
+    from backend.database import SessionLocal, AdultItem
 
     if dry_run:
         return 0, 0

@@ -13,8 +13,8 @@
 
 | Spike | 结论 | 已落地代码 |
 |---|---|---|
-| ① subtitle 同步抽离 | ✅ 可行。auto_fix_from_report 本身就是同步纯函数 | `web/backend/api/subtitle.py::run_subtitle_auto_fix_inline()`<br>原 `run_subtitle_auto_fix(task_id,...)` 改为 task wrapper 调 inline<br>额外加了"文件白名单"语义解决剧集精准问题 |
-| ② audio 同步抽离 | ✅ 可行。mkvpropedit 仅改 default flag，不重打包 | `web/backend/api/audio.py::run_default_track_inline()`<br>apply=True + mkvpropedit 缺失自动降级为预览 |
+| ① subtitle 同步抽离 | ✅ 可行。auto_fix_from_report 本身就是同步纯函数 | `backend/api/subtitle.py::run_subtitle_auto_fix_inline()`<br>原 `run_subtitle_auto_fix(task_id,...)` 改为 task wrapper 调 inline<br>额外加了"文件白名单"语义解决剧集精准问题 |
+| ② audio 同步抽离 | ✅ 可行。mkvpropedit 仅改 default flag，不重打包 | `backend/api/audio.py::run_default_track_inline()`<br>apply=True + mkvpropedit 缺失自动降级为预览 |
 | ③ qB metadata-only | ⚠️ **plan 原假设错** —— `paused=True` 不连 peer 永远拿不到 metadata。正解是 qB 4.6+ 的 `stopCondition='MetadataReceived'` 参数 | `common/qbittorrent_client.py::add_torrent(stop_condition=...)` + `get_files()` + `get_torrent_info()`<br>本机 DHT 不通无法实测 metadata 拉取耗时，生产用 PT tracker 应正常 |
 | ④ DB 类型确认 | ✅ PostgreSQL（host=127.0.0.1）→ `JSONB` 直接用 | — |
 | ⑤ LLM 识别质量 | ✅ **超预期**：qwen-plus 在 30 个真实样本上达 100%/100%（type/hint），平均 ¥0.0007/调用 | API key 已配置（aliyun.qwen-plus）<br>1000 个种子成本 ≈ ¥0.74<br>平均延迟 3.8s（pipeline 异步可接受） |
@@ -224,7 +224,7 @@ CREATE INDEX idx_dispatch_phase ON download_dispatch_map(phase, phase_status);
 CREATE INDEX idx_dispatch_seeded_until ON download_dispatch_map(cleanup_eligible_at);
 ```
 
-> **DB 迁移方式**：项目用 `web/backend/database.py::_SCHEMA_PATCHES`（`ALTER TABLE IF NOT EXISTS`）
+> **DB 迁移方式**：项目用 `backend/database.py::_SCHEMA_PATCHES`（`ALTER TABLE IF NOT EXISTS`）
 > 而非 alembic。新表加到 `Base.metadata.create_all()` 自动创建，新列追加到
 > `_SCHEMA_PATCHES` 列表手动 ALTER。简单稳定，参考既有的 adult_items 等表的演化方式。
 
@@ -531,13 +531,13 @@ class TorrentOrganizer:
 
 ### 7.4 字幕/音轨调用 `tools/dispatch/post_process.py`
 
-> **Spike 1+2 已落地**：subtitle/audio 同步 inline 函数已抽离到 web/backend/api/{subtitle,audio}.py，
+> **Spike 1+2 已落地**：subtitle/audio 同步 inline 函数已抽离到 backend/api/{subtitle,audio}.py，
 > 直接 import 调用即可；不再需要轮询 Task 状态。
 
 ```python
 def post_process_subtitle(row, settings):
     """字幕处理：仅警告，不阻断主流程。"""
-    from web.backend.api.subtitle import run_subtitle_auto_fix_inline
+    from backend.api.subtitle import run_subtitle_auto_fix_inline
     try:
         # 关键：传 dispatched_files（具体的视频文件路径）
         # inline 函数会自动"父目录扫描 + 文件白名单过滤"，剧集场景不动同目录的旧集
@@ -562,7 +562,7 @@ def post_process_subtitle(row, settings):
 
 def post_process_audio(row, settings):
     """音轨处理：检查 default 音轨是否符合 preferred，能改则改（仅 default flag，不重打包）。"""
-    from web.backend.api.audio import run_default_track_inline
+    from backend.api.audio import run_default_track_inline
     try:
         result = run_default_track_inline(
             item_paths=row.dispatched_files,
@@ -691,14 +691,14 @@ def identify_media(torrent_name: str, files: List[dict],
 
 | # | 任务 | 文件 | 备注 |
 |---|---|---|---|
-| **A1** | DB schema：`download_dispatch_map` + `llm_classify_cache` 模型类，**用 `_SCHEMA_PATCHES` ALTER**（不用 alembic） | `web/backend/database.py` | 拆出独立 0.5 天交付 |
-| **A2** | 配置项：`qbittorrent.quota` / `seeding` / `dispatch` / `llm` 加到 `Settings`，**借此重构为嵌套 pydantic models** | `web/backend/config.py` + `config.yaml.example` | 0.5 天 |
+| **A1** | DB schema：`download_dispatch_map` + `llm_classify_cache` 模型类，**用 `_SCHEMA_PATCHES` ALTER**（不用 alembic） | `backend/database.py` | 拆出独立 0.5 天交付 |
+| **A2** | 配置项：`qbittorrent.quota` / `seeding` / `dispatch` / `llm` 加到 `Settings`，**借此重构为嵌套 pydantic models** | `backend/config.py` + `config.yaml.example` | 0.5 天 |
 | **A3** | `QBittorrentClient` **几乎重写**（现 6 方法 → ~20 方法，spike 已加 3 个）：剩余 add_tag / set_tags / set_category / set_file_priority / recheck / reannounce / set_force_start / set_save_path / transfer_info / 限速接口 / RSS 一组 | `common/qbittorrent_client.py` | **1 天**（spike 后修正） |
 | A4 | 完成轮询任务（替换现有 sync_completed）：扫 qB → 写 dispatch_map(phase=copy, phase_status=running) | `tools/dispatch/poll.py`（新） | 行级锁 |
 | A5 | 单 worker 串行编排骨架（DispatchPipeline）+ 状态机（phase + phase_status）+ PostProcessWorker（独立队列） | `tools/dispatch/pipeline.py`（新） | — |
 | A6 | `_step_copy`：shutil.copy2 + 实时 bytes_done 写库进度回调 | `tools/dispatch/copier.py`（新） | — |
 | A7 | `_step_jellyfin`：调 `jellyfin.trigger_refresh(library_id, mode)` | 复用现有 ✅ | — |
-| A8 | 后端 main.py 启动时拉起 DispatchPipeline + PostProcessWorker 后台线程 | `web/backend/main.py` | 套现有 lifespan 范式 |
+| A8 | 后端 main.py 启动时拉起 DispatchPipeline + PostProcessWorker 后台线程 | `backend/main.py` | 套现有 lifespan 范式 |
 
 **验收**：手动加一个种子，落 dispatch_map 后能自动复制到目标库 + Jellyfin 触发刷新。phase 推进可观察，copy 进度实时更新。
 
@@ -711,7 +711,7 @@ def identify_media(torrent_name: str, files: List[dict],
 | B1 | `QuotaManager` 实现：check / quota_cleanup / regular_cleanup（**配额清理只清安全档**：已转移 + 已达 ratio；不够再升级到牺牲档，落 task 警告） | `tools/dispatch/quota.py`（新） |
 | B2 | 后端定时任务：每分钟跑 `check + needs_cleanup → quota_cleanup` | `tools/dispatch/scheduler.py`（新） |
 | B3 | 后端定时任务：每小时跑 `regular_cleanup` | 同上 |
-| B4 | 前端下载管理页顶部状态条：用量进度 + 颜色阈值 + "立即清理" 按钮 | `web/frontend/src/views/discover/Downloads.vue` |
+| B4 | 前端下载管理页顶部状态条：用量进度 + 颜色阈值 + "立即清理" 按钮 | `frontend/src/views/discover/Downloads.vue` |
 | B5 | 配额清理日志：写入任务系统（Task / TaskLog） | 复用现有任务系统 |
 
 **验收**：往 /downloads 灌满到 380 GB，配额自动清理回 280 GB；UI 颜色和数字实时更新。
@@ -752,9 +752,9 @@ def identify_media(torrent_name: str, files: List[dict],
 | D1 | metadata-only 预添加 helper：用 spike 3 已加的 `add_torrent(stop_condition='MetadataReceived', download_limit=1)` ✅ + 轮 `list_torrents` 监 size > 0 | `common/qbittorrent_client.py` ✅ 已加基础 | 主要写轮询 + 超时回退 |
 | D2 | 启发式识别：番号正则 / SxxExx 提取 / 电影名+年份提取 | `tools/dispatch/identify.py`（新） |
 | D3 | TMDB 反查：imdb_id → /find；query → /search/movie /search/tv | 复用 `common/tmdb_client.py` 或扩展 |
-| D4 | jellyfin 重复检测：电影按 tmdb_id 查；剧集按 series + SxxExx 列对比 | `web/backend/api/jellyfin.py` 新加 helper |
-| D5 | 前端"添加种子确认对话框"：预填分类/路径，重复时显示选择（全下/仅新增/跳过/替换） | `web/frontend/src/components/AddTorrentDialog.vue`（新） |
-| D6 | 后端 `/api/dispatch/preview`：接 magnet 或 .torrent → 预添加 → 识别 → 返回 dispatch 预览 | `web/backend/api/dispatch.py`（新） |
+| D4 | jellyfin 重复检测：电影按 tmdb_id 查；剧集按 series + SxxExx 列对比 | `backend/api/jellyfin.py` 新加 helper |
+| D5 | 前端"添加种子确认对话框"：预填分类/路径，重复时显示选择（全下/仅新增/跳过/替换） | `frontend/src/components/AddTorrentDialog.vue`（新） |
+| D6 | 后端 `/api/dispatch/preview`：接 magnet 或 .torrent → 预添加 → 识别 → 返回 dispatch 预览 | `backend/api/dispatch.py`（新） |
 | D7 | "仅下新增"实现：qB filePrio 跳过已存在的集 | `set_file_priority`（A3 待补） |
 
 **验收**：从种子搜索页选种子点下载，10 秒内弹"添加确认"对话框，能看到文件列表 / 推断分类 / 重复警告。剧集 partial 重复能正确高亮已有集。
@@ -767,10 +767,10 @@ def identify_media(torrent_name: str, files: List[dict],
 | # | 任务 | 文件 |
 |---|---|---|
 | E1 | `LLMClient` 抽象：OpenAI-compatible 接口，支持 qwen / deepseek / openai / claude / glm | `common/llm_client.py`（新） |
-| E2 | `llm_classify_cache` 表 ORM helper（A1 已建表） | `web/backend/database.py` |
+| E2 | `llm_classify_cache` 表 ORM helper（A1 已建表） | `backend/database.py` |
 | E3 | Prompt 模板（直接复用 spike 用过的 v1 版本） | `tools/dispatch/llm_prompts.py`（新） |
 | E4 | identify.py 接入 LLM 兜底分支：confidence ≥ tmdb_verify_below 直接信；< 阈值才 TMDB 反查 | `tools/dispatch/identify.py` |
-| E5 | 前端设置页加 LLM 配置面板（provider / api_key / 测试按钮 / 每日剩余配额） | `web/frontend/src/views/Settings.vue` |
+| E5 | 前端设置页加 LLM 配置面板（provider / api_key / 测试按钮 / 每日剩余配额） | `frontend/src/views/Settings.vue` |
 | E6 | 每日配额限制 + LLM 调用计数 | `tools/dispatch/llm_quota.py`（新） |
 
 **验收**：动漫种子（无 ID 元数据）能被 LLM 直接识别 + 拿到可用 tmdb_search_hint，触发 TMDB 反查拿 tmdb_id。

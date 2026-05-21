@@ -71,7 +71,7 @@ elif dst_size > total / 异常:    on_displace 钩子 → trash    # ★ 不再�
 
 ### 2.5 数据库层反查
 
-dispatched_files 用 JSONB 存路径数组（[database.py:346](../web/backend/database.py)）。`duplicate._find_existing_owner` 用 `dispatched_files @> [dst]` + `torrent_hash != current` + `phase NOT IN ('cleaned','dismissed')` 反查占用方。代码在 [duplicate.py](../tools/dispatch/duplicate.py)。
+dispatched_files 用 JSONB 存路径数组（[database.py:346](../backend/database.py)）。`duplicate._find_existing_owner` 用 `dispatched_files @> [dst]` + `torrent_hash != current` + `phase NOT IN ('cleaned','dismissed')` 反查占用方。代码在 [duplicate.py](../tools/dispatch/duplicate.py)。
 
 ---
 
@@ -79,16 +79,16 @@ dispatched_files 用 JSONB 存路径数组（[database.py:346](../web/backend/da
 
 | 文件 | 角色 |
 |---|---|
-| [config_models.py](../web/backend/config_models.py) | `DispatchRule.duplicate_policy` 字段 + 各 media_type 默认值 |
+| [config_models.py](../backend/config_models.py) | `DispatchRule.duplicate_policy` 字段 + 各 media_type 默认值 |
 | [config.yaml.example](../config.yaml.example) | 4 个 media_type 各自的 duplicate_policy 默认值 |
-| [Settings.vue](../web/frontend/src/views/Settings.vue) | UI 暴露策略下拉 |
+| [Settings.vue](../frontend/src/views/Settings.vue) | UI 暴露策略下拉 |
 | [tools/dispatch/quality.py](../tools/dispatch/quality.py) | tier 提取 + Repack/Proper 识别 + compare() |
 | [tools/dispatch/duplicate.py](../tools/dispatch/duplicate.py) | resolve() 主入口 + `DuplicateConflictError` + 旧文件入 trash |
 | [tools/dispatch/copier.py](../tools/dispatch/copier.py) | `on_displace` 钩子（不再 hard delete）+ 原有 `CrossTorrentCollisionError` |
 | [tools/dispatch/organizer.py](../tools/dispatch/organizer.py) | `organize()` 增加 `duplicate_resolver` 参数 + `skipped_files` 返回值 + `_displace_to_trash` 钩子 |
 | [tools/dispatch/pipeline_worker.py](../tools/dispatch/pipeline_worker.py) | 注入 resolver；捕 `DuplicateConflictError` 落 needs_review；整包 skipped 时 phase=succeeded |
-| [web/backend/api/dispatch.py](../web/backend/api/dispatch.py) | `/copy-conflict/{hash}` GET + `/replace` + `/skip` |
-| [DownloadPipeline.vue](../web/frontend/src/views/downloadpipeline/DownloadPipeline.vue) | `openReview` 按 phase 路由；新增 copy-conflict 决策 dialog |
+| [backend/api/dispatch.py](../backend/api/dispatch.py) | `/copy-conflict/{hash}` GET + `/replace` + `/skip` |
+| [DownloadPipeline.vue](../frontend/src/views/downloadpipeline/DownloadPipeline.vue) | `openReview` 按 phase 路由；新增 copy-conflict 决策 dialog |
 | [tests/test_dispatch_duplicates.py](../tests/test_dispatch_duplicates.py) | quality + duplicate.resolve + copier on_displace 共 19 用例 |
 
 ---

@@ -49,7 +49,7 @@ POST /api/ratings/batch  (列表页用)
 
 ### 🔴 P0：title 被 MDB List 英文标题覆盖，导致豆瓣搜索失败
 
-**文件**：`web/backend/api/ratings.py:217-218`
+**文件**：`backend/api/ratings.py:217-218`
 
 ```python
 if parsed.get('title'):
@@ -83,7 +83,7 @@ C. MediaRating 加个 `local_title` 字段专给豆瓣用。最干净但要改 s
 
 ### 🟠 P1：豆瓣源/AniList 源条目没有 tmdb_id，拿不到任何评分
 
-**位置**：`web/frontend/src/views/discover/Trending.vue:577-582`
+**位置**：`frontend/src/views/discover/Trending.vue:577-582`
 
 ```js
 const fetchRatings = async () => {
@@ -105,7 +105,7 @@ const fetchRatings = async () => {
 
 ### 🟠 P1：Letterboxd 评分单位混乱
 
-**文件**：`common/mdblist_client.py:32-39`、`web/backend/database.py:162`
+**文件**：`common/mdblist_client.py:32-39`、`backend/database.py:162`
 
 DB 字段注释 `# Letterboxd (0-5)`，但 parser 用 `'float'` 直接存（不归一）：
 
@@ -125,7 +125,7 @@ if src == 'letterboxd' and v is not None:
 
 ### 🟡 P2：豆瓣 worker 单线程串行，列表页冷启动很慢
 
-**文件**：`web/backend/api/ratings.py:244-345`
+**文件**：`backend/api/ratings.py:244-345`
 
 豆瓣 worker 一次只处理一条，限速 5s/req（默认 douban_request_delay）。列表页一次进来 30 条豆瓣首次拉取，需要 **150 秒** 才能补齐。期间用户已经滚走或换 tab。
 

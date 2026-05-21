@@ -19,8 +19,8 @@ import threading
 from datetime import datetime, timedelta
 from typing import Dict, List
 
-from web.backend.config import settings
-from web.backend.database import SessionLocal, DownloadDispatchMap
+from backend.config import settings
+from backend.database import SessionLocal, DownloadDispatchMap
 from tools.dispatch.phases import (
     PHASE_ANALYZING, PHASE_DISPATCH_QUEUED, PHASE_DOWNLOADING, PHASE_DOWNLOAD_DONE,
     PHASE_COPYING, PHASE_ORGANIZING, PHASE_JELLYFIN_RECOGNIZING, PHASE_JELLYFIN_RECOGNIZE_DONE,

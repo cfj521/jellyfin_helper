@@ -61,8 +61,8 @@ def run_downloader_watcher_loop(stop_event: threading.Event):
 
 def scan_once() -> Dict:
     """扫一遍 → 拉 qB → 按状态推进。返回 stats。"""
-    from web.backend.config import settings
-    from web.backend.database import SessionLocal, DownloadDispatchMap
+    from backend.config import settings
+    from backend.database import SessionLocal, DownloadDispatchMap
 
     if not settings.qbittorrent_configured:
         return _empty_stats()

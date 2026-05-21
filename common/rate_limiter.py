@@ -336,7 +336,7 @@ class QuotaGuard:
         if paused_until - time.time() < cls._PERSIST_THRESHOLD_SEC:
             return  # 短暂停不存
         try:
-            from web.backend.cache_store import set_cached
+            from backend.cache_store import set_cached
             set_cached(cls._PERSIST_SCOPE, source, {'paused_until': paused_until})
         except Exception:
             pass
@@ -344,7 +344,7 @@ class QuotaGuard:
     @classmethod
     def _persist_clear(cls, source: str):
         try:
-            from web.backend.cache_store import invalidate
+            from backend.cache_store import invalidate
             invalidate(cls._PERSIST_SCOPE, source)
         except Exception:
             pass
@@ -357,7 +357,7 @@ class QuotaGuard:
         self._restored = True
         try:
             # 读全部 source 在 kv_cache 里的记录（按已知源逐个 get）
-            from web.backend.cache_store import get_cached, invalidate
+            from backend.cache_store import get_cached, invalidate
             now = time.time()
             for source in SOURCE_CONFIGS:
                 data = get_cached(

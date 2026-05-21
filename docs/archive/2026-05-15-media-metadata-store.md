@@ -4,7 +4,7 @@
 > 修订日期：2026-05-15（增补：刷新策略与边界 §4.3、成人库处理边界 §1.4）
 > 状态：方案待 review 后开工
 > 触发：用户讨论 trending KV 缓存升级为"实体级长缓存"
-> 关联：[2026-05-11 评分系统 review](2026-05-11-ratings-system-review.md)、`web/backend/api/discover.py`、`web/backend/api/ratings.py`、`web/backend/api/adult.py`
+> 关联：[2026-05-11 评分系统 review](2026-05-11-ratings-system-review.md)、`backend/api/discover.py`、`backend/api/ratings.py`、`backend/api/adult.py`
 
 ---
 
@@ -43,7 +43,7 @@
 
 ## 1. 表结构
 
-### 1.1 SQLAlchemy 模型（加在 `web/backend/database.py`）
+### 1.1 SQLAlchemy 模型（加在 `backend/database.py`）
 
 ```python
 class MediaMetadata(Base):
@@ -257,7 +257,7 @@ class MediaMetadata(Base):
 
 ## 2. 配置项
 
-### 2.1 yaml + Settings 字段（落在 `web/backend/config.py`）
+### 2.1 yaml + Settings 字段（落在 `backend/config.py`）
 
 ```yaml
 # config.yaml
@@ -296,7 +296,7 @@ settings.metadata = MetadataSettings()
 
 ## 3. 模块设计
 
-### 3.1 新增 `web/backend/services/metadata_store.py`
+### 3.1 新增 `backend/services/metadata_store.py`
 
 统一封装"读 → 命中返回 / 未命中下游 → 写入"逻辑：
 
@@ -365,7 +365,7 @@ class MetadataStore:
 
 ### 3.3 LRU 清理 job
 
-新增 `web/backend/services/metadata_lru.py`，注册到现有的 dispatch scheduler（已有每日跑的位置）：
+新增 `backend/services/metadata_lru.py`，注册到现有的 dispatch scheduler（已有每日跑的位置）：
 
 ```python
 def cleanup_metadata_lru():

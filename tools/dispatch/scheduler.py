@@ -47,7 +47,7 @@ def _start_post_process_worker(stop_event):
 
 def run_scheduler_loop(stop_event=None):
     """长循环：spawn 6 个 worker 线程 + 定时跑 quota/adopt/trash。"""
-    from web.backend.config import settings
+    from backend.config import settings
     quota_interval = max(30, int(settings.qbittorrent_quota.check_interval_seconds))
     soft_interval = max(60, int(settings.qbittorrent_seeding.cleanup_interval_seconds))
     adopt_interval = max(60, int(settings.dispatch.adopt_interval_seconds))
