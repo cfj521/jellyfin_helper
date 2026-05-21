@@ -480,8 +480,9 @@ class AdultWatcher:
         from backend.database import Task
         entry["t"] = int(time.time())
         stats["scanned_files"].append(entry)
-        if len(stats["scanned_files"]) > 500:
-            stats["scanned_files"] = stats["scanned_files"][-500:]
+        # 历史曾在此截断到 500（"防止任务结果过大"），但跟 1938d38（task details/result
+        # 不截断）的策略冲突 —— 扫描 505 文件时前 5 条会被丢，前端明细对不上 counter
+        # 全量保留：单条 entry ~200B，10000 文件也才 ~2MB JSONB，PG 完全 hold
         try:
             task = db.query(Task).filter(Task.id == task_id).first()
             if task:

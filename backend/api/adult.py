@@ -1006,7 +1006,9 @@ def run_adult_scrape_batch(task_id: int, item_ids: List[int], write_nfo: bool, d
             "success": success,
             "failed": failed,
             "not_found": not_found,
-            "details": details[-200:],
+            # 全量保留 details（之前 [-200:] 会丢前 N 条明细，对不上 counter；
+            # JSONB 列 1MB 内毫无压力，task 详情页能完整看到所有失败原因）
+            "details": details,
         }
 
     try:
@@ -2351,8 +2353,9 @@ def _run_repair_covers(task_id: int, item_ids: List[int]):
             update_task_progress(
                 db, task_id, 5 + int(90 * (idx + 1) / total),
                 f"[{idx+1}/{total}] {code}",
+                # details 全量上报（去掉历史 [-200:] 截断，跟 adult scan / task system 策略对齐）
                 result_patch={"total": total, "success": success, "failed": failed,
-                              "details": details[-200:]},
+                              "details": details},
             )
 
         if not cover_url or not file_path:
