@@ -650,7 +650,7 @@ def run_actor_fix(
                 "skipped": skipped_count,
                 "scan_only": scan_only,
                 "jellyfin_refreshed": refreshed,
-                "details": details,  # 详情页用，最多保留 500 条
+                "details": details,  # 全量保留，前端详情页一次展示所有条目
             })
 
     except Exception as e:
