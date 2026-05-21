@@ -83,7 +83,7 @@ def _reload_settings():
 
     # settings 变更后：
     #   - watcher 比对新旧 library_ids，对新增的库立即触发扫描
-    #   - WebSocket 客户端重新评估连接（auto_scrape / library_ids 变化都生效）
+    #   - 变更监听客户端重新评估启停（auto_scrape / library_ids 变化都生效）
     try:
         from web.backend.services.adult_watcher import watcher
         watcher.restart_for_new_libraries()
@@ -91,10 +91,10 @@ def _reload_settings():
         logger.warning(f"watcher.restart_for_new_libraries 失败: {e}")
 
     try:
-        from web.backend.services.jellyfin_ws import client as ws_client
-        ws_client.notify_settings_changed()
+        from web.backend.services.jellyfin_ws import client as poller_client
+        poller_client.notify_settings_changed()
     except Exception as e:
-        logger.warning(f"通知 ws client 失败: {e}")
+        logger.warning(f"通知 jellyfin 变更监听器失败: {e}")
 
     # 清空 TMDB 列表/详情缓存（避免显示旧语言数据）
     try:

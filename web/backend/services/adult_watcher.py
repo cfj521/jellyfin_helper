@@ -2,7 +2,7 @@
 番号库扫描服务
 
 只在被触发时工作，不再有周期定时器。触发来源：
-  1. Jellyfin WebSocket LibraryChanged 事件（services.jellyfin_ws）
+  1. services.jellyfin_ws 的轮询 worker 周期性触发（默认 60s 一次，自带库级 5min 冷却）
   2. 用户配置变更后（_reload_settings → restart_for_new_libraries）
   3. 用户手动点"立即扫描"
 
@@ -82,14 +82,17 @@ class AdultWatcher:
     def status(self) -> dict:
         from web.backend.config import settings
         try:
-            from web.backend.services.jellyfin_ws import client as ws_client
-            ws_status = ws_client.status()
+            from web.backend.services.jellyfin_ws import client as poller_client
+            poller_status = poller_client.status()
         except Exception:
-            ws_status = {"connected": False, "error": "ws client 未加载"}
+            poller_status = {"connected": False, "error": "poller client 未加载"}
         return {
             "enabled": settings.adult_enabled,
             "auto_scrape": settings.adult_auto_scrape,
-            "websocket": ws_status,
+            # 字段含义已从 WebSocket 改为 polling worker（Jellyfin 10.11 起 WS 不再可用）；
+            # 'websocket' key 保留为 API 兼容别名，新代码请用 'change_monitor'
+            "change_monitor": poller_status,
+            "websocket": poller_status,
             "last_run_at": self._last_run_at,
             "last_run_summary": self._last_run_summary,
             "active_tasks": dict(self._active_tasks),

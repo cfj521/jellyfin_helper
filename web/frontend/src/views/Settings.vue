@@ -957,7 +957,8 @@
             <el-form-item label="自动监视">
               <el-switch v-model="form.adult.auto_scrape" />
               <span class="form-hint">
-                通过 Jellyfin WebSocket 实时监听库变化，新文件自动入库 + 刮削（默认关闭）
+                定时轮询 Jellyfin（默认每 60s）发现新视频自动入库 + 刮削（默认关闭）。
+                自带 5min 库级冷却，不会重复扫
               </span>
             </el-form-item>
           </el-form>
