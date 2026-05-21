@@ -56,33 +56,22 @@
         <!-- 番号 -->
         <el-table-column label="番号" width="140">
           <template #default="{ row }">
-            <span v-if="row.code" class="code" :title="row.name">{{ row.code }}</span>
-            <span v-else class="muted" :title="row.name">—</span>
-          </template>
-        </el-table-column>
-
-        <!-- 标题（scraped 状态才有；其他 status 显示 — 或 error） -->
-        <el-table-column label="标题" min-width="320" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.title">{{ row.title }}</span>
-            <span v-else-if="row.error" class="error-msg">{{ row.error }}</span>
+            <span v-if="row.code" class="code">{{ row.code }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <!-- 源（scraped 状态记录命中的 scraper 列表，可能多值） -->
-        <el-table-column label="源" min-width="180">
+        <!-- 文件名（扫描任务里最有用的信息：哪个文件是这状态）-->
+        <el-table-column label="文件名" min-width="360" show-overflow-tooltip>
           <template #default="{ row }">
-            <template v-if="row.sources && row.sources.length">
-              <el-tag
-                v-for="s in row.sources"
-                :key="s"
-                size="small"
-                effect="plain"
-                style="margin-right: 4px"
-              >{{ s }}</el-tag>
-            </template>
-            <span v-else class="muted">—</span>
+            <span class="filename">{{ row.name || row.path || '—' }}</span>
+          </template>
+        </el-table-column>
+
+        <!-- 错误信息：仅 failed / not_found / scrape_failed 等异常状态有值，其他留空 -->
+        <el-table-column label="错误信息" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.error" class="error-msg">{{ row.error }}</span>
           </template>
         </el-table-column>
 
