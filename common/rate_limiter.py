@@ -8,7 +8,8 @@
      - 主动：客户端每次请求前 acquire() 检查暂停 / 批量配额
   3. **batch 调用额外受配额约束**（分钟/小时/日滑动窗）
      ── 谁算 batch？UI 批量动作按钮（修海报、修演员…）+ 后台 worker
-     ── 普通前台单条请求 batch=False，只受 hard delay + pause 控制
+     ── 普通前台单条请求 batch=False，只受 hard delay + external_pause 控制
+        （internal_pause 仅在 batch=True 时检查本地配额窗口才会触发）
   4. 进程全局单例，线程安全
   5. 日志可观察：触发暂停/熔断/配额耗尽时 WARN；恢复时 INFO
 
@@ -19,22 +20,28 @@
        quota_guard.acquire('tmdb', batch=self.batch)
      如果当前已被暂停或撞到 batch 配额则 sleep 后返回等待时长。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-源              │ 官方 limits                    │ 我们 hard delay │ batch 配额          │ pause / batch pause
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TMDB            │ ~50 req/10s (≈5 req/s)         │ 0.5s            │ 30/min 900/h 5000/d │ 60s  / 15min
-assrt           │ 20 req/min (token+IP)          │ 6.0s            │ 10/min 500/h 2500/d │ 120s / 30min
-OpenSubtitles   │ search: 5 req/10s              │ 3.0s            │ 12/min 600/h 3000/d │ 120s / 30min
-                │ download: **20 / 24h (免费版)**│                 │                     │ (+ 命中 406 时 pause_for 到 reset_time_utc)
-Shooter         │ 无公开                         │ 3.0s            │ 10/min 500/h 2500/d │ 120s / 30min
-MDB List        │ 1000 / day                     │ 1.0s            │ 20/min 300/h 1000/d │ 1d   / 1d
-Douban          │ 无公开（403/429/503 反爬）     │ 5.0s            │ 10/min 300/h 2000/d │ 180s / 2h
-Trakt           │ 未明确（低频可用）             │ 1.0s            │ ——                  │ 60s  / ——
-AniList         │ 90 req/min                     │ 1.0s            │ ——                  │ 60s  / ——
-Wikidata        │ 未明确（要求合规 UA）          │ 1.0s            │ 15/min 600/h 3000/d │ 60s  / 30min
-Adult Scraper   │ 各站独立（多为 Cloudflare 拦） │ 3.0s            │ 15/min 600/h 3000/d │ 180s / 30min
-LLM             │ 取决于 provider (qwen/openai…) │ 1.0s            │ ——                  │ 60s  / ——
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+源              │ 官方 limits                    │ hard delay │ batch 配额          │ int pause / ext pause
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TMDB            │ ~50 req/10s (≈5 req/s)         │ 0.5s       │ 30/min 900/h 5000/d │ 60s  / 15min
+assrt           │ 20 req/min (token+IP)          │ 6.0s       │ 10/min 500/h 2500/d │ 120s / 30min
+OpenSubtitles   │ search: 5 req/10s              │ 3.0s       │ 12/min 600/h 3000/d │ 120s / 30min
+                │ download: **20 / 24h (免费版)**│            │                     │ (+ 命中 406 时 pause_for 到 reset_time_utc)
+Shooter         │ 无公开                         │ 3.0s       │ 10/min 500/h 2500/d │ 120s / 30min
+MDB List        │ 1000 / day                     │ 1.0s       │ 20/min 300/h 1000/d │ 180s   / 1d
+Douban          │ 无公开（403/429/503 反爬）     │ 5.0s       │ 10/min 300/h 2000/d │ 180s / 2h
+Trakt           │ 未明确（低频可用）             │ 1.0s       │ ——                  │ 60s   / 15min
+AniList         │ 90 req/min                     │ 1.0s       │ ——                  │ 120s   / 30min
+Wikidata        │ 未明确（要求合规 UA）          │ 1.0s       │ 15/min 600/h 3000/d │ 60s  / 30min
+Adult Scraper   │ 各站独立（多为 Cloudflare 拦） │ 3.0s       │ 15/min 600/h 3000/d │ 180s / 30min
+LLM             │ 取决于 provider (qwen/openai…) │ 1.0s       │ ——                  │ 60s   / 10min
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  int pause = 本地配额窗口触顶时的 sleep（对方未拒绝，自家保守降速 —— 短，撑过当前窗口即可）
+  ext pause = 对方真返了 429/30900/403 等拒绝信号时的 sleep（长，等服务器消气）
+
+  一般规律 int < ext —— 服务器明确拒绝比"我们自己保守"更严重，要等更久。
+  MDB List 比较特殊：external=1d，因为它是 1000 req/day 硬限，撞顶必须等次日 reset
 
 注解（容易踩坑的几条）：
 
@@ -46,7 +53,8 @@ LLM             │ 取决于 provider (qwen/openai…) │ 1.0s            │ 
   （**不是 429**）+ body 含 remaining=0 / reset_time_utc。
   download() 解析后调 quota_guard.pause_for() 设精确恢复时间，整源暂停到次日。
 
-* **MDB List 1000 / day**：撞顶 batch_pause 整整 1 天 (86400s)。
+* **MDB List 1000 / day**：external_pause = 1 day（24h），因为撞 429 等价于"今日额度用光"，
+  必须等次日 reset；internal_pause = 3min（本地小窗口短退避就够）。
 
 * **quota_guard 计数**：batch=True/False 都记 timestamp，确保 UI 单测和
   worker 共享同一个 60s 滑窗 —— 避免自家算 ok 但服务器已撞顶。
@@ -67,13 +75,21 @@ logger = logging.getLogger(__name__)
 # 全局限速常量
 # 所有外部服务的 delay / 配额 / 冷却参数统一在此定义（不走 config.yaml）
 # 改完重启即生效
+#
+# 命名约定（重要）：
+#   *_DELAY           hard delay：每次请求之间的最小间隔（客户端 client 主动 sleep）
+#   *_BATCH_QUOTA     (per_min, per_hour, per_day) 本地滑动窗配额
+#   *_INTERNAL_PAUSE  本地配额窗口触顶时主动 sleep（对方未拒绝，自家保守降速 → 短）
+#   *_EXTERNAL_PAUSE  对方真返了 429/30900/403 等拒绝信号时 sleep（服务器明确拒绝 → 长）
+#
+# 一般规律 internal < external —— 服务器拒绝更严重，要给更长冷却时间
 # ============================================================================
 
 # ── TMDB ── 官方 ~50 req/10s，硬限制设 0.5s 留 buffer
 TMDB_DELAY: float = 0.5
 TMDB_BATCH_QUOTA: Tuple[int, int, int] = (30, 900, 5000)   # (min, hour, day)
-TMDB_PAUSE: float = 60.0
-TMDB_BATCH_PAUSE: float = 900.0           # 15 min
+TMDB_INTERNAL_PAUSE: float = 60.0
+TMDB_EXTERNAL_PAUSE: float = 900.0        # 15 min
 
 # ── assrt (字幕) ── 官方 20 req/min（token+IP）
 # 实测 4.5s hard delay 仍偶尔撞 30900：服务器侧每个命中 video 实际有
@@ -84,56 +100,59 @@ TMDB_BATCH_PAUSE: float = 900.0           # 15 min
 #   顺序跑触发不到这条，只有多线程异常 burst 才会撞）
 ASSRT_DELAY: float = 6.0
 ASSRT_BATCH_QUOTA: Tuple[int, int, int] = (10, 500, 2500)
-ASSRT_PAUSE: float = 120.0
-ASSRT_BATCH_PAUSE: float = 1800.0         # 30 min
+ASSRT_INTERNAL_PAUSE: float = 120.0
+ASSRT_EXTERNAL_PAUSE: float = 1800.0      # 30 min
 
 # ── OpenSubtitles (字幕) ── 免费 5 req/10s
 OPENSUBTITLES_DELAY: float = 3.0
 OPENSUBTITLES_BATCH_QUOTA: Tuple[int, int, int] = (12, 600, 3000)
-OPENSUBTITLES_PAUSE: float = 120.0
-OPENSUBTITLES_BATCH_PAUSE: float = 1800.0  # 30 min
+OPENSUBTITLES_INTERNAL_PAUSE: float = 120.0
+OPENSUBTITLES_EXTERNAL_PAUSE: float = 1800.0  # 30 min
 
 # ── Shooter (字幕) ── 无公开限速，礼貌间隔
 SHOOTER_DELAY: float = 3.0
 SHOOTER_BATCH_QUOTA: Tuple[int, int, int] = (10, 500, 2500)
-SHOOTER_PAUSE: float = 120.0
-SHOOTER_BATCH_PAUSE: float = 1800.0       # 30 min
+SHOOTER_INTERNAL_PAUSE: float = 120.0
+SHOOTER_EXTERNAL_PAUSE: float = 1800.0    # 30 min
 
 # ── MDB List (评分) ── 1000 req/day，配额耗尽暂停 1 天
 MDBLIST_DELAY: float = 1.0
 MDBLIST_BATCH_QUOTA: Tuple[int, int, int] = (20, 300, 1000)
-MDBLIST_PAUSE: float = 86400.0            # 1 day
-MDBLIST_BATCH_PAUSE: float = 86400.0      # 1 day
+MDBLIST_INTERNAL_PAUSE: float = 180.0      # 3 min
+MDBLIST_EXTERNAL_PAUSE: float = 86400.0    # 1 day
 
 # ── Douban (评分/片单，纯爬虫) ──
 DOUBAN_DELAY: float = 5.0
 DOUBAN_BATCH_QUOTA: Tuple[int, int, int] = (10, 300, 2000)
-DOUBAN_PAUSE: float = 180.0
-DOUBAN_BATCH_PAUSE: float = 7200.0        # 2 h
+DOUBAN_INTERNAL_PAUSE: float = 180.0       # 3 min
+DOUBAN_EXTERNAL_PAUSE: float = 7200.0      # 2 h（被 403 后 IP 通常需要长冷却）
 
 # ── Wikidata (演员图兜底) ──
 WIKIDATA_DELAY: float = 1.0
 WIKIDATA_BATCH_QUOTA: Tuple[int, int, int] = (15, 600, 3000)
-WIKIDATA_PAUSE: float = 60.0
-WIKIDATA_BATCH_PAUSE: float = 1800.0      # 30 min
+WIKIDATA_INTERNAL_PAUSE: float = 60.0
+WIKIDATA_EXTERNAL_PAUSE: float = 1800.0   # 30 min
 
 # ── Trakt (推荐源) ── 无配额
 TRAKT_DELAY: float = 1.0
-TRAKT_PAUSE: float = 60.0
+TRAKT_INTERNAL_PAUSE: float = 60.0
+TRAKT_EXTERNAL_PAUSE: float = 900.0       # 15 min
 
 # ── AniList (推荐源) ── 官方 90 req/min；只用 hard delay 控
 ANILIST_DELAY: float = 1.0
-ANILIST_PAUSE: float = 60.0
+ANILIST_INTERNAL_PAUSE: float = 120.0
+ANILIST_EXTERNAL_PAUSE: float = 1800.0    # 30 min
 
 # ── 成人内容刮削 ──
 ADULT_SCRAPER_DELAY: float = 3.0
 ADULT_SCRAPER_BATCH_QUOTA: Tuple[int, int, int] = (15, 600, 3000)
-ADULT_SCRAPER_PAUSE: float = 180.0
-ADULT_SCRAPER_BATCH_PAUSE: float = 1800.0  # 30 min
+ADULT_SCRAPER_INTERNAL_PAUSE: float = 180.0
+ADULT_SCRAPER_EXTERNAL_PAUSE: float = 1800.0  # 30 min
 
 # ── LLM (qwen / deepseek / 本地) ── 限速取决于供应商，这里给个保底
 LLM_DELAY: float = 1.0
-LLM_PAUSE: float = 60.0
+LLM_INTERNAL_PAUSE: float = 60.0
+LLM_EXTERNAL_PAUSE: float = 600.0         # 10 min
 
 # ============================================================================
 # 源配置定义
@@ -146,111 +165,116 @@ class SourceConfig:
     # 硬限制下 client 自身 delay 仍是主控；本字段仅供文档/前端读取
     hard_delay: float = 1.0
 
-    # 触发限流 / 收到 429 后的暂停秒数
-    pause_seconds: float = 60.0
+    # 外部限流 sleep 秒数：对方返了 429/30900/403 等真实拒绝信号时触发
+    external_pause_seconds: float = 60.0
 
     # batch 调用专属：分钟 / 小时 / 日 配额（0 = 不限）
     batch_per_min: int = 0
     batch_per_hour: int = 0
     batch_per_day: int = 0
 
-    # batch 配额耗尽时的暂停秒数（默认与 pause_seconds 等同）
-    batch_pause_seconds: float = 0.0
+    # 本地配额触顶 sleep 秒数：batch_quota 窗口满时主动 sleep（对方未拒绝）
+    # 0 = 等同于 external_pause_seconds
+    internal_pause_seconds: float = 0.0
 
     # 描述（日志/前端用）
     description: str = ''
 
-    def effective_batch_pause(self) -> float:
-        return self.batch_pause_seconds or self.pause_seconds
+    def effective_internal_pause(self) -> float:
+        """本地配额触顶时实际 sleep 秒数 —— 没显式设就 fallback external_pause_seconds。"""
+        return self.internal_pause_seconds or self.external_pause_seconds
 
 
 # 全局源注册表
 SOURCE_CONFIGS: Dict[str, SourceConfig] = {
     'tmdb': SourceConfig(
         hard_delay=TMDB_DELAY,
-        pause_seconds=TMDB_PAUSE,
+        external_pause_seconds=TMDB_EXTERNAL_PAUSE,
         batch_per_min=TMDB_BATCH_QUOTA[0],
         batch_per_hour=TMDB_BATCH_QUOTA[1],
         batch_per_day=TMDB_BATCH_QUOTA[2],
-        batch_pause_seconds=TMDB_BATCH_PAUSE,
+        internal_pause_seconds=TMDB_INTERNAL_PAUSE,
         description='TMDB (~50 req/10s, HTTP 429)',
     ),
     'assrt': SourceConfig(
         hard_delay=ASSRT_DELAY,
-        pause_seconds=ASSRT_PAUSE,
+        external_pause_seconds=ASSRT_EXTERNAL_PAUSE,
         batch_per_min=ASSRT_BATCH_QUOTA[0],
         batch_per_hour=ASSRT_BATCH_QUOTA[1],
         batch_per_day=ASSRT_BATCH_QUOTA[2],
-        batch_pause_seconds=ASSRT_BATCH_PAUSE,
+        internal_pause_seconds=ASSRT_INTERNAL_PAUSE,
         description='assrt.net (20 req/min, code 30900)',
     ),
     'opensubtitles': SourceConfig(
         hard_delay=OPENSUBTITLES_DELAY,
-        pause_seconds=OPENSUBTITLES_PAUSE,
+        external_pause_seconds=OPENSUBTITLES_EXTERNAL_PAUSE,
         batch_per_min=OPENSUBTITLES_BATCH_QUOTA[0],
         batch_per_hour=OPENSUBTITLES_BATCH_QUOTA[1],
         batch_per_day=OPENSUBTITLES_BATCH_QUOTA[2],
-        batch_pause_seconds=OPENSUBTITLES_BATCH_PAUSE,
+        internal_pause_seconds=OPENSUBTITLES_INTERNAL_PAUSE,
         description='OpenSubtitles (search 5req/10s + download 20/24h 免费版, 撞顶 HTTP 406)',
     ),
     'shooter': SourceConfig(
         hard_delay=SHOOTER_DELAY,
-        pause_seconds=SHOOTER_PAUSE,
+        external_pause_seconds=SHOOTER_EXTERNAL_PAUSE,
         batch_per_min=SHOOTER_BATCH_QUOTA[0],
         batch_per_hour=SHOOTER_BATCH_QUOTA[1],
         batch_per_day=SHOOTER_BATCH_QUOTA[2],
-        batch_pause_seconds=SHOOTER_BATCH_PAUSE,
+        internal_pause_seconds=SHOOTER_INTERNAL_PAUSE,
         description='Shooter (无公开限制, hash 协议)',
     ),
     'mdblist': SourceConfig(
         hard_delay=MDBLIST_DELAY,
-        pause_seconds=MDBLIST_PAUSE,
+        external_pause_seconds=MDBLIST_EXTERNAL_PAUSE,
         batch_per_min=MDBLIST_BATCH_QUOTA[0],
         batch_per_hour=MDBLIST_BATCH_QUOTA[1],
         batch_per_day=MDBLIST_BATCH_QUOTA[2],
-        batch_pause_seconds=MDBLIST_BATCH_PAUSE,
+        internal_pause_seconds=MDBLIST_INTERNAL_PAUSE,
         description='MDB List (1000 req/day, HTTP 429)',
     ),
     'douban': SourceConfig(
         hard_delay=DOUBAN_DELAY,
-        pause_seconds=DOUBAN_PAUSE,
+        external_pause_seconds=DOUBAN_EXTERNAL_PAUSE,
         batch_per_min=DOUBAN_BATCH_QUOTA[0],
         batch_per_hour=DOUBAN_BATCH_QUOTA[1],
         batch_per_day=DOUBAN_BATCH_QUOTA[2],
-        batch_pause_seconds=DOUBAN_BATCH_PAUSE,
+        internal_pause_seconds=DOUBAN_INTERNAL_PAUSE,
         description='豆瓣 (无公开 API, 403/429/503 反爬)',
     ),
     'trakt': SourceConfig(
         hard_delay=TRAKT_DELAY,
-        pause_seconds=TRAKT_PAUSE,
+        external_pause_seconds=TRAKT_EXTERNAL_PAUSE,
+        internal_pause_seconds=TRAKT_INTERNAL_PAUSE,
         description='Trakt (rate limit unspecified)',
     ),
     'anilist': SourceConfig(
         hard_delay=ANILIST_DELAY,
-        pause_seconds=ANILIST_PAUSE,
+        external_pause_seconds=ANILIST_EXTERNAL_PAUSE,
+        internal_pause_seconds=ANILIST_INTERNAL_PAUSE,
         description='AniList (90 req/min)',
     ),
     'wikidata': SourceConfig(
         hard_delay=WIKIDATA_DELAY,
-        pause_seconds=WIKIDATA_PAUSE,
+        external_pause_seconds=WIKIDATA_EXTERNAL_PAUSE,
         batch_per_min=WIKIDATA_BATCH_QUOTA[0],
         batch_per_hour=WIKIDATA_BATCH_QUOTA[1],
         batch_per_day=WIKIDATA_BATCH_QUOTA[2],
-        batch_pause_seconds=WIKIDATA_BATCH_PAUSE,
+        internal_pause_seconds=WIKIDATA_INTERNAL_PAUSE,
         description='Wikidata SPARQL',
     ),
     'adult': SourceConfig(
         hard_delay=ADULT_SCRAPER_DELAY,
-        pause_seconds=ADULT_SCRAPER_PAUSE,
+        external_pause_seconds=ADULT_SCRAPER_EXTERNAL_PAUSE,
         batch_per_min=ADULT_SCRAPER_BATCH_QUOTA[0],
         batch_per_hour=ADULT_SCRAPER_BATCH_QUOTA[1],
         batch_per_day=ADULT_SCRAPER_BATCH_QUOTA[2],
-        batch_pause_seconds=ADULT_SCRAPER_BATCH_PAUSE,
+        internal_pause_seconds=ADULT_SCRAPER_INTERNAL_PAUSE,
         description='成人内容刮削 (JavBus / JavDB 等)',
     ),
     'llm': SourceConfig(
         hard_delay=LLM_DELAY,
-        pause_seconds=LLM_PAUSE,
+        external_pause_seconds=LLM_EXTERNAL_PAUSE,
+        internal_pause_seconds=LLM_INTERNAL_PAUSE,
         description='LLM Provider (配额取决于提供商)',
     ),
 }
@@ -269,6 +293,9 @@ class _SourceState:
     last_hit_at: float = 0.0
     # batch 调用滑动窗时间戳（保留最近 1 天内的）
     batch_timestamps: Deque[float] = field(default_factory=deque)
+    # 暂停原因：'external' = 真被对方限了（429/30900/403...）；'preventive' = 本地配额触顶提前暂停
+    # —— 给前端 UI 区分用，用户能立刻看出"对方在限我"还是"我们自己保守保护"
+    pause_reason: str = ''
 
 
 # ============================================================================
@@ -417,8 +444,9 @@ class QuotaGuard:
             state.total_hits += 1
             state.last_hit_at = now
 
-            pause_sec = cfg.pause_seconds
+            pause_sec = cfg.external_pause_seconds
             state.paused_until = now + pause_sec
+            state.pause_reason = 'external'  # 真被对方 429/30900/403... 拒绝
             logger.warning(
                 f"[QuotaGuard] ⚠️ {source} 限流 (#{state.consecutive_hits})"
                 f" → 暂停 {pause_sec:.0f}s ({cfg.description})"
@@ -450,7 +478,7 @@ class QuotaGuard:
         """
         请求前调用：
           - 若该源处于暂停/熔断 → sleep 到解除（blocking=True）或直接返回剩余等待秒数
-          - 若 batch=True 且撞到 batch 配额 → 暂停 batch_pause_seconds 再返回
+          - 若 batch=True 且撞到 batch 配额 → 暂停 internal_pause_seconds 再返回
           - 否则记录此次请求时间戳（batch=True 时计入配额窗口）
 
         返回值：本次实际等待的秒数（无需等待则为 0）。
@@ -496,11 +524,12 @@ class QuotaGuard:
                     self._prune_timestamps(state, now)
                     hits = self._check_batch_quota(state, cfg, now)
                     if hits:
-                        quota_pause = cfg.effective_batch_pause()
+                        quota_pause = cfg.effective_internal_pause()
                         state.paused_until = now + quota_pause
+                        state.pause_reason = 'internal'  # 本地配额预暂停，对方还没拒绝
                         logger.warning(
                             f"[QuotaGuard] 📊 {source} 批量配额耗尽 "
-                            f"[{', '.join(hits)}] → 暂停 {quota_pause:.0f}s"
+                            f"[{', '.join(hits)}] → 暂停 {quota_pause:.0f}s（本地预暂停，对方未拒绝）"
                         )
 
             if quota_pause > 0:
@@ -552,6 +581,9 @@ class QuotaGuard:
                 'source': source,
                 'description': cfg.description,
                 'is_paused': paused_remaining > 0,
+                # 'external' = 真被对方限了（429/30900/403...）；'preventive' = 本地配额触顶提前暂停（对方未拒绝）
+                # 没被暂停过则空串。前端按此分两档展示，避免用户误以为对方在限自己
+                'pause_reason': state.pause_reason if paused_remaining > 0 else '',
                 # 绝对恢复时间戳（unix 秒）—— 前端用这个显示具体恢复时间点，避免倒计时不自动刷新
                 'paused_until_ts': int(state.paused_until) if paused_remaining > 0 else None,
                 # 保留剩余秒数字段，供后端日志/调试用；前端不再展示
@@ -583,7 +615,7 @@ class QuotaGuard:
 
     def pause_for(self, source: str, seconds: float, reason: str = ''):
         """
-        外部主动设置某源暂停时长（覆盖默认 pause_seconds）。
+        外部主动设置某源暂停时长（覆盖默认 external_pause_seconds）。
         适用于"服务器明确告知恢复时间"的场景：
           - OpenSubtitles 24h 下载额度耗尽（HTTP 406 body 含 reset_time）
           - MDB List 1000 req/day 耗尽（next day 才能恢复）
@@ -598,6 +630,7 @@ class QuotaGuard:
             state.paused_until = max(state.paused_until, time.time() + seconds)
             state.total_hits += 1
             state.last_hit_at = time.time()
+            state.pause_reason = 'external'  # 服务器明确给了 retry-after 等信号
             logger.warning(
                 f"[QuotaGuard] ⏸ {source} 暂停 {seconds:.0f}s"
                 f"{f' [{reason}]' if reason else ''}"
