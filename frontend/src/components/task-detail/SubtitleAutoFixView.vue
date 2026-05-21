@@ -129,7 +129,9 @@
             </el-table-column>
             <el-table-column label="状态" width="110">
               <template #default="{ row }">
-                <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
+                <el-tag size="small" :type="statusTagType(row.status)" :title="row.status">
+                  {{ statusLabel(row.status) }}
+                </el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="error" label="错误信息" min-width="180" show-overflow-tooltip />
@@ -221,13 +223,25 @@ const langLabel = (code) => {
 }
 
 // 后端 status 取值（来自 tools/subtitle_downloader/main.py）：
-//   success / exists / skipped / not_found / failed / archive_unhandled
+//   success / downloaded / exists / skipped / not_found / failed / archive_unhandled
 const statusTagType = (s) => {
   if (s === 'success' || s === 'downloaded') return 'success'
   if (s === 'exists' || s === 'skipped') return 'info'
   if (s === 'not_found') return 'warning'
   return 'danger'
 }
+
+const STATUS_LABEL = {
+  success:           '下载成功',
+  downloaded:        '下载成功',
+  exists:            '已存在',
+  skipped:           '已跳过',
+  not_found:         '无结果',
+  failed:            '失败',
+  archive_unhandled: '解压失败',
+}
+// 未来后端可能出现新 status 时，tag 鼠标悬停可以看原始英文（:title="row.status"）
+const statusLabel = (s) => STATUS_LABEL[s] || s || '—'
 </script>
 
 <style lang="scss" scoped>
