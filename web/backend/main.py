@@ -158,12 +158,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"初始化 AdultWatcher 失败: {e}")
 
-    # 启动 Jellyfin WebSocket 客户端（仅在条件满足时实际连接）
+    # 启动 Jellyfin 库变更监听器（polling 模式，自动检测新文件触发刮削；class 名仍叫
+    # JellyfinWSClient 是历史包袱 —— 10.11 后 WS 不再可用，已内部切到轮询）
     try:
-        from web.backend.services.jellyfin_ws import client as ws_client
-        ws_client.start(asyncio.get_event_loop())
+        from web.backend.services.jellyfin_ws import client as poller_client
+        poller_client.start(asyncio.get_event_loop())
     except Exception as e:
-        logger.warning(f"启动 JellyfinWSClient 失败: {e}")
+        logger.warning(f"启动 Jellyfin 库变更监听器失败: {e}")
 
     # 启动下载入库流水线（dispatch.enabled 才挂起）
     # scheduler 内部 spawn 全部 6 个 worker（analyzer / downloader-watcher / dispatch-pipeline
@@ -224,10 +225,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # 3. 停 WebSocket
+    # 3. 停 Jellyfin 库变更监听器（polling worker）
     try:
-        from web.backend.services.jellyfin_ws import client as ws_client
-        ws_client.stop()
+        from web.backend.services.jellyfin_ws import client as poller_client
+        poller_client.stop()
     except Exception:
         pass
 
