@@ -17,7 +17,19 @@
       >
         <div class="source-info">
           <span class="source-name">{{ item.source }}</span>
-          <el-tag type="warning" size="small" effect="plain">暂停中</el-tag>
+          <!-- 区分两种暂停：external = 真被对方限了（红，醒目）；preventive = 本地预暂停（橙，软提示）-->
+          <el-tooltip
+            :content="pauseTooltip(item.pause_reason)"
+            placement="top"
+          >
+            <el-tag
+              :type="item.pause_reason === 'external' ? 'danger' : 'warning'"
+              size="small"
+              effect="plain"
+            >
+              {{ pauseLabel(item.pause_reason) }}
+            </el-tag>
+          </el-tooltip>
           <span class="source-desc">{{ item.description }}</span>
         </div>
         <div class="source-meta">
@@ -56,6 +68,21 @@ const hasActiveIssues = computed(() => activeItems.value.length > 0)
 
 // 显示恢复时间点（绝对时刻），不显示剩余倒计时 —— 这个面板不自动刷新，
 // 倒计时会越过越不准；时间点是静态的，用户一眼能判断"是不是过去时间了"
+// 暂停状态文案 —— 区分"对方真在限流"和"本地保护性降速"两档
+// external = 对方服务器拒绝了请求（429/30900/403...）
+// internal = 本地配额触顶提前暂停（对方未拒绝）
+// '' = 旧状态从 kv_cache 恢复的（未知原因），按通用「暂停中」兜底
+const pauseLabel = (reason) => {
+  if (reason === 'external') return '被限流中'
+  if (reason === 'internal') return '本地保护中'
+  return '暂停中'
+}
+const pauseTooltip = (reason) => {
+  if (reason === 'external') return '对方服务器真的拒绝了请求（429/30900/403...），需要等一段时间'
+  if (reason === 'internal') return '本地配额预暂停 —— 没有被对方限，只是我们自己保守降速避免被限。对方端没有任何拒绝信号'
+  return '暂停中（旧状态恢复，未知原因）'
+}
+
 const formatResumeAt = (unixTs) => {
   if (!unixTs) return '-'
   const d = new Date(unixTs * 1000)
