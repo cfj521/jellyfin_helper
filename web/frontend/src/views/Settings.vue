@@ -931,6 +931,29 @@
               <el-switch v-model="form.adult.enabled" />
               <span class="form-hint">禁用时菜单不显示、相关 API 不挂载</span>
             </el-form-item>
+            <el-form-item label="关联 Jellyfin 库">
+              <el-select
+                v-model="form.adult.library_ids"
+                multiple
+                filterable
+                collapse-tags
+                collapse-tags-tooltip
+                :loading="librariesLoading"
+                placeholder="选择要纳入成人内容刮削的 Jellyfin 库（可多选）"
+                style="min-width: 360px"
+              >
+                <el-option
+                  v-for="lib in jellyfinLibraries"
+                  :key="lib.id"
+                  :label="`${lib.name} (${lib.collection_type || lib.type || '?'})`"
+                  :value="lib.id"
+                />
+              </el-select>
+              <div class="form-hint" style="margin-top: 4px">
+                自动监视 / 刮削只在这里勾选的库内生效。一般是你 Jellyfin 里专放成人内容的库。
+                <el-button text type="primary" size="small" @click="loadJellyfinLibraries">刷新库列表</el-button>
+              </div>
+            </el-form-item>
             <el-form-item label="自动监视">
               <el-switch v-model="form.adult.auto_scrape" />
               <span class="form-hint">
