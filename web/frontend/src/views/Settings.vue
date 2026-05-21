@@ -671,8 +671,8 @@
             <div class="cfg-card-head">
               <span class="badge qbit">qB</span>
               <span>qBittorrent 下载管理</span>
-              <el-tag size="small" :type="form.qbittorrent.username ? 'success' : 'info'" effect="plain">
-                {{ form.qbittorrent.username ? '已配置' : '未配置' }}
+              <el-tag size="small" :type="(form.qbittorrent.api_key || form.qbittorrent.username) ? 'success' : 'info'" effect="plain">
+                {{ (form.qbittorrent.api_key || form.qbittorrent.username) ? '已配置' : '未配置' }}
               </el-tag>
             </div>
           </template>
@@ -680,8 +680,20 @@
             <el-form-item label="服务器地址">
               <el-input v-model="form.qbittorrent.host" placeholder="http://localhost:8080" />
             </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="form.qbittorrent.api_key"
+                type="password"
+                show-password
+                placeholder="qbt_xxx... (qB ≥ 5.2.0 推荐；优先于下方用户名/密码)"
+              />
+              <div class="form-hint">
+                qB 5.2.0+ 起：Preferences → WebUI → API Key 段点 Generate 复制粘贴这里。
+                配了 api_key 就不用填用户名/密码（更安全、stateless）
+              </div>
+            </el-form-item>
             <el-form-item label="用户名">
-              <el-input v-model="form.qbittorrent.username" />
+              <el-input v-model="form.qbittorrent.username" placeholder="api_key 留空时才用" />
             </el-form-item>
             <el-form-item label="密码">
               <el-input v-model="form.qbittorrent.password" type="password" show-password />
@@ -1585,7 +1597,7 @@ const blank = () => ({
     ],
   },
   jackett: { host: '', api_key: '', search_keywords: [], default_keywords: '' },
-  qbittorrent: { host: '', username: '', password: '' },
+  qbittorrent: { host: '', username: '', password: '', api_key: '' },
   // 外部命令行工具路径（启动时注入到 PATH 前缀）
   tools: {
     ffmpeg_dir: '',

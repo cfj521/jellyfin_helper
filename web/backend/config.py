@@ -224,6 +224,9 @@ class Settings(BaseSettings):
     qbittorrent_host: str = _yaml_config.get('qbittorrent', {}).get('host', 'http://127.0.0.1')
     qbittorrent_username: str = _yaml_config.get('qbittorrent', {}).get('username', 'admin')
     qbittorrent_password: str = _yaml_config.get('qbittorrent', {}).get('password', '***REMOVED***')
+    # qB ≥ 5.2.0 起支持 API Key（Preferences → WebUI → API Key 生成）。配了就用 Bearer 认证，
+    # 不走 /auth/login。同时设了 api_key 和 username/password 时优先 api_key。
+    qbittorrent_api_key: str = _yaml_config.get('qbittorrent', {}).get('api_key', '')
     qbittorrent_download_path: str = _yaml_config.get('dispatch', {}).get('download_path', '/downloads')
 
     # qBittorrent 配额 + 做种策略（嵌套 pydantic models，见 web/backend/config_models.py）
@@ -370,6 +373,7 @@ class Settings(BaseSettings):
                 "host": self.qbittorrent_host,
                 "username": self.qbittorrent_username,
                 "password": self.qbittorrent_password,
+                "api_key": self.qbittorrent_api_key,
             },
             "adult": {
                 "enabled": self.adult_enabled,
