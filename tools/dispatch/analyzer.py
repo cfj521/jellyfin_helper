@@ -62,7 +62,7 @@ def analyze_pending_rows() -> Dict:
     from web.backend.config import settings
     from web.backend.database import SessionLocal, DownloadDispatchMap
 
-    if not settings.qbittorrent_host or not settings.qbittorrent_username:
+    if not settings.qbittorrent_configured:
         return _empty_stats()
 
     # 拿候选行：仅 phase=analyzing + status=running（needs_review 不动，等审核）

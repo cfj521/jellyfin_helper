@@ -69,7 +69,7 @@ def scan_and_adopt_orphans() -> Dict:
     from web.backend.config import settings
     from web.backend.database import SessionLocal, DownloadDispatchMap
 
-    if not settings.qbittorrent_host or not settings.qbittorrent_username:
+    if not settings.qbittorrent_configured:
         logger.debug("adopt: qB 未配置，跳过")
         return {'scanned': 0, 'orphans': 0, 'adopted_auto': 0, 'adopted_review': 0, 'skipped': 0}
 

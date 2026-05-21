@@ -943,7 +943,7 @@ def list_needs_review(db: Session = Depends(get_db)):
     qb_by_hash: Dict[str, Dict] = {}
     try:
         from common.qbittorrent_client import QBittorrentClient
-        if settings.qbittorrent_host and settings.qbittorrent_username:
+        if settings.qbittorrent_configured:
             qb = QBittorrentClient(
                 settings.qbittorrent_host,
                 settings.qbittorrent_username,
@@ -1061,7 +1061,7 @@ def confirm_needs_review(
     is_done = False
     try:
         from common.qbittorrent_client import QBittorrentClient
-        if settings.qbittorrent_host and settings.qbittorrent_username:
+        if settings.qbittorrent_configured:
             qb = QBittorrentClient(
                 settings.qbittorrent_host,
                 settings.qbittorrent_username,
@@ -1154,7 +1154,7 @@ def dismiss_needs_review(
     if delete_torrent:
         try:
             from common.qbittorrent_client import QBittorrentClient
-            if settings.qbittorrent_host and settings.qbittorrent_username:
+            if settings.qbittorrent_configured:
                 qb = QBittorrentClient(
                     settings.qbittorrent_host,
                     settings.qbittorrent_username,
@@ -1480,7 +1480,7 @@ def redispatch_completed(
     qb_resumed = False
     try:
         from common.qbittorrent_client import QBittorrentClient
-        if settings.qbittorrent_host and settings.qbittorrent_username:
+        if settings.qbittorrent_configured:
             qb = QBittorrentClient(
                 settings.qbittorrent_host,
                 settings.qbittorrent_username,
@@ -1528,7 +1528,7 @@ def reidentify_dispatch_row(
     if not row:
         raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
 
-    if not settings.qbittorrent_host or not settings.qbittorrent_username:
+    if not settings.qbittorrent_configured:
         raise HTTPException(status_code=400, detail='未配置 qBittorrent')
 
     # 拉 qB 文件列表

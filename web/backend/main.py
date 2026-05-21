@@ -341,7 +341,7 @@ def get_config():
         },
         "qbittorrent": {
             "host": settings.qbittorrent_host,
-            "connected": bool(settings.qbittorrent_username)
+            "connected": settings.qbittorrent_configured
         }
     }
 
