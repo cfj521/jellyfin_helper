@@ -619,7 +619,10 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
         )
     else:
         backdrop_url = None
-    detail_url = f"{host}/web/index.html#!/details?id={item_id}" if host else None
+    # detail_url（用户在浏览器点击打开 Jellyfin Web）优先 external_url，方便公网访问；
+    # 图片 URL 还是用内网 host（后端拉图 + img_proxy 直连，内网更快稳）
+    external_host = _jellyfin_external_host()
+    detail_url = f"{external_host}/web/index.html#!/details?id={item_id}" if external_host else None
 
     # 演员统计：仅 Series/Movie 层级才有意义
     people = i.get('People') or []
@@ -2282,11 +2285,22 @@ def lookup_jellyfin_item(file_path: str) -> Optional[Dict]:
     return None
 
 
+def _jellyfin_external_host() -> str:
+    """给"用户在浏览器打开"用的 host —— external_url 优先，否则 fallback 内网 host。
+
+    跟内网 API host（settings.jellyfin_host）区分开：
+      - 内网 host：后端拉图 / 调 API 用（更快、可靠）
+      - external_url：生成给用户点击的 jellyfin web 链接用（公网可达）
+    """
+    return (settings.jellyfin_external_url or settings.jellyfin_host or '').rstrip('/')
+
+
 def jellyfin_web_url(item_id: str) -> Optional[str]:
-    """生成 Jellyfin Web 详情页 URL"""
-    if not item_id or not settings.jellyfin_host:
+    """生成 Jellyfin Web 详情页 URL（用户点击打开，优先用 external_url）。"""
+    host = _jellyfin_external_host()
+    if not item_id or not host:
         return None
-    return f"{settings.jellyfin_host.rstrip('/')}/web/#/details?id={item_id}"
+    return f"{host}/web/#/details?id={item_id}"
 
 
 def invalidate_path_index():
