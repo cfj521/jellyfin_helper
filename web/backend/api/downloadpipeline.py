@@ -117,7 +117,7 @@ def push_download(
 
 
 def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effective_hint: Optional[str]):
-    if not settings.qbittorrent_host or not settings.qbittorrent_username:
+    if not settings.qbittorrent_configured:
         raise HTTPException(status_code=400, detail="未配置 qBittorrent")
     if not (request.magnet or request.torrent_url or request.torrent_file_b64):
         raise HTTPException(status_code=400, detail="必须提供 magnet / torrent_url / torrent_file_b64 之一")
@@ -295,7 +295,7 @@ def list_downloads(
 ):
     """列出下载任务。refresh=True 时同步 qB 实时状态。"""
     qbit_torrents = []
-    if refresh and settings.qbittorrent_host and settings.qbittorrent_username:
+    if refresh and settings.qbittorrent_configured:
         try:
             from common.qbittorrent_client import QBittorrentClient
             client = QBittorrentClient(

@@ -229,6 +229,13 @@ class Settings(BaseSettings):
     qbittorrent_api_key: str = _yaml_config.get('qbittorrent', {}).get('api_key', '')
     qbittorrent_download_path: str = _yaml_config.get('dispatch', {}).get('download_path', '/downloads')
 
+    @property
+    def qbittorrent_configured(self) -> bool:
+        """qB 是否已配置：host 必填 + (api_key 或 username) 任一存在。
+        所有调用 qB 前的短路判定都用它，替代历史上只判 username 的写法（用户切到 api_key
+        而清空 username 时，老判定会误以为 qB 未配置，导致下载列表空白等故障）。"""
+        return bool(self.qbittorrent_host) and bool(self.qbittorrent_api_key or self.qbittorrent_username)
+
     # qBittorrent 配额 + 做种策略（嵌套 pydantic models，见 web/backend/config_models.py）
     # yaml 段：qbittorrent.quota / qbittorrent.seeding
     @property

@@ -132,7 +132,7 @@ def _check_jellyfin() -> Tuple[bool, str]:
 # ---- 下载链路 ----
 
 def _check_qbittorrent() -> Tuple[bool, str]:
-    if not settings.qbittorrent_host or not settings.qbittorrent_username:
+    if not settings.qbittorrent_configured:
         return False, '未配置 host / username'
     from common.qbittorrent_client import QBittorrentClient
     client = QBittorrentClient(
@@ -472,7 +472,7 @@ def _is_enabled(group: str, name: str) -> bool:
         if group == 'core' and name == 'jellyfin':
             return bool(settings.jellyfin_host and settings.jellyfin_api_key)
         if group == 'download' and name == 'qbittorrent':
-            return bool(settings.qbittorrent_host and settings.qbittorrent_username)
+            return bool(settings.qbittorrent_configured)
         if group == 'download' and name == 'jackett':
             return bool(settings.jackett_host and settings.jackett_api_key)
         if group == 'metadata':

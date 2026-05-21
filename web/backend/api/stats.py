@@ -139,7 +139,7 @@ def get_overview(db: Session = Depends(get_db)):
             "tmdb_connected": bool(settings.tmdb_api_key),
             "opensubtitles_connected": bool(settings.opensubtitles_api_key),
             "jackett_connected": bool(settings.jackett_api_key),
-            "qbittorrent_connected": bool(settings.qbittorrent_username),
+            "qbittorrent_connected": settings.qbittorrent_configured,
         },
     }
 
