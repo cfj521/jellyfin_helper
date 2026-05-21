@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from web.backend.config import settings
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 

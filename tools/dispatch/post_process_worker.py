@@ -16,7 +16,7 @@ import threading
 import time
 from typing import Dict, Optional
 
-from web.backend.database import SessionLocal, DownloadDispatchMap
+from backend.database import SessionLocal, DownloadDispatchMap
 from tools.dispatch.phases import (
     PHASE_JELLYFIN_RECOGNIZE_DONE,
     PHASE_SUBTITLE_ALIGNING,

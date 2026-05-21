@@ -13,8 +13,8 @@ from datetime import datetime
 from typing import Dict, List
 
 from common.qbittorrent_client import QBittorrentClient
-from web.backend.config import settings
-from web.backend.database import SessionLocal, DownloadDispatchMap
+from backend.config import settings
+from backend.database import SessionLocal, DownloadDispatchMap
 
 logger = logging.getLogger(__name__)
 

@@ -66,8 +66,8 @@ def scan_and_adopt_orphans() -> Dict:
     返回 stats: scanned / orphans / adopted_auto / adopted_review / skipped
     """
     from common.qbittorrent_client import QBittorrentClient
-    from web.backend.config import settings
-    from web.backend.database import SessionLocal, DownloadDispatchMap
+    from backend.config import settings
+    from backend.database import SessionLocal, DownloadDispatchMap
 
     if not settings.qbittorrent_configured:
         logger.debug("adopt: qB 未配置，跳过")
@@ -325,7 +325,7 @@ def _try_adopt_one(qb, t: Dict) -> str:
 def _resolve_target_safe(identified: Dict) -> Dict:
     """包一层异常保护：识别结果 → target_library_id + target_path。"""
     try:
-        from web.backend.api.dispatch import _resolve_target
+        from backend.api.dispatch import _resolve_target
         return _resolve_target(identified)
     except Exception as e:
         logger.warning(f"_resolve_target 失败: {e}")
@@ -375,7 +375,7 @@ def _write_dispatch_row(
     """写 dispatch_map 行：phase / phase_status 由 adopt 决策决定。
     qb_added_on：qB 视角的加种时间，构成 (torrent_hash, qb_added_on) 任务身份。
     """
-    from web.backend.database import SessionLocal, DownloadDispatchMap
+    from backend.database import SessionLocal, DownloadDispatchMap
 
     with SessionLocal() as db:
         # 防并发重复插入

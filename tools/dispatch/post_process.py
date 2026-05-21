@@ -1,8 +1,8 @@
 """
 完成转移后的字幕/音轨自动处理。
 
-字幕：调 web.backend.api.subtitle.run_subtitle_auto_fix_inline
-音轨：调 web.backend.api.audio.run_default_track_inline
+字幕：调 backend.api.subtitle.run_subtitle_auto_fix_inline
+音轨：调 backend.api.audio.run_default_track_inline
 
 两者都是 spike 1+2 已落地的 inline 函数；本模块只做"调用胶水"+ 失败仅警告语义。
 """
@@ -103,8 +103,8 @@ def post_process_subtitle(
         return ('skipped', {'reason': 'no dispatched files'})
 
     try:
-        from web.backend.api.subtitle import run_subtitle_auto_fix_inline
-        from web.backend.config import settings as _settings
+        from backend.api.subtitle import run_subtitle_auto_fix_inline
+        from backend.config import settings as _settings
     except Exception as e:
         logger.warning(f"字幕模块 import 失败（不阻断）: {e}")
         return ('warned', {'error': str(e)})
@@ -163,8 +163,8 @@ def post_process_audio(
         return ('skipped', {'reason': 'no dispatched files'})
 
     try:
-        from web.backend.api.audio import run_default_track_inline
-        from web.backend.config import settings as _settings
+        from backend.api.audio import run_default_track_inline
+        from backend.config import settings as _settings
     except Exception as e:
         logger.warning(f"音轨模块 import 失败（不阻断）: {e}")
         return ('warned', {'error': str(e)})

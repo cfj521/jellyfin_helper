@@ -145,7 +145,7 @@ class JellyfinDB:
         其中 `_via='db'` 标记数据来源（性能 benchmark 用）。
 
         path 必须是 jellyfin 容器视角的路径（如 /library/videos/movie/X.mkv）。
-        本机路径反向翻译由调用方负责（避免本类依赖 web.backend.path_translator）。
+        本机路径反向翻译由调用方负责（避免本类依赖 backend.path_translator）。
 
         查不到返回 None；DB 不可用抛 JellyfinDBError。
         """
@@ -219,7 +219,7 @@ def get_jellyfin_db() -> JellyfinDB:
     global _singleton
     if _singleton is None:
         try:
-            from web.backend.config import settings
+            from backend.config import settings
             db_path = getattr(settings, 'jellyfin_db_path', '') or ''
         except Exception:
             db_path = ''

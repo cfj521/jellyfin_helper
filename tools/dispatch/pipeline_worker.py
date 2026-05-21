@@ -31,8 +31,8 @@ from typing import Dict, Optional
 from sqlalchemy import or_
 
 from common.qbittorrent_client import QBittorrentClient
-from web.backend.config import settings
-from web.backend.database import SessionLocal, DownloadDispatchMap
+from backend.config import settings
+from backend.database import SessionLocal, DownloadDispatchMap
 from tools.dispatch.phases import (
     PHASE_DOWNLOAD_DONE, PHASE_COPYING, PHASE_ORGANIZING, PHASE_JELLYFIN_RECOGNIZING,
     PHASE_SUBTITLE_FETCHING, PHASE_AUDIO_TRACK_ORDER_ADJUSTING, PHASE_ALL_JOBS_DONE,
@@ -282,7 +282,7 @@ class DispatchPipeline:
         # 保险：target 万一是 jellyfin 视角路径（旧 dispatch_map 行 / 用户手动改过）
         # → 走一次 path_translator 转本地路径
         try:
-            from web.backend.path_translator import translate_path_with_settings
+            from backend.path_translator import translate_path_with_settings
             translated_target = translate_path_with_settings(target)
             if translated_target and translated_target != target:
                 logger.info(f"target 路径翻译: {target} → {translated_target}")
@@ -292,7 +292,7 @@ class DispatchPipeline:
 
         # 源路径同样保险（虽然 qB 给的本就是本地路径，但用户可能跨主机部署）
         try:
-            from web.backend.path_translator import translate_path_with_settings
+            from backend.path_translator import translate_path_with_settings
             translated_src = translate_path_with_settings(src)
             if translated_src:
                 src = translated_src
@@ -534,14 +534,14 @@ class DispatchPipeline:
         notified_via = []  # 累加成功调用的标签
         try:
             from common.jellyfin_client import JellyfinClient
-            from web.backend.config import settings as _settings
+            from backend.config import settings as _settings
             jf = JellyfinClient(_settings.jellyfin_host, _settings.jellyfin_api_key)
 
             # ① 精准通知 —— 让 jellyfin 在 LibraryMonitorDelay 后扫这些文件（已识别 item 的更新）
             if dispatched_files:
                 paths_for_jf = []
                 try:
-                    from web.backend.path_translator import reverse_translate_path_with_settings
+                    from backend.path_translator import reverse_translate_path_with_settings
                     for f in dispatched_files:
                         paths_for_jf.append(reverse_translate_path_with_settings(f) or f)
                 except Exception:

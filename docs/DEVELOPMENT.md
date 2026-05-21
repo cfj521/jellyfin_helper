@@ -53,14 +53,14 @@
 
 | 入口 | 位置 | 备注 |
 |---|---|---|
-| 后端启动 | `web/backend/run.py` | uvicorn 启动器；端口决议 |
-| 应用入口 | `web/backend/main.py` | lifespan / 信号 / 中间件 / router 注册 |
-| 任务装饰器 | `web/backend/api/tasks.py: cancellable_task` | 所有长任务包一层 |
+| 后端启动 | `backend/run.py` | uvicorn 启动器；端口决议 |
+| 应用入口 | `backend/main.py` | lifespan / 信号 / 中间件 / router 注册 |
+| 任务装饰器 | `backend/api/tasks.py: cancellable_task` | 所有长任务包一层 |
 | dispatch 主循环 | `tools/dispatch/pipeline_worker.py` | 状态机推进 |
-| 字幕核心 | `web/backend/api/subtitle.py: run_subtitle_auto_fix_inline` | 所有调用方共享（dispatch / MediaToolbar / maintenance.run_all）|
-| 配置单例 | `web/backend/config.py: settings` | pydantic settings + yaml load |
-| 数据库模型 | `web/backend/database.py` | 全部 SQLAlchemy declarative |
-| 性能诊断 | `web/backend/diagnostics.py` | TimingMiddleware / DB 池监控 / 静音轮询白名单 |
+| 字幕核心 | `backend/api/subtitle.py: run_subtitle_auto_fix_inline` | 所有调用方共享（dispatch / MediaToolbar / maintenance.run_all）|
+| 配置单例 | `backend/config.py: settings` | pydantic settings + yaml load |
+| 数据库模型 | `backend/database.py` | 全部 SQLAlchemy declarative |
+| 性能诊断 | `backend/diagnostics.py` | TimingMiddleware / DB 池监控 / 静音轮询白名单 |
 
 ---
 
@@ -77,7 +77,7 @@ cd D:\path\to\jellyfin-helper
 pip install -r requirements.txt
 
 # 后端（热重载）
-$env:BACKEND_RELOAD='1'; python -m web.backend.run
+$env:BACKEND_RELOAD='1'; python -m backend.run
 
 # 前端（新终端）
 cd web\frontend
@@ -91,10 +91,10 @@ npm run dev
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-BACKEND_RELOAD=1 python -m web.backend.run
+BACKEND_RELOAD=1 python -m backend.run
 
 # 前端
-cd web/frontend && npm install && npm run dev
+cd frontend && npm install && npm run dev
 ```
 
 ### 访问
@@ -118,7 +118,7 @@ cd web/frontend && npm install && npm run dev
 
 ### 3.1 业务库 (PostgreSQL)
 
-启动时自动建表（`web/backend/database.py: init_db`），不写迁移脚本。开发阶段改 schema 直接清表重扫。
+启动时自动建表（`backend/database.py: init_db`），不写迁移脚本。开发阶段改 schema 直接清表重扫。
 
 主要表（节选）：
 
@@ -137,7 +137,7 @@ cd web/frontend && npm install && npm run dev
 | `video_annotations` | 用户手工标注（如硬字幕语言） |
 | `llm_classify_cache` | LLM 识别结果缓存 |
 
-完整 schema 看 [web/backend/database.py](../web/backend/database.py)。
+完整 schema 看 [backend/database.py](../backend/database.py)。
 
 ### 3.2 Jellyfin SQLite 直读（可选）
 
@@ -155,7 +155,7 @@ cd web/frontend && npm install && npm run dev
 ### 4.1 新 API router
 
 ```python
-# web/backend/api/foo.py
+# backend/api/foo.py
 from fastapi import APIRouter
 router = APIRouter()
 
@@ -164,9 +164,9 @@ def get_something():
     return {"ok": True}
 ```
 
-然后在 `web/backend/main.py` 注册：
+然后在 `backend/main.py` 注册：
 ```python
-from web.backend.api import foo
+from backend.api import foo
 app.include_router(foo.router, prefix="/api/foo", tags=["foo"])
 ```
 
@@ -175,7 +175,7 @@ app.include_router(foo.router, prefix="/api/foo", tags=["foo"])
 走 `tasks.py` 的 task wrapper 模式：
 
 ```python
-from web.backend.api.tasks import cancellable_task, update_task_progress
+from backend.api.tasks import cancellable_task, update_task_progress
 
 @cancellable_task
 def run_my_task(task_id: int, ...):
@@ -190,7 +190,7 @@ def run_my_task(task_id: int, ...):
 
 ### 4.3 前端调 API
 
-`web/frontend/src/api/index.js` 已配置全局 axios 实例：
+`frontend/src/api/index.js` 已配置全局 axios 实例：
 
 ```javascript
 import { discoverApi } from '@/api'
@@ -210,7 +210,7 @@ const r = await discoverApi.someMethod({ foo: 'bar' })
 
 ### 5.1 性能问题先加日志
 
-诊断慢请求看 `[diag] HTTP SLOW ...` 日志（`web/backend/diagnostics.py` 自动打 >500ms 的请求）。
+诊断慢请求看 `[diag] HTTP SLOW ...` 日志（`backend/diagnostics.py` 自动打 >500ms 的请求）。
 
 DB 连接持有过久（>500ms）也会 warning 并打调用栈。
 

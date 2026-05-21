@@ -1,5 +1,5 @@
 # Jellyfin Tools - Python 依赖（Web 后端 + tools/ 模块）
-# 前端依赖见 web/frontend/package.json
+# 前端依赖见 frontend/package.json
 
 # ── Web 框架 ──
 fastapi>=0.109.0

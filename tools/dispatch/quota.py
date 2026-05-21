@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from common.qbittorrent_client import QBittorrentClient
-from web.backend.config import settings
-from web.backend.database import SessionLocal, DownloadDispatchMap
+from backend.config import settings
+from backend.database import SessionLocal, DownloadDispatchMap
 from tools.dispatch.phases import (
     PHASE_ALL_JOBS_DONE, PHASE_CLEANED, ACTIVE_PHASES, DISPATCHED_PHASES,
     STATUS_SUCCEEDED,

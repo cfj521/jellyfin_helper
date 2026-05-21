@@ -49,10 +49,10 @@ class QBittorrentClient:
         self.username = username
         self.password = password
         self.timeout = timeout
-        # 自动从 settings 兜底（common/ 反向 import web.backend.config 在本项目有先例）
+        # 自动从 settings 兜底（common/ 反向 import backend.config 在本项目有先例）
         if api_key is None:
             try:
-                from web.backend.config import settings as _settings
+                from backend.config import settings as _settings
                 api_key = getattr(_settings, 'qbittorrent_api_key', '') or ''
             except Exception:
                 api_key = ''

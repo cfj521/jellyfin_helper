@@ -78,8 +78,8 @@ def run_jellyfin_watcher_loop(stop_event: threading.Event):
 
 def scan_once() -> Dict:
     """扫一遍 jellyfin_recognizing 行，确认入库则推进。返回 stats。"""
-    from web.backend.config import settings
-    from web.backend.database import SessionLocal, DownloadDispatchMap
+    from backend.config import settings
+    from backend.database import SessionLocal, DownloadDispatchMap
 
     if not settings.jellyfin_host or not settings.jellyfin_api_key:
         return _empty_stats()

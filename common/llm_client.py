@@ -19,8 +19,8 @@ from typing import Dict, List, Optional
 import requests
 
 from common.rate_limiter import quota_guard
-from web.backend.config import settings
-from web.backend.database import LLMClassifyCache, SessionLocal
+from backend.config import settings
+from backend.database import LLMClassifyCache, SessionLocal
 
 logger = logging.getLogger(__name__)
 
