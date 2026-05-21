@@ -187,6 +187,7 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
     if not ok:
         # 把上下文 + qB 原始错误带到 detail，前端 ElMessage 直接看到，不用翻后端日志
         qb_err = client.last_add_error or '未知原因'
+        qb_status = getattr(client, 'last_add_status_code', None)
         ctx_parts = []
         if save_path:
             ctx_parts.append(f"save_path={save_path}")
@@ -195,8 +196,15 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
         ctx_str = ('（' + '，'.join(ctx_parts) + '）') if ctx_parts else ''
         logger.error(
             f"qB 推送失败: title={request.title!r} src={src_hint!r} "
-            f"category={request.category!r} save_path={save_path!r} qb_err={qb_err!r}"
+            f"category={request.category!r} save_path={save_path!r} "
+            f"qb_status={qb_status} qb_err={qb_err!r}"
         )
+        # qB 5.2.0+ 用 HTTP 409 表示重复 / 冲突 —— 给前端回 409 + 不带"常见原因"清单（误导）
+        if qb_status == 409:
+            raise HTTPException(
+                status_code=409,
+                detail=f"种子已在 qBittorrent 队列里或与现有任务冲突{ctx_str}",
+            )
         raise HTTPException(
             status_code=502,
             detail=(

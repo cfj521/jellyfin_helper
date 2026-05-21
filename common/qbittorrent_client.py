@@ -1,6 +1,26 @@
 """
 qBittorrent WebUI API 客户端
-https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-4.1)
+https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-5.0)
+
+支持 qB 4.6 ~ 5.2+，自动按 webapiVersion 选老/新端点。
+
+## 关键 4.6 → 5.2 变化（已自适应）
+
+| 变化 | 4.x | 5.0+（webapi ≥ 2.11）|
+|------|-----|----------------------|
+| pause 端点 | `/torrents/pause` | `/torrents/stop` |
+| resume 端点 | `/torrents/resume` | `/torrents/start` |
+| `/torrents/add` 的暂停参数 | `paused=true` | `stopped=true` |
+| 状态名 | `pausedDL` / `pausedUP` | `stoppedDL` / `stoppedUP`（同义） |
+| login 成功响应 | `200 "Ok."` | `204` 空 body（5.2.0+） |
+| 空响应通用 | `200` | `204` |
+
+## 认证两种模式（按优先级）
+
+  1. **API Key**（qB ≥ 5.2.0 推荐）—— `Authorization: Bearer qbt_xxx` header，
+     stateless，不用调 /auth/login。Preferences → WebUI → API Key 段生成。
+  2. **Username/Password** —— 传统 cookie 会话；qB 5.2.0 起 /auth/login 成功
+     响应从 `200 "Ok."` 变成 `204 空 body`，本客户端两者都兼容。
 """
 import logging
 from typing import Dict, List, Optional
@@ -13,19 +33,48 @@ logger = logging.getLogger(__name__)
 class QBittorrentClient:
     """qBittorrent WebUI 客户端"""
 
-    def __init__(self, host: str, username: str, password: str, timeout: int = 30):
+    def __init__(
+        self,
+        host: str,
+        username: str = '',
+        password: str = '',
+        timeout: int = 30,
+        api_key: Optional[str] = None,
+    ):
+        """
+        api_key 默认 None → 自动从 settings.qbittorrent_api_key 读（让 14 个老调用点
+        零修改获得 api_key 支持）。显式传 '' 可以强制走 username/password 路径。
+        """
         self.host = host.rstrip('/')
         self.username = username
         self.password = password
         self.timeout = timeout
+        # 自动从 settings 兜底（common/ 反向 import web.backend.config 在本项目有先例）
+        if api_key is None:
+            try:
+                from web.backend.config import settings as _settings
+                api_key = getattr(_settings, 'qbittorrent_api_key', '') or ''
+            except Exception:
+                api_key = ''
+        self.api_key = (api_key or '').strip()
         self.session = requests.Session()
         self._logged_in = False
         # 最近一次 add_torrent 失败的原因（HTTP 状态 + body 摘要 / 异常文本）。
         # qB add API 拒绝时只回 'Fails.'，没有细节；调用方读这里把上下文带到前端 detail。
         self.last_add_error: Optional[str] = None
+        # 最近一次 add_torrent 失败的 HTTP 状态码（qB 5.2.0+ 用 409=冲突，500=其他错误）；
+        # 调用方可据此回 409 给前端，避免笼统的 502
+        self.last_add_status_code: Optional[int] = None
+
+        # API Key 模式：所有请求自动带 Bearer header，跳过 /auth/login 流程
+        if self.api_key:
+            self.session.headers['Authorization'] = f'Bearer {self.api_key}'
+            self._logged_in = True  # 短路 _ensure_login（虽然 cookie 没设但 Bearer 等价）
 
     def login(self) -> bool:
-        """登录获取 session cookie。"""
+        """获取 session cookie；api_key 模式直接 True 不发请求。"""
+        if self.api_key:
+            return True
         try:
             r = self.session.post(
                 f"{self.host}/api/v2/auth/login",
@@ -34,10 +83,15 @@ class QBittorrentClient:
                 timeout=self.timeout,
             )
             r.raise_for_status()
-            if r.text.strip().lower() == 'ok.':
+            # qB 5.2.0+：成功 = HTTP 204 + 空 body
+            # qB ≤ 5.1.x：成功 = HTTP 200 + "Ok."
+            # 失败统一：HTTP 200 + "Fails."（不是 401，所以 raise_for_status 不抛）
+            body = r.text.strip()
+            ok = r.status_code == 204 or body.lower() == 'ok.'
+            if ok:
                 self._logged_in = True
                 return True
-            logger.error(f"qBittorrent 登录失败: {r.text}")
+            logger.error(f"qBittorrent 登录失败: HTTP {r.status_code} body={body!r}")
             return False
         except requests.exceptions.RequestException as e:
             logger.error(f"qBittorrent 登录异常: {e}")
@@ -47,6 +101,43 @@ class QBittorrentClient:
         if self._logged_in:
             return True
         return self.login()
+
+    # ============================================================================
+    # 版本探测 —— 缓存一次结果，给端点自适应用
+    # ============================================================================
+
+    def _webapi_version(self) -> Optional[tuple]:
+        """探测 /api/v2/app/webapiVersion，返回 (major, minor, [patch]) 元组。失败返 None。
+        结果实例缓存，重复调用零开销。"""
+        cached = getattr(self, '_cached_webapi_version', '__unset__')
+        if cached != '__unset__':
+            return cached
+        result: Optional[tuple] = None
+        try:
+            if self._ensure_login():
+                r = self.session.get(
+                    f"{self.host}/api/v2/app/webapiVersion",
+                    timeout=self.timeout,
+                )
+                r.raise_for_status()
+                ver_str = r.text.strip().strip('"')
+                parts = tuple(int(x) for x in ver_str.split('.') if x.isdigit())
+                if parts:
+                    result = parts
+        except Exception as e:
+            logger.warning(f"探测 qB webapiVersion 失败（按 4.x 保守处理）: {e}")
+        self._cached_webapi_version = result
+        return result
+
+    def _is_v5_api(self) -> bool:
+        """webapi ≥ 2.11 ⇔ qB ≥ 5.0 ⇔ 用 stop/start 端点 + add 的 stopped 参数。
+
+        探测失败保守按 4.x 处理（用老 pause/resume 端点；qB 4.x 老版本上仍能跑）。
+        """
+        v = self._webapi_version()
+        if not v or v[0] != 2:
+            return False
+        return v[1] >= 11
 
     def add_torrent(
         self,
@@ -91,7 +182,9 @@ class QBittorrentClient:
         if tags:
             data['tags'] = ','.join(tags)
         if paused:
-            data['paused'] = 'true'
+            # qB 5.0+：参数名 paused → stopped（issue #22766: paused=true 在 5.x 不再生效）。
+            # 4.x：用 paused。版本探测失败按 4.x 保守。
+            data['stopped' if self._is_v5_api() else 'paused'] = 'true'
         if download_limit is not None:
             data['dlLimit'] = str(int(download_limit))
         if skip_checking:
@@ -100,6 +193,7 @@ class QBittorrentClient:
             data['stopCondition'] = stop_condition
 
         self.last_add_error = None
+        self.last_add_status_code = None
         try:
             r = self.session.post(
                 f"{self.host}/api/v2/torrents/add",
@@ -107,13 +201,62 @@ class QBittorrentClient:
                 files=files,
                 timeout=self.timeout,
             )
-            r.raise_for_status()
+            self.last_add_status_code = r.status_code
+            body_preview = (r.text or '').strip()[:200]
+
+            # 按官方 wiki 列出的状态码 + 5.2 实际表现，逐档判定：
+            #   409 Conflict：重复 hash / 已存在（5.2 把这个从 200 "Fails." 改 409）
+            #   415 Unsupported Media Type：种子文件无效（非 bencode）
+            #   400 Bad Request：参数错（罕见，add 本身参数少）
+            #   200/204：成功（body 可能是 "Ok." / JSON / 空，下面再细分）
+            if r.status_code == 409:
+                self.last_add_error = "种子已存在或与现有任务冲突 (HTTP 409 Conflict)"
+                logger.warning(f"qB 加种 409 Conflict: body={body_preview!r}")
+                return False
+            if r.status_code == 415:
+                self.last_add_error = "种子文件无效或不支持 (HTTP 415 Unsupported Media Type)"
+                logger.warning(f"qB 加种 415 Invalid torrent: body={body_preview!r}")
+                return False
+            if 400 <= r.status_code < 500:
+                self.last_add_error = f"qB 拒绝请求 (HTTP {r.status_code}): {body_preview}"
+                logger.warning(f"qB 加种 {r.status_code}: body={body_preview!r}")
+                return False
+            if r.status_code >= 500:
+                self.last_add_error = f"qB 服务端错误 (HTTP {r.status_code}): {body_preview}"
+                logger.error(f"qB 加种服务端 {r.status_code}: body={body_preview!r}")
+                return False
+            # 到这里只剩 2xx
             body = r.text.strip()
-            ok = body.lower() == 'ok.'
+            # 三种成功响应（按 qB 版本演进）：
+            #   1. qB 5.2.0+：JSON {"success_count": N, "failure_count": M, "added_torrent_ids": [...]}
+            #      只要 success_count>=1（或 pending_count>=1，metadata 拉取中）就算成功
+            #   2. qB 4.x ~ 5.1：纯文本 "Ok."
+            #   3. qB 5.2.0 空 body 端点（理论上 add 不属于此类，但保留 204 兼容）
+            ok = False
+            failure_reason = ''
+            if body.startswith('{'):
+                try:
+                    import json as _json
+                    j = _json.loads(body)
+                    sc = int(j.get('success_count') or 0)
+                    pc = int(j.get('pending_count') or 0)
+                    fc = int(j.get('failure_count') or 0)
+                    ok = sc > 0 or pc > 0
+                    if not ok and fc > 0:
+                        failure_reason = f'success=0 failure={fc} pending={pc}'
+                except Exception as e:
+                    self.last_add_error = f"HTTP {r.status_code} JSON 解析失败: {e} body={body[:200]!r}"
+                    logger.error(f"qB add 响应解析失败: {self.last_add_error}")
+                    return False
+            elif body.lower() == 'ok.' or r.status_code == 204:
+                ok = True
             if not ok:
                 # qB 加种被拒的常见原因：种子重复、默认保存路径不存在/无权限、category 不存在、
-                # 磁链/种子文件解析失败。API 只回 'Fails.'，更细的原因要看 qB 自己的日志。
-                self.last_add_error = f"HTTP {r.status_code} body={body!r}"
+                # 磁链/种子文件解析失败。'Fails.' 文本不带细节，JSON 模式 failure_count>0 也只给计数。
+                self.last_add_error = (
+                    f"HTTP {r.status_code} {failure_reason} body={body!r}"
+                    if failure_reason else f"HTTP {r.status_code} body={body!r}"
+                )
                 logger.error(f"qB 添加种子被拒: {self.last_add_error}")
             return ok
         except requests.exceptions.RequestException as e:
@@ -191,13 +334,18 @@ class QBittorrentClient:
         """
         列出所有种子。
 
-        filter_status: all | downloading | seeding | completed | paused | active | inactive
+        filter_status: all | downloading | seeding | completed | stopped | active | inactive
+          - 调用方传 'paused' 会自适应：5.0+ 自动改成 'stopped'（5.0+ paused filter 行为
+            不稳定，issue #21476），4.x 保持原样
         """
         if not self._ensure_login():
             return []
 
         params: Dict = {}
         if filter_status:
+            # 'paused' 是 4.x 用语，5.0+ 推荐 'stopped'（兼容性更好）
+            if filter_status == 'paused' and self._is_v5_api():
+                filter_status = 'stopped'
             params['filter'] = filter_status
 
         try:
@@ -213,10 +361,14 @@ class QBittorrentClient:
             return []
 
     def pause(self, torrent_hash: str) -> bool:
-        return self._action('pause', torrent_hash)
+        """暂停种子。qB 5.0+ 端点是 /torrents/stop，4.x 是 /torrents/pause（4.x 老端点在 5.x 返 404）。"""
+        action = 'stop' if self._is_v5_api() else 'pause'
+        return self._action(action, torrent_hash)
 
     def resume(self, torrent_hash: str) -> bool:
-        return self._action('resume', torrent_hash)
+        """恢复种子。qB 5.0+ 端点是 /torrents/start，4.x 是 /torrents/resume。"""
+        action = 'start' if self._is_v5_api() else 'resume'
+        return self._action(action, torrent_hash)
 
     def delete(self, torrent_hash: str, delete_files: bool = False) -> bool:
         if not self._ensure_login():

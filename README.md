@@ -13,7 +13,7 @@
 | 领域 | 核心能力 |
 |---|---|
 | **媒体库浏览** | 多库列表 + 详情页 + 海报视图，调 jellyfin REST 拿一手数据；支持本地 SQLite 直读加速 `path → item` 反查（同机部署可选） |
-| **下载入库自动化** | Jackett 搜种 → qBittorrent 推送 → 流水线 confidence-driven 识别（regex / TMDB / LLM 兜底）→ 按模板 + duplicate_policy 整理到媒体库 → 自动通知 jellyfin 刷新 |
+| **下载入库自动化** | Jackett 搜种 → qBittorrent 推送（兼容 qB 4.6 ~ 5.2，支持 API Key 认证）→ 流水线 confidence-driven 识别（regex / TMDB / LLM 兜底）→ 按模板 + duplicate_policy 整理到媒体库 → 自动通知 jellyfin 刷新 |
 | **字幕全链路** | 多源下载（OpenSubtitles / ASSRT / Shooter）→ 评分融合 + 分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测 |
 | **元数据修复** | 演员照片（TMDB + Wikidata 兜底）、海报、NFO；jellyfin 演员库归一化 |
 | **音轨管理** | MKV 默认音轨按语种偏好批量设置；汉语/未识别轨例外保护 |
@@ -131,6 +131,7 @@ jellyfin-helper/
 - Node.js 20+
 - PostgreSQL 12+（先建库和用户）
 - 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
+- qBittorrent **4.6+ 全兼容**，5.2+ 推荐（启用 API Key 认证，详见下文）
 - 系统级工具（见下方「系统级依赖」章节）
 
 ### 1. 配置
@@ -274,6 +275,39 @@ conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 - **LLM**：任意 OpenAI 兼容服务（识别兜底，可选）
 - **成人内容**：JavBus / JavDB / AVBase / MissAV（带地理屏蔽与代理建议）
 
+### qBittorrent 版本兼容性
+
+支持 qB **4.6 ~ 5.2**（含所有中间版本）。客户端会探测 `webapiVersion` 自动适配版本差异：
+
+| qB 版本 | 关键变化 | 我们的处理 |
+|---|---|---|
+| 4.6.x ~ 5.1.x | `/torrents/pause` `/torrents/resume`、`paused=true` 参数、`200 "Ok."` 文本响应 | 保留 4.x 路径 |
+| 5.0.0+ | 端点改 `/torrents/stop` `/torrents/start`，参数改 `stopped=true`，状态名 `pausedDL/UP` → `stoppedDL/UP` | 自动切换 |
+| 5.2.0+ | login 成功响应 `200 "Ok."` → **`204` 空 body**；add 响应改 JSON；重复 hash 返 **409** | login 双协议识别，add 解析 JSON / `success_count`，409 走专门错误分支 |
+| 5.2.0+ | 引入 **API Key 认证**（`Authorization: Bearer qbt_xxx`） | 配置 `qbittorrent.api_key` 后跳过 username/password 登录，更安全 |
+
+### 推荐配置（qB 5.2+）
+
+去 qB **Preferences → WebUI → API Key 段**点 Generate，复制 `qbt_xxx...` 到 `config.yaml`：
+
+```yaml
+qbittorrent:
+  host: "http://127.0.0.1:8080"
+  api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # 优先于下方 username/password
+  username: ""
+  password: ""
+```
+
+或者前端 **设置 → qBittorrent 下载管理** 里粘贴。配了 api_key 就**不必再填 username/password**。
+
+### ⚠️ qBittorrent 安全提醒
+
+如果你的 qB WebUI **暴露在公网或局域网弱密码状态**，强烈建议：
+
+1. 启用 API Key 认证（替代 admin/adminadmin）
+2. 监听地址改 `127.0.0.1`（仅本机访问）或反代后加 IP 白名单
+3. 检查 **Preferences → Downloads → Run external program on torrent added / completed** 是否被植入 `wget ... | sh` 类命令 —— 这是 qB 弱密被打的标志性后门（XMR 挖矿木马常用）
+
 ---
 
 ## 文档
@@ -317,6 +351,20 @@ psql -h <host> -p 5432 -U jellyfin_helper -d jellyfin_helper
 ```
 
 连不上时依次排查：网络、防火墙、`pg_hba.conf` 是否允许该 IP、用户密码、数据库是否存在。
+
+### qBittorrent 升级到 5.x 后无法连接
+
+- **症状**：升级 qB 到 5.0+（尤其 5.2.0）后，下载流水线全部失败、日志报"qBittorrent 推送失败"或登录失败
+- **根因**：qB 5.2.0 把 `/auth/login` 的成功响应从 `200 "Ok."` 改成 `204 空 body`；`/torrents/add` 改成 JSON；`pause/resume` 端点改名为 `stop/start`
+- **修复**：把项目更新到包含 qB 5.x 兼容补丁的版本（[兼容矩阵见上](#qbittorrent-版本兼容性)），重启后端即可。升级后推荐切到 API Key 认证（更稳）
+
+### 种子添加失败
+
+前端 ElMessage 现在能给出具体原因，按状态码区分：
+
+- **HTTP 409**：种子已在 qB 队列里（pre-check 会先拦下并显示种子名 / 状态）
+- **HTTP 415**：种子文件无效（非 bencode 格式）
+- **HTTP 502 + "qBittorrent 拒绝加种"**：qB 默认下载目录不存在/无权限，或 category 未在 qB 创建
 
 ---
 

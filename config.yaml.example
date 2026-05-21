@@ -156,8 +156,15 @@ jackett:
 
 # qBittorrent 配置（下载管理）
 # 注意：下载根路径在 dispatch.download_path 配，配额功能从那里读真实容量
+#
+# 认证两种模式（按优先级）：
+#   1. API Key（≥qB 5.2.0 推荐）：Preferences → WebUI → API Key 生成
+#      qbt_ 开头 32 字符，stateless，不暴露密码
+#   2. Username/Password（传统）：username/password 走 cookie 会话
+# 同时设了 api_key 和 username/password 时优先 api_key
 qbittorrent:
   host: "http://127.0.0.1:8080"
+  api_key: ""                      # 配了 api_key 就不必填下面 username/password
   username: "admin"
   password: "CHANGE_ME"
 
