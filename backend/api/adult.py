@@ -115,10 +115,10 @@ def _library_path_filter(library_id: str):
     历史数据可能含反斜杠 / Windows 盘符 → 同时 OR 一次本机视角的备份匹配，
     迁移期能兼容；新数据全是 Jellyfin view 即可。
     """
-    from backend.services.adult_watcher import watcher
+    from backend.services.adult_scanner import scanner
     from backend.path_translator import translate_path_with_settings
     from sqlalchemy import or_
-    raw_paths = watcher._get_library_paths_raw(library_id)
+    raw_paths = scanner._get_library_paths_raw(library_id)
     if not raw_paths:
         return None
     conds = []
@@ -765,8 +765,8 @@ def delete_item(
 @router.get("/watcher/status")
 def watcher_status():
     """获取 watcher 当前状态"""
-    from backend.services.adult_watcher import watcher
-    return watcher.status()
+    from backend.services.adult_scanner import scanner
+    return scanner.status()
 
 
 @router.post("/reset-and-rescan")
@@ -776,7 +776,7 @@ def reset_and_rescan(library_id: str, dry_run: bool = False):
 
     流程：
       1. 删除该库下所有 AdultItem 行（识别 + 刮削数据全部清掉）
-      2. 触发 watcher.trigger_libraries(force_scrape=True)：
+      2. 触发 scanner.trigger_libraries(force_scrape=True)：
          同一 task 内先扫描入库（识别番号），扫完后立即刮削（拉元数据 + 下封面 + 写 NFO）
 
     任务进度：5% 解析路径 → 15% 找到 N 视频 → 90% 识别完成 → 92% 刮削 → 100% 完成
@@ -812,8 +812,8 @@ def reset_and_rescan(library_id: str, dry_run: bool = False):
     logger.warning(f"/adult/reset-and-rescan: 清空 {deleted} 条 AdultItem (library {library_id})")
 
     # 2. 触发 watcher 扫描+刮削（同一任务，扫完衔接刮削）
-    from backend.services.adult_watcher import watcher
-    scheduled = watcher.trigger_libraries(
+    from backend.services.adult_scanner import scanner
+    scheduled = scanner.trigger_libraries(
         [library_id],
         bypass_cooldown=True,
         force_scrape=True,
@@ -849,12 +849,12 @@ def watcher_run_now(library_id: Optional[str] = None):
     Args:
         library_id: 仅扫指定库；不传则扫全部 settings.adult_library_ids
     """
-    from backend.services.adult_watcher import watcher
+    from backend.services.adult_scanner import scanner
     target_ids = [library_id] if library_id else (settings.adult_library_ids or [])
     if not target_ids:
         raise HTTPException(status_code=400, detail="未配置成人库")
 
-    scheduled = watcher.trigger_libraries(target_ids, bypass_cooldown=True)
+    scheduled = scanner.trigger_libraries(target_ids, bypass_cooldown=True)
     return {
         "ok": True,
         "scheduled": scheduled,
