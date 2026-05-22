@@ -411,6 +411,57 @@ class JellyfinClient:
                 break
         return all_items[:limit] if limit else all_items
 
+    def get_items_since(
+        self,
+        parent_id: str,
+        since_iso: str,
+        item_types: str = 'Movie,Video,Episode',
+        fields: str = 'Path,DateCreated,ProviderIds',
+    ) -> List[Dict]:
+        """
+        增量拉取库内 DateLastSaved >= since_iso 的条目。
+
+        用 Jellyfin 自家的 minDateLastSaved 参数（10.x+ 一直稳定）。注意 DateLastSaved
+        是 jellyfin 把 item 写入 DB 的时刻（不是文件 mtime）—— 我们能拿到的是 jellyfin
+        已经"看见"了的新条目。
+
+        Args:
+            parent_id: 媒体库 ItemId
+            since_iso: ISO 8601 UTC，如 '2026-05-22T12:00:00.000Z'
+            item_types: 视频类条目；多个用逗号分隔
+            fields: 返回字段；至少要 Path 才能识别文件
+
+        Returns:
+            条目列表（可能为空）。已分页拉完。
+        """
+        all_items: List[Dict] = []
+        start = 0
+        page = 500
+        while True:
+            params: Dict = {
+                'ParentId': parent_id,
+                'Recursive': 'true',
+                'IncludeItemTypes': item_types,
+                'Fields': fields,
+                'MinDateLastSaved': since_iso,
+                'SortBy': 'DateCreated',
+                'SortOrder': 'Ascending',
+                'StartIndex': start,
+                'Limit': page,
+            }
+            result = self._request('GET', '/Items', params=params)
+            if not result or 'Items' not in result:
+                break
+            items = result['Items']
+            if not items:
+                break
+            all_items.extend(items)
+            total = result.get('TotalRecordCount', 0)
+            start += len(items)
+            if start >= total:
+                break
+        return all_items
+
     # Jellyfin 三种标准刷新模式（与官方 Web UI 的"扫描媒体库"对话框对齐）
     REFRESH_MODES = {
         # 仅扫描新增/修改的文件，最快，日常使用

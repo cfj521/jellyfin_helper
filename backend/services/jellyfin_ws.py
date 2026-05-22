@@ -162,17 +162,18 @@ class JellyfinWSClient:
             logger.info("JellyfinWSClient: polling loop 退出")
 
     def _do_poll(self):
-        """同步：调 scanner.trigger_libraries —— 已扫过的库会被 cooldown 跳过
-        注：本 commit 仅做 watcher → scanner 重构；后续 commit 会切换为 incremental_watcher。
+        """同步：调 incremental_watcher.poll_libraries 跑增量。
+
+        不再触发 scanner 的全库 rglob —— scanner 只给"用户手动扫描"和"新库初始化"用。
+        incremental_watcher 通过 Jellyfin /Items?MinDateLastSaved 拿增量，开销 ~= 新增 item 数。
         """
         from backend.config import settings
-        from backend.services.adult_scanner import scanner
+        from backend.services.adult_incremental_watcher import incremental_watcher
 
         lib_ids = list(settings.adult_library_ids or [])
         if not lib_ids:
             return {}
-        # bypass_cooldown=False：scanner 自家 5min 冷却生效，避免每分钟空转 stat 整库
-        return scanner.trigger_libraries(lib_ids, bypass_cooldown=False)
+        return incremental_watcher.poll_libraries(lib_ids)
 
     async def _wait_for_wakeup_or_stop(self, timeout: float):
         """等到 timeout 秒，期间任何 wakeup 或 stop 都立即返回"""
