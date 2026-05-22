@@ -26,6 +26,14 @@ CONFIDENCE_AUTO_THRESHOLD = 0.85
 # scheduler 启动的独立线程在 trigger.wait() 上阻塞，被 set 或超时后跑一轮
 trigger = threading.Event()
 
+# 已经为 metaDL 阶段打过 INFO 的 hash 集合 —— 避免每 5s 刷一条同样的"等待 metadata"
+# 一旦该 hash 走出 metaDL（拿到文件列表 / qB 不在了），从 set 中移除
+_metadl_announced: set = set()
+
+# 「全在等 metadata」轮次的节流时间戳；用于每轮空走时偶尔打一行 INFO 心跳
+_last_waiting_log_ts: float = 0.0
+_WAITING_LOG_INTERVAL = 60.0  # 秒
+
 
 def run_analyzer_loop(stop_event):
     """独立线程：等 trigger 或超时 → 跑一轮 analyze_pending_rows。
@@ -107,6 +115,18 @@ def analyze_pending_rows() -> Dict:
             f"analyze 完成：auto={stats['processed_auto']} review={stats['processed_review']} "
             f"waiting={stats['still_waiting']} err={stats['errors']}"
         )
+    elif stats['still_waiting']:
+        # 整轮都没东西出结果但还有种子在等 metadata → 节流打一次 INFO 心跳，
+        # 让用户看到 analyzer 在跟踪，而不是"卡死了"。
+        global _last_waiting_log_ts
+        import time as _t
+        now = _t.time()
+        if now - _last_waiting_log_ts >= _WAITING_LOG_INTERVAL:
+            logger.info(
+                f"analyze 巡检：仍在等 metadata 的种子 {stats['still_waiting']} 个"
+                f"（scanned={stats['scanned']}）"
+            )
+            _last_waiting_log_ts = now
     return stats
 
 
@@ -133,6 +153,7 @@ def _analyze_one(qb, row, qb_t: Optional[Dict]) -> str:
 
     # qB 里没了 → 清掉 dispatch_map 行
     if not qb_t:
+        _metadl_announced.discard(h)
         with SessionLocal() as db:
             db_row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
             if db_row:
@@ -144,8 +165,20 @@ def _analyze_one(qb, row, qb_t: Optional[Dict]) -> str:
     # 还没拿到 metadata → 下次再说
     state = qb_t.get('state') or ''
     if state in ('metaDL', 'allocating'):
-        logger.debug(f"analyze: {h[:16]}.. 还在 {state}，下次再说")
+        # 首次见到这条种子在 metaDL 时打一条 INFO，后续静默走 debug，避免每 5s 刷屏。
+        # 集合包 metadata 很大可能等数十秒到几分钟，没有这条日志的话整段是黑屏。
+        if h not in _metadl_announced:
+            _metadl_announced.add(h)
+            name = (qb_t.get('name') or '').strip() or '(未知名)'
+            logger.info(
+                f"analyze: {h[:16]}.. 等待 metadata（state={state}）: {name[:80]}"
+            )
+        else:
+            logger.debug(f"analyze: {h[:16]}.. 还在 {state}，下次再说")
         return 'still_waiting'
+
+    # 走到这里说明 metadata 已就绪 —— 清掉首次通告标记
+    _metadl_announced.discard(h)
 
     # 拉文件列表
     files = []
