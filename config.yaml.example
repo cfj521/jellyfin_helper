@@ -95,8 +95,8 @@ mdblist:
 # 国内访问无需代理；如部署在墙外通常需要走代理（这里不配，由系统级 proxy 处理）
 douban:
   enabled: true
-  # 缓存有效期（天）
-  cache_ttl_days: 30
+  # 缓存有效期（天）。豆瓣反爬严（5s/req），评分对老片基本不变，比 MDB List 拉得长
+  cache_ttl_days: 60
   # User-Agent，模拟真实浏览器；过期换一下即可
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 

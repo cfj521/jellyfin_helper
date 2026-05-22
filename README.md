@@ -17,7 +17,7 @@
 | **字幕全链路** | 多源下载（OpenSubtitles / ASSRT / Shooter）→ 评分融合 + 分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测 |
 | **元数据修复** | 演员照片（TMDB + Wikidata 兜底）、海报、NFO；jellyfin 演员库归一化 |
 | **音轨管理** | MKV 默认音轨按语种偏好批量设置；汉语/未识别轨例外保护 |
-| **评分聚合** | MDBList + 豆瓣双源，DB 缓存 + 异步 worker 后台补齐；前端融合显示 |
+| **评分聚合** | TMDB + MDBList（IMDB / RT / Metacritic / Trakt / Letterboxd）+ 豆瓣，统一存 `media_ratings`，每家独立 TTL；前端融合显示 |
 | **发现 / 推荐** | TMDB / Trakt / AniList / 豆瓣榜单聚合，无限滚动 + 预取 |
 | **资源搜索** | Jackett 跨 indexer 聚合，结果分类 + 大小 / Seeders 排序 |
 | **成人内容（可选）** | 番号识别、JavBus + JavDB 双源刮削、女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护 |
@@ -254,7 +254,7 @@ conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 | `actors` | 演员信息缓存 |
 | `media_items` | 媒体文件元数据 |
 | `media_metadata` | 媒体扩展元数据（海报、简介等） |
-| `media_ratings` | 评分聚合（豆瓣 / TMDB / Trakt / MDBList） |
+| `media_ratings` | 评分聚合（TMDB / IMDB / RT / Metacritic / Trakt / Letterboxd / 豆瓣），按 `(tmdb_id, media_type)` 唯一；每家独立 `*_fetched_at` |
 | `video_annotations` | 视频标注（硬字幕标记等） |
 | `adult_items` | 成人内容元数据（可选） |
 | `adult_actresses` | 演员资料库（成人内容，可选） |

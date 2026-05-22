@@ -95,7 +95,7 @@ class RatingResponse(BaseModel):
     douban_rating: Optional[float] = None
     douban_votes: Optional[int] = None
     aggregate_score: Optional[int] = None
-    # TMDB 自家评分（从 media_metadata.ext.vote_average 反查；非 MDB List 数据，单独字段暴露）
+    # TMDB 自家评分（discover 路径镜像写入 media_ratings；不独立 fetcher）
     tmdb_rating: Optional[float] = None
     tmdb_vote_count: Optional[int] = None
     # 请求里携带的 douban_id（echo，便于前端按豆瓣 ID 反查到这条 rating）
@@ -144,31 +144,44 @@ def _douban_status(rating: Optional[MediaRating]) -> str:
     return "fresh"
 
 
-def _fetch_tmdb_rating_map(keys: List[tuple]) -> dict:
+def upsert_tmdb_rating(
+    tmdb_id: int,
+    media_type: str,
+    rating: Optional[float],
+    vote_count: Optional[int],
+) -> None:
+    """把 TMDB 自家评分镜像写入 media_ratings 表。
+
+    TMDB detail/list 抓取的副产品 —— 不独立 fetcher。discover._upsert_tmdb_detail
+    和 _upsert_tmdb_list_item 在落 metadata 时顺手调本函数同步镜像，
+    避免 metadata LRU 清理后丢失评分；同时让 media_ratings 成为唯一评分聚合表。
+
+    rating=None 时不写（避免 None 覆盖已有评分）。
     """
-    批量从 media_metadata.ext 取 TMDB 评分。返回 {(tmdb_id, media_type): (tmdb_rating, tmdb_vote_count)}。
-    keys 是 [(tmdb_id, media_type), ...]。
-    """
-    if not keys:
-        return {}
-    from backend.services.metadata_store import get_batch
-    rows = get_batch([('tmdb', str(tid)) for tid, _ in keys])
-    # rows 是 {(source, source_id): MediaMetadata}
-    by_tmdb: dict = {}
-    for (source, sid), row in rows.items():
-        ext = row.ext or {}
-        v = ext.get('vote_average')
-        c = ext.get('vote_count')
-        if v is None:
-            continue
-        try:
-            by_tmdb[(int(sid), row.media_type or '')] = (
-                float(v),
-                int(c) if c is not None else None,
-            )
-        except (TypeError, ValueError):
-            continue
-    return by_tmdb
+    if rating is None or media_type not in ('movie', 'tv'):
+        return
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(MediaRating)
+            .filter(MediaRating.tmdb_id == tmdb_id, MediaRating.media_type == media_type)
+            .first()
+        )
+        if row is None:
+            row = MediaRating(tmdb_id=tmdb_id, media_type=media_type)
+            db.add(row)
+        row.tmdb_rating = float(rating)
+        # vote_count 仅在传入时更新，None 不覆盖已有值
+        # （list 路径只有 vote_average，避免后访问列表把详情路径写入的 vote_count 抹掉）
+        if vote_count is not None:
+            row.tmdb_vote_count = int(vote_count)
+        row.tmdb_fetched_at = datetime.utcnow()
+        db.commit()
+    except Exception:
+        logger.exception(f"upsert_tmdb_rating 失败 tmdb_id={tmdb_id} ({media_type})")
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _to_response(
@@ -176,17 +189,14 @@ def _to_response(
     *,
     tmdb_id: int,
     media_type: str,
-    tmdb_rating_pair: Optional[tuple] = None,
 ) -> RatingResponse:
-    """ORM → Pydantic，附带缓存状态字段 + TMDB 评分（来自 media_metadata）。"""
+    """ORM → Pydantic，附带缓存状态字段。TMDB 评分直接读 rating 行（不再反查 metadata）。"""
     base = {
         "tmdb_id": rating.tmdb_id if rating else tmdb_id,
         "media_type": rating.media_type if rating else media_type,
         "mdblist_status": _mdblist_status(rating),
         "douban_status": _douban_status(rating),
     }
-    if tmdb_rating_pair is not None:
-        base["tmdb_rating"], base["tmdb_vote_count"] = tmdb_rating_pair
     if rating is None:
         return RatingResponse(**base)
     return RatingResponse(
@@ -205,6 +215,8 @@ def _to_response(
         douban_rating=rating.douban_rating,
         douban_votes=rating.douban_votes,
         aggregate_score=rating.aggregate_score,
+        tmdb_rating=rating.tmdb_rating,
+        tmdb_vote_count=rating.tmdb_vote_count,
         mdblist_fetched_at=rating.mdblist_fetched_at,
         douban_fetched_at=rating.douban_fetched_at,
     )
@@ -576,11 +588,7 @@ def get_rating(
                 tmdb_id, media_type, douban_title, douban_year, imdb_id=douban_imdb,
             )
 
-    tmdb_map = _fetch_tmdb_rating_map([(tmdb_id, media_type)])
-    return _to_response(
-        rating, tmdb_id=tmdb_id, media_type=media_type,
-        tmdb_rating_pair=tmdb_map.get((tmdb_id, media_type)),
-    )
+    return _to_response(rating, tmdb_id=tmdb_id, media_type=media_type)
 
 
 @router.post("/batch", response_model=BatchResponse)
@@ -729,17 +737,13 @@ def get_ratings_batch(
         if _douban_status(rating) != "fresh" and (title or douban_imdb):
             queue_douban_fetch(tmdb_id, media_type, title, year, imdb_id=douban_imdb)
 
-    tmdb_map = _fetch_tmdb_rating_map(keys)
     # 反向：key → 请求里的 douban_id，用于 echo
     key_to_douban: dict = {}
     for d_id, k in douban_to_key.items():
         key_to_douban.setdefault(k, d_id)
     responses = []
     for k in keys:
-        resp = _to_response(
-            by_key.get(k), tmdb_id=k[0], media_type=k[1],
-            tmdb_rating_pair=tmdb_map.get(k),
-        )
+        resp = _to_response(by_key.get(k), tmdb_id=k[0], media_type=k[1])
         if k in key_to_douban:
             resp.request_douban_id = key_to_douban[k]
         responses.append(resp)
@@ -798,11 +802,7 @@ def refresh_rating(
             imdb_id=rating.imdb_id,
         )
 
-    tmdb_map = _fetch_tmdb_rating_map([(tmdb_id, media_type)])
-    return _to_response(
-        rating, tmdb_id=tmdb_id, media_type=media_type,
-        tmdb_rating_pair=tmdb_map.get((tmdb_id, media_type)),
-    )
+    return _to_response(rating, tmdb_id=tmdb_id, media_type=media_type)
 
 
 # ============================================================
