@@ -957,8 +957,20 @@
             <el-form-item label="自动监视">
               <el-switch v-model="form.adult.auto_scrape" />
               <span class="form-hint">
-                定时轮询 Jellyfin（默认每 60s）发现新视频自动入库 + 刮削（默认关闭）。
-                自带 5min 库级冷却，不会重复扫
+                定时轮询 Jellyfin 发现新视频自动入库 + 刮削（默认关闭）。
+                走增量 API（MinDateLastSaved），不全库扫；不创建后台任务，仅日志记录
+              </span>
+            </el-form-item>
+            <el-form-item label="轮询间隔">
+              <el-input-number
+                v-model="form.adult.poll_interval_sec"
+                :min="30"
+                :max="3600"
+                :step="30"
+                style="width: 160px"
+              />
+              <span class="form-hint" style="margin-left: 8px">
+                秒。短 → 新文件发现快但请求密；长 → 反之。下限 30s，默认 300s
               </span>
             </el-form-item>
           </el-form>
@@ -1711,6 +1723,7 @@ const blank = () => ({
     library_ids: [],
     auto_detect: true,
     auto_scrape: false,
+    poll_interval_sec: 300,
     sources: [],
   },
 })
