@@ -55,11 +55,20 @@ class AdultScanner:
             poller_status = poller_client.status()
         except Exception:
             poller_status = {"connected": False, "error": "poller client 未加载"}
+        # 增量监听器状态（如果加载失败不影响主响应）
+        try:
+            from backend.services.adult_incremental_watcher import incremental_watcher
+            inc_status = incremental_watcher.status()
+        except Exception:
+            inc_status = {"error": "incremental_watcher 未加载"}
         return {
             "enabled": settings.adult_enabled,
             "auto_scrape": settings.adult_auto_scrape,
-            # poller 状态（jellyfin 变化监听器现状）
+            # poller 状态（驱动 incremental_watcher 的 jellyfin 轮询）
             "change_monitor": poller_status,
+            # 增量监听器（per library last_check_at + 最近 summary）
+            "incremental_watcher": inc_status,
+            # scanner 自己的状态（全库扫描）
             "last_run_at": self._last_run_at,
             "last_run_summary": self._last_run_summary,
             "active_tasks": dict(self._active_tasks),

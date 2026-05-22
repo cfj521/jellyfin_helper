@@ -281,6 +281,20 @@ class AdultItem(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class AdultWatcherState(Base):
+    """
+    Jellyfin 增量监听器的进度记录（per library）。
+
+    每个 library 一行，存 last_check_at —— 下次 polling 用 `MinDateLastSaved=last_check_at - 60s`
+    向 Jellyfin 拉增量。60s 安全余量避免边界 item 漏掉，重复 item 由 pipeline 跳过策略兜底。
+    """
+    __tablename__ = "adult_watcher_state"
+
+    library_id = Column(String(64), primary_key=True)
+    last_check_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AdultActress(Base):
     """女优档案。
     日文名是规范主键（站点 / NFO 都以日文名为锚），中/英文为本地化展示。
