@@ -7,7 +7,7 @@
   - 用户手动点"立即扫描"（/api/adult/scan）
   - 用户配置变更后新加入库的初始化（restart_for_new_libraries）
 
-跟 adult_incremental_watcher 的关系：
+跟 adult_watcher 的关系：
   - Scanner 是"全库主动扫"，用户主动触发，进 Task 表
   - Watcher 是"jellyfin 增量被动拉"，polling 触发，不进 Task 表
   - 两者共用 AdultPipeline 做实际的识别/入库/刮削
@@ -57,17 +57,17 @@ class AdultScanner:
             poller_status = {"connected": False, "error": "poller client 未加载"}
         # 增量监听器状态（如果加载失败不影响主响应）
         try:
-            from backend.services.adult_incremental_watcher import incremental_watcher
-            inc_status = incremental_watcher.status()
+            from backend.services.adult_watcher import watcher
+            inc_status = watcher.status()
         except Exception:
-            inc_status = {"error": "incremental_watcher 未加载"}
+            inc_status = {"error": "watcher 未加载"}
         return {
             "enabled": settings.adult_enabled,
             "auto_scrape": settings.adult_auto_scrape,
-            # poller 状态（驱动 incremental_watcher 的 jellyfin 轮询）
+            # poller 状态（驱动 watcher 的 jellyfin 轮询）
             "change_monitor": poller_status,
             # 增量监听器（per library last_check_at + 最近 summary）
-            "incremental_watcher": inc_status,
+            "watcher": inc_status,
             # scanner 自己的状态（全库扫描）
             "last_run_at": self._last_run_at,
             "last_run_summary": self._last_run_summary,
