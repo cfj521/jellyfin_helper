@@ -535,8 +535,12 @@ _ONESHOT_MIGRATIONS = [
     (
         "2026-05-22__backfill_tmdb_rating_to_media_ratings",
         # TMDB 自家评分从 media_metadata.ext 迁到 media_ratings（统一评分聚合表）
-        # 只回填 media_ratings 已有的 (tmdb_id, media_type) 行；新条目靠 discover 路径自动镜像
+        # 注意：init_db 顺序是 oneshot → create_all → schema_patches，所以本迁移先自己
+        # 把列加上（与 _SCHEMA_PATCHES 重复但幂等，保险），再做 UPDATE 回填
         [
+            "ALTER TABLE media_ratings ADD COLUMN IF NOT EXISTS tmdb_rating DOUBLE PRECISION",
+            "ALTER TABLE media_ratings ADD COLUMN IF NOT EXISTS tmdb_vote_count INTEGER",
+            "ALTER TABLE media_ratings ADD COLUMN IF NOT EXISTS tmdb_fetched_at TIMESTAMP",
             "UPDATE media_ratings r "
             "SET tmdb_rating = (mm.ext->>'vote_average')::float, "
             "    tmdb_vote_count = NULLIF(mm.ext->>'vote_count', '')::int, "
