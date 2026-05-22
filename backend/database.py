@@ -174,10 +174,15 @@ class MediaRating(Base):
     douban_rating = Column(Float)       # 豆瓣 (0-10)
     douban_votes = Column(Integer)
     aggregate_score = Column(Integer)   # MDB List 综合分 (0-100)
+    # TMDB 自家评分：discover 拉详情/列表时镜像写入；
+    # 不独立 fetcher（TMDB detail 抓取的副产品），保留独立 fetched_at 仅作可观测性
+    tmdb_rating = Column(Float)         # TMDB (0-10)
+    tmdb_vote_count = Column(Integer)
 
     # ----- 缓存元信息（每家独立 TTL，避免一家拉过另一家就被强缓存）-----
     mdblist_fetched_at = Column(DateTime)
     douban_fetched_at = Column(DateTime)
+    tmdb_fetched_at = Column(DateTime)
     # 留个原始响应字段，将来想多展示一项不用重新爬
     raw_mdblist = Column(Text)
     raw_douban = Column(Text)
@@ -447,6 +452,10 @@ _SCHEMA_PATCHES = [
     ("download_dispatch_map", "qb_added_on", "TIMESTAMP"),
     # 用户认证
     ("users", "role", "VARCHAR(20) DEFAULT 'guest' NOT NULL"),
+    # TMDB 自家评分镜像进 media_ratings（统一评分聚合表，避免 metadata LRU 清后丢评分）
+    ("media_ratings", "tmdb_rating", "DOUBLE PRECISION"),
+    ("media_ratings", "tmdb_vote_count", "INTEGER"),
+    ("media_ratings", "tmdb_fetched_at", "TIMESTAMP"),
 ]
 
 
@@ -521,6 +530,23 @@ _ONESHOT_MIGRATIONS = [
 
             # ③ 清空 dispatch_map 表（旧 phase 值跟新常量不兼容；qB 上的种子下次 adopt 会重认）
             "TRUNCATE TABLE download_dispatch_map",
+        ],
+    ),
+    (
+        "2026-05-22__backfill_tmdb_rating_to_media_ratings",
+        # TMDB 自家评分从 media_metadata.ext 迁到 media_ratings（统一评分聚合表）
+        # 只回填 media_ratings 已有的 (tmdb_id, media_type) 行；新条目靠 discover 路径自动镜像
+        [
+            "UPDATE media_ratings r "
+            "SET tmdb_rating = (mm.ext->>'vote_average')::float, "
+            "    tmdb_vote_count = NULLIF(mm.ext->>'vote_count', '')::int, "
+            "    tmdb_fetched_at = mm.updated_at "
+            "FROM media_metadata mm "
+            "WHERE mm.source = 'tmdb' "
+            "  AND mm.source_id = r.tmdb_id::text "
+            "  AND mm.media_type = r.media_type "
+            "  AND mm.ext ? 'vote_average' "
+            "  AND r.tmdb_rating IS NULL",
         ],
     ),
 ]

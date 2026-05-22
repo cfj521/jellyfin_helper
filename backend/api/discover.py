@@ -377,6 +377,12 @@ def _upsert_tmdb_detail(detail: dict) -> None:
                 'imdb_id': detail.get('imdb_id'),
             },
         )
+        # 同步镜像 TMDB 评分到 media_ratings（统一评分聚合表）
+        from backend.api.ratings import upsert_tmdb_rating
+        upsert_tmdb_rating(
+            int(tmdb_id), detail.get('media_type') or '',
+            detail.get('vote_average'), detail.get('vote_count'),
+        )
     except Exception:
         logger.exception(f"L3 upsert tmdb detail 失败 tmdb_id={tmdb_id}")
 
@@ -845,6 +851,12 @@ def _upsert_tmdb_list_item(norm: dict) -> None:
             public=public,
             ext=ext,
             bridge_ids={'tmdb_id': int(tmdb_id)},
+        )
+        # 同步镜像 TMDB 评分到 media_ratings（list 路径只有 vote_average，没有 vote_count）
+        from backend.api.ratings import upsert_tmdb_rating
+        upsert_tmdb_rating(
+            int(tmdb_id), norm.get('media_type') or '',
+            norm.get('vote_average'), None,
         )
     except Exception:
         logger.exception(f"L3 upsert tmdb list 失败 tmdb_id={tmdb_id}")

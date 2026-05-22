@@ -135,7 +135,8 @@ class Settings(BaseSettings):
 
     # 豆瓣评分（无官方 API，HTML 爬虫；爬取较慢，作为懒拉取的后台任务）
     douban_enabled: bool = _yaml_config.get('douban', {}).get('enabled', True)
-    douban_cache_ttl_days: int = _yaml_config.get('douban', {}).get('cache_ttl_days', 30)
+    # 豆瓣评分对老片基本不变 + 反爬严（5s/req），TTL 拉长到 60 天减少抓取频次
+    douban_cache_ttl_days: int = _yaml_config.get('douban', {}).get('cache_ttl_days', 60)
     douban_user_agent: str = _yaml_config.get('douban', {}).get(
         'user_agent',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '

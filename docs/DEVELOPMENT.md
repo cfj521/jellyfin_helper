@@ -128,12 +128,12 @@ cd frontend && npm install && npm run dev
 | `scan_reports` | 字幕 / 元数据扫描结果归档（10 分钟内可被 auto-fix 复用） |
 | `actors` | 演员缓存（jellyfin id → tmdb id + image） |
 | `media_items` | jellyfin item 长缓存（带 path / 字幕语言 / 时长 / 分辨率等） |
-| `media_metadata` | 媒体元数据实体表（评分 / 海报 / 演员等多源合并） |
+| `media_metadata` | 媒体元数据实体表（海报 / 简介 / 演员等多源合并；评分独立走 `media_ratings`） |
 | `download_dispatch_map` | dispatch 流水线 phase 状态机的主表 |
 | `download_quota` | 配额 / 节流 |
 | `adult_items` | 番号元数据 |
 | `adult_actresses` | 女优档案（多源 chain：javdb + minnano_av） |
-| `ratings` | MDBList + 豆瓣评分缓存 |
+| `media_ratings` | 评分聚合表（TMDB / MDBList 一套 / 豆瓣），每家独立 `*_fetched_at`；TMDB 由 discover 路径镜像写入，MDBList / 豆瓣各自有后台 worker |
 | `video_annotations` | 用户手工标注（如硬字幕语言） |
 | `llm_classify_cache` | LLM 识别结果缓存 |
 
