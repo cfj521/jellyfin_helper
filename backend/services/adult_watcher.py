@@ -25,9 +25,9 @@ from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-# Jellyfin /Items?MinDateLastSaved 拉增量时往前回溯的安全余量秒数；
-# 边界 item 重复返回由 pipeline 跳过策略兜底（mtime 未变）
-SAFETY_LOOKBACK_SECONDS = 60
+# Jellyfin /Items?MinDateLastSaved 拉增量时的回溯余量等于 poll 间隔（恰好覆盖上次窗口），
+# 重复 item 由 pipeline 跳过策略兜底（mtime 未变）。值从 settings.adult_poll_interval_sec
+# 实时读取，支持热重载。
 
 
 def _iso_z(dt: datetime) -> str:
@@ -133,7 +133,7 @@ class AdultWatcher:
                     f"本轮跳过（初始扫描应由 scanner 完成）"
                 )
                 return None
-            since = state.last_check_at - timedelta(seconds=SAFETY_LOOKBACK_SECONDS)
+            since = state.last_check_at - timedelta(seconds=settings.adult_poll_interval_sec)
 
         # ② 调 Jellyfin 拉增量
         try:

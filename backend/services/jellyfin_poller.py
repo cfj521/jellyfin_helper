@@ -1,7 +1,7 @@
 """
 Jellyfin 库变更轮询器（JellyfinPoller）。
 
-工作原理：每 POLL_INTERVAL_SEC 触发 watcher.poll_libraries(...)。
+工作原理：每 settings.adult_poll_interval_sec 触发 watcher.poll_libraries(...)。
        自身只负责"按周期把活派出去"，不感知 watcher / scanner 的内部状态。
 
 启停由 settings 控制（adult_enabled / adult_auto_scrape / jellyfin_api_key / adult_library_ids
@@ -15,11 +15,6 @@ import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-
-# 轮询间隔（秒）。watcher 自家用 last_check_at 做幂等，频繁 poll 也不会重复处理；
-# 设短一点让新文件被发现的延迟更小（首次出现 → 最长等 POLL_INTERVAL + jellyfin 收录耗时）
-POLL_INTERVAL_SEC = 60
 
 
 class JellyfinPoller:
@@ -56,11 +51,12 @@ class JellyfinPoller:
             "last_error": self._last_error,
             "poll_count": self._poll_count,
             "trigger_count": self._trigger_count,
-            "poll_interval_sec": POLL_INTERVAL_SEC,
+            "poll_interval_sec": settings.adult_poll_interval_sec,
         }
 
     def start(self, loop: asyncio.AbstractEventLoop):
         """在应用启动时调用一次，传入 asyncio loop。"""
+        from backend.config import settings
         if self._task and not self._task.done():
             return
         self._loop = loop
@@ -68,7 +64,7 @@ class JellyfinPoller:
         self._wakeup_event = asyncio.Event()
         self._task = loop.create_task(self._main_loop(), name="jellyfin-poller")
         logger.info(
-            f"JellyfinPoller: 后台 task 已启动（间隔 {POLL_INTERVAL_SEC}s）"
+            f"JellyfinPoller: 后台 task 已启动（间隔 {settings.adult_poll_interval_sec}s）"
         )
 
     def stop(self):
@@ -106,7 +102,8 @@ class JellyfinPoller:
         )
 
     async def _main_loop(self):
-        """主循环：每 POLL_INTERVAL_SEC 触发一次 watcher.poll_libraries"""
+        """主循环：每 settings.adult_poll_interval_sec 触发一次 watcher.poll_libraries"""
+        from backend.config import settings
         logger.info("JellyfinPoller: 主循环启动")
         try:
             while not self._stop_event.is_set():
@@ -144,7 +141,8 @@ class JellyfinPoller:
                     logger.warning(f"JellyfinPoller: poll 异常 {e}")
 
                 # 等下一个 poll tick（或 settings 唤醒 / stop）
-                await self._wait_for_wakeup_or_stop(timeout=POLL_INTERVAL_SEC)
+                # 每次循环都重新读 settings，支持热重载改间隔立即生效
+                await self._wait_for_wakeup_or_stop(timeout=settings.adult_poll_interval_sec)
         finally:
             self._active = False
             logger.info("JellyfinPoller: 主循环退出")

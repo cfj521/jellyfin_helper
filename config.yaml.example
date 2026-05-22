@@ -300,6 +300,9 @@ adult:
   auto_detect: true
   # 自动刮削：新 item 入库后自动跑番号识别 + 元数据填充
   auto_scrape: false
+  # 增量监听轮询间隔（秒）。jellyfin /Items?MinDateLastSaved 拉增量的周期，
+  # 同时作为 since 的回溯余量。短 → 新文件发现快但请求密；长 → 反之。下限 30s。
+  poll_interval_sec: 300
   # 刮削源（按顺序回退，第一个命中即返回）。可关闭某些源。
   #   avbase  - 商业番号兜底（DMM 图床高清封面）
   #   missav  - 最终兜底：覆盖广（含 FC2）+ 中文化标题，但需 curl_cffi 绕 Cloudflare 较慢

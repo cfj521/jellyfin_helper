@@ -287,9 +287,14 @@ class Settings(BaseSettings):
     adult_extra_paths: List[str] = _yaml_config.get('adult', {}).get('extra_paths') or []
     # 自动识别开关：首次启动时探测哪个 Jellyfin 库是成人库
     adult_auto_detect: bool = _yaml_config.get('adult', {}).get('auto_detect', True)
-    # 自动监视：开启后定时轮询 Jellyfin（默认 60s），发现新视频自动入库 + 刮削
+    # 自动监视：开启后定时轮询 Jellyfin（默认 300s），发现新视频自动入库 + 刮削
     # 调 /Items?MinDateLastSaved 拿增量，开销 ~= 新增 item 数，不全库扫
     adult_auto_scrape: bool = _yaml_config.get('adult', {}).get('auto_scrape', False)
+    # 增量监听轮询间隔（秒）。同时作为向 Jellyfin 拉增量时的回溯余量（since = last_check_at - 该值），
+    # 短 → 新文件发现快但请求密；长 → 反之。下限 30s 避免误配置打爆 jellyfin。
+    adult_poll_interval_sec: int = max(
+        30, int(_yaml_config.get('adult', {}).get('poll_interval_sec', 300))
+    )
     # delay 参数统一在 common/rate_limiter.py 定义
     # 刮削源配置（List[Dict]）。按顺序回退，第一个命中即返回。
     # missav 放最后：覆盖广（含 FC2 + 中文标题），但需 CF 绕过较慢，作为最终兜底
