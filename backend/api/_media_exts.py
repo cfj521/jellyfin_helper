@@ -2,7 +2,7 @@
 集中定义媒体文件扩展名 + Jellyfin 库类型到"主体文件"扩展名集合的映射。
 
 历史背景：项目里 VIDEO_EXTS / AUDIO_EXTS / IMAGE_EXTS 在多处重复定义且飘移
-（maintenance.py 缺 .webm、adult_watcher.py 缺 .rmvb 等），EBOOK_EXTS 完全没有。
+（maintenance.py 缺 .webm、adult_scanner.py 缺 .rmvb 等），EBOOK_EXTS 完全没有。
 本模块作为单一来源，其它模块统一 import 这里的常量。
 
 库类型摸排（对应 Jellyfin CollectionType）：

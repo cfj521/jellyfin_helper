@@ -151,12 +151,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception(f"处理孤儿任务时出错: {e}")
 
-    # 初始化 watcher 已知库列表（防止启动后被误判为"新增"）
+    # 初始化 scanner 已知库列表（防止启动后被误判为"新增"）
     try:
-        from backend.services.adult_watcher import watcher
-        watcher.init_known_libraries()
+        from backend.services.adult_scanner import scanner
+        scanner.init_known_libraries()
     except Exception as e:
-        logger.warning(f"初始化 AdultWatcher 失败: {e}")
+        logger.warning(f"初始化 AdultScanner 失败: {e}")
 
     # 启动 Jellyfin 库变更监听器（polling 模式，自动检测新文件触发刮削；class 名仍叫
     # JellyfinWSClient 是历史包袱 —— 10.11 后 WS 不再可用，已内部切到轮询）

@@ -82,13 +82,13 @@ def _reload_settings():
     logger.info(f"config 热重载: 已同步 {synced}/{len(new_settings.model_fields)} 个字段")
 
     # settings 变更后：
-    #   - watcher 比对新旧 library_ids，对新增的库立即触发扫描
+    #   - scanner 比对新旧 library_ids，对新增的库立即触发扫描
     #   - 变更监听客户端重新评估启停（auto_scrape / library_ids 变化都生效）
     try:
-        from backend.services.adult_watcher import watcher
-        watcher.restart_for_new_libraries()
+        from backend.services.adult_scanner import scanner
+        scanner.restart_for_new_libraries()
     except Exception as e:
-        logger.warning(f"watcher.restart_for_new_libraries 失败: {e}")
+        logger.warning(f"scanner.restart_for_new_libraries 失败: {e}")
 
     try:
         from backend.services.jellyfin_ws import client as poller_client
