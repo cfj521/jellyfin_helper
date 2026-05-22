@@ -1,7 +1,7 @@
 """
 Jellyfin 库变更轮询器（JellyfinPoller）。
 
-工作原理：每 POLL_INTERVAL_SEC 触发 incremental_watcher.poll_libraries(...)。
+工作原理：每 POLL_INTERVAL_SEC 触发 watcher.poll_libraries(...)。
        自身只负责"按周期把活派出去"，不感知 watcher / scanner 的内部状态。
 
 启停由 settings 控制（adult_enabled / adult_auto_scrape / jellyfin_api_key / adult_library_ids
@@ -17,7 +17,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-# 轮询间隔（秒）。incremental_watcher 自家用 last_check_at 做幂等，频繁 poll 也不会重复处理；
+# 轮询间隔（秒）。watcher 自家用 last_check_at 做幂等，频繁 poll 也不会重复处理；
 # 设短一点让新文件被发现的延迟更小（首次出现 → 最长等 POLL_INTERVAL + jellyfin 收录耗时）
 POLL_INTERVAL_SEC = 60
 
@@ -35,7 +35,7 @@ class JellyfinPoller:
         self._last_poll_at: Optional[float] = None   # 最近一次 poll tick
         self._last_error: Optional[str] = None
         self._poll_count = 0
-        self._trigger_count = 0  # 实际触发 incremental_watcher 的次数
+        self._trigger_count = 0  # 实际触发 watcher 的次数
 
     # ============================================================
     # 公开接口
@@ -106,7 +106,7 @@ class JellyfinPoller:
         )
 
     async def _main_loop(self):
-        """主循环：每 POLL_INTERVAL_SEC 触发一次 incremental_watcher.poll_libraries"""
+        """主循环：每 POLL_INTERVAL_SEC 触发一次 watcher.poll_libraries"""
         logger.info("JellyfinPoller: 主循环启动")
         try:
             while not self._stop_event.is_set():
@@ -122,13 +122,13 @@ class JellyfinPoller:
                 self._poll_count += 1
                 self._last_poll_at = time.time()
 
-                # 派活到线程，避免 incremental_watcher 内部的同步 DB / HTTP 阻塞 event loop
+                # 派活到线程，避免 watcher 内部的同步 DB / HTTP 阻塞 event loop
                 try:
                     results = await asyncio.to_thread(self._do_poll)
                     if results:
                         self._last_event_at = time.time()
                         self._trigger_count += len(results)
-                        # 实际有变更的库才打 INFO（incremental_watcher 内部也会打详情）
+                        # 实际有变更的库才打 INFO（watcher 内部也会打详情）
                         changed_libs = [
                             lid for lid, s in results.items()
                             if (s.get('new', 0) + s.get('updated', 0) + s.get('moved', 0)) > 0
@@ -150,18 +150,18 @@ class JellyfinPoller:
             logger.info("JellyfinPoller: 主循环退出")
 
     def _do_poll(self):
-        """同步：调 incremental_watcher.poll_libraries 跑增量。
+        """同步：调 watcher.poll_libraries 跑增量。
 
         不再触发 scanner 的全库 rglob —— scanner 只给"用户手动扫描"和"新库初始化"用。
-        incremental_watcher 通过 Jellyfin /Items?MinDateLastSaved 拿增量，开销 ~= 新增 item 数。
+        watcher 通过 Jellyfin /Items?MinDateLastSaved 拿增量，开销 ~= 新增 item 数。
         """
         from backend.config import settings
-        from backend.services.adult_incremental_watcher import incremental_watcher
+        from backend.services.adult_watcher import watcher
 
         lib_ids = list(settings.adult_library_ids or [])
         if not lib_ids:
             return {}
-        return incremental_watcher.poll_libraries(lib_ids)
+        return watcher.poll_libraries(lib_ids)
 
     async def _wait_for_wakeup_or_stop(self, timeout: float):
         """等到 timeout 秒，期间任何 wakeup 或 stop 都立即返回"""

@@ -35,7 +35,7 @@ def _iso_z(dt: datetime) -> str:
     return dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
 
-class AdultIncrementalWatcher:
+class AdultWatcher:
     """模块级单例。polling worker 调用 poll_libraries()。"""
 
     def __init__(self):
@@ -58,7 +58,7 @@ class AdultIncrementalWatcher:
                 for s in db.query(AdultWatcherState).all():
                     per_lib[s.library_id] = s.last_check_at.isoformat() if s.last_check_at else None
         except Exception:
-            logger.debug("incremental_watcher status 读 DB 失败", exc_info=True)
+            logger.debug("watcher status 读 DB 失败", exc_info=True)
         return {
             "last_run_at": self._last_run_at,
             "last_run_summary": self._last_run_summary,
@@ -84,7 +84,7 @@ class AdultIncrementalWatcher:
         for lib_id in library_ids:
             with self._lock:
                 if lib_id in self._running_libs:
-                    logger.debug(f"incremental_watcher: 库 {lib_id} 正在处理，跳过本轮")
+                    logger.debug(f"watcher: 库 {lib_id} 正在处理，跳过本轮")
                     continue
                 self._running_libs.add(lib_id)
             try:
@@ -92,7 +92,7 @@ class AdultIncrementalWatcher:
                 if stats is not None:
                     results[lib_id] = stats
             except Exception:
-                logger.exception(f"incremental_watcher: 库 {lib_id} 处理异常")
+                logger.exception(f"watcher: 库 {lib_id} 处理异常")
             finally:
                 with self._lock:
                     self._running_libs.discard(lib_id)
@@ -129,7 +129,7 @@ class AdultIncrementalWatcher:
                 db.add(AdultWatcherState(library_id=library_id, last_check_at=now))
                 db.commit()
                 logger.info(
-                    f"incremental_watcher: 库 {library_id} 首次接入，记 last_check_at={_iso_z(now)}，"
+                    f"watcher: 库 {library_id} 首次接入，记 last_check_at={_iso_z(now)}，"
                     f"本轮跳过（初始扫描应由 scanner 完成）"
                 )
                 return None
@@ -140,7 +140,7 @@ class AdultIncrementalWatcher:
             jf = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
             items = jf.get_items_since(library_id, _iso_z(since))
         except Exception as e:
-            logger.warning(f"incremental_watcher: 库 {library_id} 拉增量失败: {e}")
+            logger.warning(f"watcher: 库 {library_id} 拉增量失败: {e}")
             return None
 
         if not items:
@@ -173,7 +173,7 @@ class AdultIncrementalWatcher:
         total = len(items)
         for idx, item in enumerate(items):
             if is_shutting_down():
-                logger.info(f"incremental_watcher: 收到 shutdown 信号，提前退出（已处理 {idx}/{total}）")
+                logger.info(f"watcher: 收到 shutdown 信号，提前退出（已处理 {idx}/{total}）")
                 break
             jf_path = item.get('Path')
             if not jf_path:
@@ -185,7 +185,7 @@ class AdultIncrementalWatcher:
             if not local_path.exists():
                 # Jellyfin 知道但本机看不到（path mapping 没配 / 文件被删）
                 logger.debug(
-                    f"incremental_watcher: 本机找不到文件 {local_path}（jf path={jf_path}）"
+                    f"watcher: 本机找不到文件 {local_path}（jf path={jf_path}）"
                 )
                 stats['not_found'] += 1
                 continue
@@ -205,17 +205,17 @@ class AdultIncrementalWatcher:
         changed = stats['new'] + stats['updated'] + stats['moved']
         if changed > 0:
             logger.info(
-                f"incremental_watcher: 库 {library_id} 增量 {total} 项 → "
+                f"watcher: 库 {library_id} 增量 {total} 项 → "
                 f"new={stats['new']} updated={stats['updated']} moved={stats['moved']} "
                 f"scraped={stats['scraped']} failed={stats['failed']} "
                 f"skipped/excluded/unrecognized={stats['skipped']+stats['excluded']+stats['unrecognized']}"
             )
         else:
             logger.debug(
-                f"incremental_watcher: 库 {library_id} {total} 项无新变更"
+                f"watcher: 库 {library_id} {total} 项无新变更"
             )
         return stats
 
 
 # 模块级单例
-incremental_watcher = AdultIncrementalWatcher()
+watcher = AdultWatcher()

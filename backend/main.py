@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"初始化 AdultScanner 失败: {e}")
 
-    # 启动 Jellyfin 库变更轮询器（每 60s 调 incremental_watcher.poll_libraries）
+    # 启动 Jellyfin 库变更轮询器（每 60s 调 watcher.poll_libraries）
     try:
         from backend.services.jellyfin_poller import client as poller_client
         poller_client.start(asyncio.get_event_loop())

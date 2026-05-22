@@ -1,7 +1,7 @@
 """
 成人内容处理流水线（Pipeline）。
 
-输入：一个视频文件路径（由 scanner / incremental_watcher 喂进来）。
+输入：一个视频文件路径（由 scanner / watcher 喂进来）。
 输出：跳过判定 → 番号识别 → 入库决策 → 元数据刮削 → 待通知 Jellyfin 路径攒入实例缓冲。
 不感知"调用方是谁"——scanner / watcher 共用同一份处理逻辑。
 
