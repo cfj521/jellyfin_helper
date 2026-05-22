@@ -6,7 +6,7 @@
   - 不 rglob 文件系统，不创建 Task，纯后台跑
   - 拿到 item Path 后丢给共用的 AdultPipeline 处理
 
-触发：jellyfin_poller（原 jellyfin_ws）的 polling 每 60s 调一次 poll_libraries()。
+触发：jellyfin_poller 每 60s 调一次 poll_libraries()。
 进度持久化：表 adult_watcher_state(library_id PK, last_check_at)。
 
 冷启动语义：

@@ -91,7 +91,7 @@ def _reload_settings():
         logger.warning(f"scanner.restart_for_new_libraries 失败: {e}")
 
     try:
-        from backend.services.jellyfin_ws import client as poller_client
+        from backend.services.jellyfin_poller import client as poller_client
         poller_client.notify_settings_changed()
     except Exception as e:
         logger.warning(f"通知 jellyfin 变更监听器失败: {e}")
