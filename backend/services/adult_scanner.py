@@ -51,7 +51,7 @@ class AdultScanner:
     def status(self) -> dict:
         from backend.config import settings
         try:
-            from backend.services.jellyfin_ws import client as poller_client
+            from backend.services.jellyfin_poller import client as poller_client
             poller_status = poller_client.status()
         except Exception:
             poller_status = {"connected": False, "error": "poller client 未加载"}

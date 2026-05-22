@@ -288,8 +288,7 @@ class Settings(BaseSettings):
     # 自动识别开关：首次启动时探测哪个 Jellyfin 库是成人库
     adult_auto_detect: bool = _yaml_config.get('adult', {}).get('auto_detect', True)
     # 自动监视：开启后定时轮询 Jellyfin（默认 60s），发现新视频自动入库 + 刮削
-    # （早期版本走 WebSocket LibraryChanged 推送，Jellyfin 10.11 起对 api_key 客户端
-    #  不再推送 → 改 polling，对用户行为无影响）
+    # 调 /Items?MinDateLastSaved 拿增量，开销 ~= 新增 item 数，不全库扫
     adult_auto_scrape: bool = _yaml_config.get('adult', {}).get('auto_scrape', False)
     # delay 参数统一在 common/rate_limiter.py 定义
     # 刮削源配置（List[Dict]）。按顺序回退，第一个命中即返回。
