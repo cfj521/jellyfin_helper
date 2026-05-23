@@ -877,14 +877,15 @@ const sortOptions = [
   { field: 'code',         label: '番号' },
   { field: 'title',        label: '标题' },
   { field: 'release_date', label: '发行' },
+  { field: 'created_at',   label: '加入时间' },
 ]
 
 const sortField = ref('code')
 const sortDir = ref('asc')
 
-// 发行日期降序更顺手
+// 发行日期 / 加入时间降序更顺手（最近的在前）
 const _defaultDir = (field) =>
-  ['release_date'].includes(field) ? 'desc' : 'asc'
+  ['release_date', 'created_at'].includes(field) ? 'desc' : 'asc'
 
 const setSort = (field) => {
   if (sortField.value === field) {
