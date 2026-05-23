@@ -11,7 +11,7 @@ r"""
    - 不抛异常；缺 key 当 None 处理；坏 fmt spec 退化为原值 str
 
 2. sanitize_path_segment(s)
-   - 替换 Windows 非法字符 <>:"/\\|?* + 控制字符 → '_'
+   - 直接删除 Windows 非法字符 <>:"/\\|?* + 控制字符（不替换为占位符）
    - 去首尾空白和 '.' (Windows: 尾点会被静默吃，前点 = 隐藏文件)
    - 折叠连续空格
    - 长度截断（默认 200 chars，给扩展名留余地）
@@ -134,18 +134,18 @@ _WIN_RESERVED = {
 def sanitize_path_segment(name: str, max_len: int = 200) -> str:
     """清理**单个**路径段（文件名 或 单个目录名）。
 
-    - 替换 Windows 非法字符 + 控制字符 → '_'
+    - 直接删除 Windows 非法字符 + 控制字符（之前替换 '_' 太难看：'Movie<2024>' 变 'Movie_2024_'）
     - 去首尾空白 / '.'（Windows 静默吃尾点；前点是 *nix 隐藏文件）
     - 折叠连续空格
-    - Windows 保留名后加 '_' 防冲突（CON / PRN / NUL 等）
+    - Windows 保留名后加 '_' 防冲突（CON / PRN / NUL 等，跟用户感知的非法字符无关，保留）
     - 长度截断：保留尾部扩展名
     """
     if not name:
         return ''
-    # 1. 非空白控制字符 → '_'；\t \n \r 留给空白折叠那步当成空格
-    s = _NON_WS_CTRL_RE.sub('_', name)
-    # 2. 替换 Windows 路径非法字符 → '_'
-    s = _INVALID_FN_CHARS_RE.sub('_', s)
+    # 1. 非空白控制字符直接删；\t \n \r 留给空白折叠那步当成空格
+    s = _NON_WS_CTRL_RE.sub('', name)
+    # 2. 删 Windows 路径非法字符 <>:"/\|?*
+    s = _INVALID_FN_CHARS_RE.sub('', s)
     # 3. 折叠空白（含 tab / 多空格）→ 单空格
     s = re.sub(r'\s+', ' ', s)
     # 4. 去首尾空白 + '.'（重复 strip，处理 ".  .name." 这种）
