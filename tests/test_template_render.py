@@ -96,10 +96,11 @@ class TestRenderTemplate:
 # ============================================================================
 
 class TestSanitizePathSegment:
-    def test_invalid_chars_replaced(self):
-        assert sanitize_path_segment('Pirates: At World\'s End') == "Pirates_ At World's End"
-        assert sanitize_path_segment('Movie<2024>') == 'Movie_2024_'
-        assert sanitize_path_segment('A?B*C|D') == 'A_B_C_D'
+    def test_invalid_chars_dropped(self):
+        # Windows 非法字符 <>:"/\|?* 直接删除（之前替换为 '_' 太难看）
+        assert sanitize_path_segment('Pirates: At World\'s End') == "Pirates At World's End"
+        assert sanitize_path_segment('Movie<2024>') == 'Movie2024'
+        assert sanitize_path_segment('A?B*C|D') == 'ABCD'
 
     def test_strip_trailing_dots(self):
         assert sanitize_path_segment('Movie.') == 'Movie'
@@ -111,7 +112,8 @@ class TestSanitizePathSegment:
         assert sanitize_path_segment('A\t\tB') == 'A B'
 
     def test_control_chars(self):
-        assert sanitize_path_segment('A\x00B\x1fC') == 'A_B_C'
+        # 非空白控制字符直接删
+        assert sanitize_path_segment('A\x00B\x1fC') == 'ABC'
 
     def test_chinese_preserved(self):
         assert sanitize_path_segment('地球脉动 第二季') == '地球脉动 第二季'
@@ -145,7 +147,7 @@ class TestSanitizePath:
 
     def test_invalid_in_segment(self):
         assert sanitize_path('/lib/Pirates: At World\'s End/movie.mkv') == \
-            "/lib/Pirates_ At World's End/movie.mkv"
+            "/lib/Pirates At World's End/movie.mkv"
 
     def test_windows_drive(self):
         out = sanitize_path('Z:/videos/movie/X (2024)')
