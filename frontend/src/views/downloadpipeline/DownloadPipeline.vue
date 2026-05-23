@@ -156,33 +156,33 @@
         ref="tableRef"
       >
         <el-table-column type="selection" width="36" reserve-selection />
-        <el-table-column prop="name" label="名称" min-width="220" show-overflow-tooltip />
-        <el-table-column label="进度" width="120">
+        <el-table-column prop="name" label="名称" min-width="220" show-overflow-tooltip sortable />
+        <el-table-column prop="progress" label="进度" width="120" sortable>
           <template #default="{ row }">
             <el-progress :percentage="Math.round((row.progress || 0) * 100)" :status="row.progress >= 1 ? 'success' : ''" />
           </template>
         </el-table-column>
-        <el-table-column label="大小" width="70">
+        <el-table-column prop="size" label="大小" width="70" sortable>
           <template #default="{ row }">{{ formatSize(row.size) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="62">
+        <el-table-column prop="state" label="状态" width="62" sortable>
           <template #default="{ row }">
             <el-tag :type="stateType(row.state)" size="small">{{ stateLabel(row.state) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="下载速度" width="92">
+        <el-table-column prop="dlspeed" label="下载速度" width="92" sortable>
           <template #default="{ row }">{{ formatSize(row.dlspeed) }}/s</template>
         </el-table-column>
-        <el-table-column label="上传速度" width="92">
+        <el-table-column prop="upspeed" label="上传速度" width="92" sortable>
           <template #default="{ row }">{{ formatSize(row.upspeed) }}/s</template>
         </el-table-column>
-        <el-table-column label="ETA" width="54">
+        <el-table-column prop="eta" label="ETA" width="54" sortable>
           <template #default="{ row }">{{ formatEta(row.eta) }}</template>
         </el-table-column>
-        <el-table-column label="分享率" width="58">
+        <el-table-column prop="ratio" label="分享率" width="58" sortable>
           <template #default="{ row }">{{ row.ratio?.toFixed(2) || '-' }}</template>
         </el-table-column>
-        <el-table-column label="目标库" width="78">
+        <el-table-column label="目标库" width="78" sortable :sort-by="row => row.dispatch?.target_library_name || ''">
           <template #default="{ row }">
             <span v-if="row.dispatch?.target_library_name" class="lib-tag" :title="`media_type: ${row.dispatch.media_type || '未识别'}`">
               {{ row.dispatch.target_library_name }}
@@ -190,7 +190,7 @@
             <span v-else class="muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="保存路径" width="260" show-overflow-tooltip>
+        <el-table-column prop="content_path" label="保存路径" width="260" show-overflow-tooltip sortable>
           <template #default="{ row }">
             <span v-if="row.content_path" class="path-text" :title="row.content_path">
               {{ row.content_path }}
@@ -200,7 +200,7 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="目标路径" width="220" show-overflow-tooltip>
+        <el-table-column label="目标路径" width="220" show-overflow-tooltip sortable :sort-by="row => row.dispatch?.target_path || ''">
           <template #default="{ row }">
             <span v-if="row.dispatch?.target_path" class="path-text" :title="row.dispatch.target_path">
               {{ row.dispatch.target_path }}
@@ -208,7 +208,7 @@
             <span v-else class="muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="阶段" width="92">
+        <el-table-column label="阶段" width="92" sortable :sort-by="row => row.dispatch?.phase_status === 'needs_review' ? '_needs_review' : (row.dispatch?.phase || '')">
           <template #default="{ row }">
             <!-- 待审核状态特殊渲染：橙色 tag，跟普通阶段视觉区分 -->
             <el-tag
@@ -225,7 +225,7 @@
             <span v-else class="muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态详情" width="200" show-overflow-tooltip>
+        <el-table-column label="状态详情" width="200" show-overflow-tooltip sortable :sort-by="row => row.dispatch?.status_message || ''">
           <template #default="{ row }">
             <span
               v-if="row.dispatch?.status_message"
@@ -235,7 +235,7 @@
             <span v-else class="muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="添加时间" width="100">
+        <el-table-column prop="added_on" label="添加时间" width="100" sortable>
           <template #default="{ row }">{{ formatAddedOn(row.added_on) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="132" fixed="right">
