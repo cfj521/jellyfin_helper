@@ -1156,6 +1156,7 @@ const sortOptions = [
   { field: 'type',   label: '类型' },
   { field: 'year',   label: '年份' },
   { field: 'rating', label: '评分' },
+  { field: 'added',  label: '加入时间' },
 ]
 
 const sortField = ref('name')
@@ -1167,9 +1168,9 @@ const filterMissingTmdb = ref(false)
 // 缺字幕 filter：依据最近一次 subtitle_scan 任务结果，逻辑与"字幕覆盖"统计同源
 const filterMissingSubtitle = ref(false)
 
-// 切到不同字段时给个合理默认方向（找高分时降序更顺手）
+// 切到不同字段时给个合理默认方向（找高分 / 最近加入时降序更顺手）
 const _defaultDir = (field) =>
-  ['rating', 'year'].includes(field) ? 'desc' : 'asc'
+  ['rating', 'year', 'added'].includes(field) ? 'desc' : 'asc'
 
 const setSort = (field) => {
   if (sortField.value === field) {
@@ -2168,6 +2169,7 @@ const _JELLYFIN_SORT_MAP = {
   year:   'ProductionYear',
   rating: 'CommunityRating',
   type:   'Type',
+  added:  'DateCreated',     // Jellyfin item 加入媒体库的时间
 }
 
 const _buildItemsParams = (start, limit) => {

@@ -159,7 +159,7 @@ def list_items(
     data_source: str = 'adult',
     limit: int = 50,
     offset: int = 0,
-    sort_by: str = 'code',         # code / title / release_date
+    sort_by: str = 'code',         # code / title / release_date / created_at
     sort_order: str = 'asc',       # asc / desc
     has_health_issue: bool = False, # 只看健康有问题（未识别/未刮削/封面或NFO缺失）
     db: Session = Depends(get_db),
@@ -260,12 +260,13 @@ def list_items(
             AdultItem.nfo_path.is_(None),       # NFO 没落地
         ))
 
-    # 排序下推：之前 hard-code 按 code 排，前端切换无效；现在支持 code/title/release_date
+    # 排序下推：之前 hard-code 按 code 排，前端切换无效；现在支持 code/title/release_date/created_at
     # 派生字段（health）不在表里——已改成上面的 has_health_issue filter，不再作为排序维度
     _SORT_COL_MAP = {
         'code': AdultItem.code,
         'title': AdultItem.title,
         'release_date': AdultItem.release_date,
+        'created_at': AdultItem.created_at,    # 入库时间（增量监听 / 手动扫描的落库时刻）
     }
     _sort_col = _SORT_COL_MAP.get(sort_by, AdultItem.code)
     if sort_order == 'desc':
