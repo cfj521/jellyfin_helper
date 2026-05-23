@@ -123,7 +123,9 @@ class AssrtClient:
     request_delay 留 buffer 缓解。
     """
     BASE_URL = "https://api.assrt.net"
-    DEFAULT_TIMEOUT = 15
+    # 15s 偏紧 → ASSRT API 偶发慢响应时 search/detail 频繁超时；30s 覆盖大部分抖动
+    # （下载 .zip 本身另一条路径用 60s，见下方 _download_subtitle）
+    DEFAULT_TIMEOUT = 30
 
     # 全进程共享的限频锁 + 上次请求时间戳
     # 任何 AssrtClient 实例的 _request 都要排队过这道闸
