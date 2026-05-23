@@ -408,8 +408,22 @@
           </template>
 
           <template v-else>
-            <el-form-item label="目标库 ID">
-              <el-input v-model="reviewForm.target_library_id" placeholder="Jellyfin 库 ID（在 设置 → 入库流水线 里找）" clearable />
+            <el-form-item label="目标库">
+              <el-select
+                v-model="reviewForm.target_library_id"
+                placeholder="选择 Jellyfin 媒体库"
+                filterable
+                clearable
+                style="width: 100%"
+                :loading="availableLibrariesLoading"
+              >
+                <el-option
+                  v-for="lib in availableLibraries"
+                  :key="lib.id"
+                  :label="`${lib.name} (${lib.collection_type || lib.type || '?'})`"
+                  :value="lib.id"
+                />
+              </el-select>
             </el-form-item>
             <el-form-item label="目标路径">
               <el-input v-model="reviewForm.target_path" placeholder="完整路径，例如 /library/videos/movie/Movie (2024)" clearable />
@@ -878,7 +892,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Refresh, Link, ArrowDown, Brush, Setting, Moon, Plus, Warning, Close, Download, MagicStick, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { discoverApi, configApi, dispatchApi } from '@/api'
+import { discoverApi, configApi, dispatchApi, jellyfinApi } from '@/api'
 import { useNetwork } from '@/composables/useNetwork'
 import AddTorrentDialog from '@/components/AddTorrentDialog.vue'
 import dayjs from 'dayjs'
@@ -1274,6 +1288,26 @@ const reviewForm = reactive({
   // auto 模式下的预览值（跟随重新识别刷新）
   _auto_library_name: '',
   _auto_target_path: '',
+})
+
+// 手动指定目标库时的候选下拉列表。reviewVisible 首次变 true 时拉一次，会话内缓存。
+const availableLibraries = ref([])
+const availableLibrariesLoading = ref(false)
+const loadAvailableLibraries = async () => {
+  if (availableLibraries.value.length > 0 || availableLibrariesLoading.value) return
+  availableLibrariesLoading.value = true
+  try {
+    const r = await jellyfinApi.libraries(false)
+    availableLibraries.value = r.data?.libraries || []
+  } catch (e) {
+    console.warn('加载 Jellyfin 库列表失败', e)
+    ElMessage.warning('加载 Jellyfin 库列表失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    availableLibrariesLoading.value = false
+  }
+}
+watch(reviewVisible, (v) => {
+  if (v) loadAvailableLibraries()
 })
 
 // copy-phase 冲突弹窗状态（跟 reviewVisible 互斥；同样从"人工审核"按钮触发）
