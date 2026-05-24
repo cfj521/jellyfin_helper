@@ -55,18 +55,26 @@ class AdultScanner:
             poller_status = poller_client.status()
         except Exception:
             poller_status = {"connected": False, "error": "poller client 未加载"}
-        # 增量监听器状态（如果加载失败不影响主响应）
+        # polling 兜底 watcher 状态（如果加载失败不影响主响应）
         try:
             from backend.services.adult_watcher import watcher
             inc_status = watcher.status()
         except Exception:
             inc_status = {"error": "watcher 未加载"}
+        # inotify 主路径状态
+        try:
+            from backend.services.adult_inotify import inotify_watcher
+            inotify_status = inotify_watcher.status()
+        except Exception:
+            inotify_status = {"error": "inotify 未加载"}
         return {
             "enabled": settings.adult_enabled,
             "auto_scrape": settings.adult_auto_scrape,
-            # poller 状态（驱动 watcher 的 jellyfin 轮询）
+            # poller 状态（驱动 watcher 的周期 polling）
             "change_monitor": poller_status,
-            # 增量监听器（per library last_check_at + 最近 summary）
+            # inotify 主路径状态（mode / active_libs）
+            "inotify": inotify_status,
+            # polling 兜底 watcher（最近一次 diff summary）
             "watcher": inc_status,
             # scanner 自己的状态（全库扫描）
             "last_run_at": self._last_run_at,

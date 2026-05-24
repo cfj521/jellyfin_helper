@@ -39,6 +39,12 @@ py7zr>=0.20.0
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0
 
+# ── 文件系统监听 ──
+# watchdog: 跨平台抽象 inotify/FSEvents/ReadDirectoryChangesW，
+# 用于成人库目录文件实时监听（新文件落盘 → 立即识别 + 刮削）
+# 失败时自动回落到 polling 模式，对功能无影响
+watchdog>=4.0.0
+
 # ── 配置与工具 ──
 PyYAML>=6.0
 python-dateutil>=2.8.0
