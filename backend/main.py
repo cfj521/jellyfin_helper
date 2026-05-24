@@ -158,7 +158,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"初始化 AdultScanner 失败: {e}")
 
-    # 启动 Jellyfin 库变更轮询器（每 60s 调 watcher.poll_libraries）
+    # 启动成人库 inotify 监听器（主路径：新文件落盘 → 几秒内自动识别）
+    # 失败/不可用时静默回落 polling，对功能无影响
+    try:
+        from backend.services.adult_inotify import inotify_watcher
+        inotify_watcher.start()
+    except Exception as e:
+        logger.warning(f"启动 AdultInotify 失败（polling 仍会兜底）: {e}")
+
+    # 启动成人库轮询器（兜底路径：rglob+DB diff 补漏 inotify 没收到的事件）
     try:
         from backend.services.jellyfin_poller import client as poller_client
         poller_client.start(asyncio.get_event_loop())
@@ -228,6 +236,13 @@ async def lifespan(app: FastAPI):
     try:
         from backend.services.jellyfin_poller import client as poller_client
         poller_client.stop()
+    except Exception:
+        pass
+
+    # 3b. 停成人库 inotify 监听器（释放 watch descriptors）
+    try:
+        from backend.services.adult_inotify import inotify_watcher
+        inotify_watcher.stop()
     except Exception:
         pass
 
