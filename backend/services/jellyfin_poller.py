@@ -1,7 +1,7 @@
 """
 Jellyfin 库变更轮询器（JellyfinPoller）。
 
-工作原理：每 settings.adult_poll_interval_sec 触发 watcher.poll_libraries(...)。
+工作原理：每 settings.adult_poll_interval_min 分钟触发 watcher.poll_libraries(...)。
        自身只负责"按周期把活派出去"，不感知 watcher / scanner 的内部状态。
 
 启停由 settings 控制（adult_enabled / adult_auto_scrape / jellyfin_api_key / adult_library_ids
@@ -51,7 +51,7 @@ class JellyfinPoller:
             "last_error": self._last_error,
             "poll_count": self._poll_count,
             "trigger_count": self._trigger_count,
-            "poll_interval_sec": settings.adult_poll_interval_sec,
+            "poll_interval_min": settings.adult_poll_interval_min,
         }
 
     def start(self, loop: asyncio.AbstractEventLoop):
@@ -64,7 +64,7 @@ class JellyfinPoller:
         self._wakeup_event = asyncio.Event()
         self._task = loop.create_task(self._main_loop(), name="jellyfin-poller")
         logger.info(
-            f"JellyfinPoller: 后台 task 已启动（间隔 {settings.adult_poll_interval_sec}s）"
+            f"JellyfinPoller: 后台 task 已启动（间隔 {settings.adult_poll_interval_min} 分钟）"
         )
 
     def stop(self):
@@ -102,7 +102,7 @@ class JellyfinPoller:
         )
 
     async def _main_loop(self):
-        """主循环：每 settings.adult_poll_interval_sec 触发一次 watcher.poll_libraries"""
+        """主循环：每 settings.adult_poll_interval_min 分钟触发一次 watcher.poll_libraries"""
         from backend.config import settings
         logger.info("JellyfinPoller: 主循环启动")
         try:
@@ -142,7 +142,9 @@ class JellyfinPoller:
 
                 # 等下一个 poll tick（或 settings 唤醒 / stop）
                 # 每次循环都重新读 settings，支持热重载改间隔立即生效
-                await self._wait_for_wakeup_or_stop(timeout=settings.adult_poll_interval_sec)
+                await self._wait_for_wakeup_or_stop(
+                    timeout=settings.adult_poll_interval_min * 60
+                )
         finally:
             self._active = False
             logger.info("JellyfinPoller: 主循环退出")

@@ -290,10 +290,11 @@ class Settings(BaseSettings):
     # 自动监视：开启后定时轮询 Jellyfin（默认 300s），发现新视频自动入库 + 刮削
     # 调 /Items?MinDateLastSaved 拿增量，开销 ~= 新增 item 数，不全库扫
     adult_auto_scrape: bool = _yaml_config.get('adult', {}).get('auto_scrape', False)
-    # 增量监听轮询间隔（秒）。同时作为向 Jellyfin 拉增量时的回溯余量（since = last_check_at - 该值），
-    # 短 → 新文件发现快但请求密；长 → 反之。下限 30s 避免误配置打爆 jellyfin。
-    adult_poll_interval_sec: int = max(
-        30, int(_yaml_config.get('adult', {}).get('poll_interval_sec', 300))
+    # 成人库扫描轮询间隔（分钟）。当前架构 inotify 是主路径（新文件立即识别），
+    # polling 仅作兜底（rglob+DB diff 补漏 inotify 漏掉的：服务重启窗口/外部写入/quota 超）。
+    # 默认 120 分钟（2h）；inotify 不可用时建议改短到 30 分钟。下限 30 分钟避免误配置。
+    adult_poll_interval_min: int = max(
+        30, int(_yaml_config.get('adult', {}).get('poll_interval_min', 120))
     )
     # delay 参数统一在 common/rate_limiter.py 定义
     # 刮削源配置（List[Dict]）。按顺序回退，第一个命中即返回。
