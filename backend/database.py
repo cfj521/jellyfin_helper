@@ -251,8 +251,9 @@ class AdultItem(Base):
     __tablename__ = "adult_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    # 番号；未识别的文件 code 为 NULL（PostgreSQL 的 UNIQUE 允许多个 NULL）
-    code = Column(String(50), unique=True, nullable=True)
+    # 番号；同 code 可对应多分段（FC2-PPV-XXX_2.mp4, _5.mp4 共存）→ 仅索引不唯一
+    # file_path 才是物理唯一标识；未识别的文件 code 为 NULL
+    code = Column(String(50), nullable=True, index=True)
     title = Column(String(500))
     release_date = Column(String(20))
     studio = Column(String(200))
@@ -544,6 +545,17 @@ _ONESHOT_MIGRATIONS = [
 
             # ③ 清空 dispatch_map 表（旧 phase 值跟新常量不兼容；qB 上的种子下次 adopt 会重认）
             "TRUNCATE TABLE download_dispatch_map",
+        ],
+    ),
+    (
+        "2026-05-25__adult_code_drop_unique",
+        # 同 code 多分段是合法场景（FC2-PPV-XXX 系列常见）→ 去掉 code 唯一约束
+        # 约束名 adult_items_code_key 是 SQLAlchemy/PG 默认生成的；同时建立非唯一索引
+        # 替代（IF NOT EXISTS 幂等）
+        [
+            "ALTER TABLE adult_items DROP CONSTRAINT IF EXISTS adult_items_code_key",
+            "CREATE INDEX IF NOT EXISTS ix_adult_items_code "
+            "  ON adult_items (code) WHERE code IS NOT NULL",
         ],
     ),
     (

@@ -58,11 +58,11 @@ def _detect_local_attachments(video_file: Path):
 # 结果状态枚举（调用方按 status 分类统计 / 上报）
 STATUS_NEW = 'new'                  # 新识别 + 入库
 STATUS_UPDATED = 'updated'          # 已存在，mtime 变了重新处理
-STATUS_MOVED = 'moved'              # 同 code 已存在但 file_path 变了
 STATUS_SKIPPED = 'skipped'          # mtime 未变，跳过
 STATUS_UNRECOGNIZED = 'unrecognized'  # 无法识别番号
 STATUS_EXCLUDED = 'excluded'        # 用户主动 excluded，跳过
 STATUS_FAILED = 'failed'            # 处理过程异常
+# STATUS_MOVED 已弃用（2026-05-25）：同 code 多分段不再当搬家处理
 
 
 class AdultPipeline:
@@ -243,12 +243,12 @@ class AdultPipeline:
             )
 
         # ⑦ 攒待通知的 jellyfin path
-        if status in (STATUS_NEW, STATUS_UPDATED, STATUS_MOVED):
+        if status in (STATUS_NEW, STATUS_UPDATED):
             self._processed_paths.append(jf_path)
 
         # ⑧ 刮削（如果开启）
         scraped = False
-        if self._do_scrape and status in (STATUS_NEW, STATUS_UPDATED, STATUS_MOVED):
+        if self._do_scrape and status in (STATUS_NEW, STATUS_UPDATED):
             scraped = self._scrape_one(code, item_id, file_path)
 
         result = {
@@ -266,11 +266,16 @@ class AdultPipeline:
         self, db, jf_path: str, mtime: float, code: str,
         existing, local_poster, local_nfo,
     ):
-        """识别成功后的入库三分支。返回 (item_id, status)。
+        """识别成功后的入库决策。返回 (item_id, status)。
 
-        - existing 命中 file_path：之前已知文件，mtime 变了 → updated（或从 unrecognized → new）
-        - existing 不在但同 code 已存在另一行：视为文件移动 → moved
-        - 全新：直接 new
+        语义变更（2026-05-25）：取消"同 code 已存在 → MOVED"分支。
+        FC2-PPV-XXX 系列经常一个番号多个分段（_2.mp4 / _5.mp4 共存），
+        老逻辑把"file_path 不命中 + code 已存在"误判成"文件搬家"，导致每次
+        polling 反复改 file_path + 重刮削。改为：每个 file_path 一行，
+        同 code 多行合法（DB 已去掉 code 唯一约束）。
+
+        - file_path 命中 → 已知文件，更新 mtime/poster/nfo（含 unrecognized 升级 NEW）
+        - file_path 不命中 → 直接新建一行（不管 code 是否已存在）
         """
         from backend.database import AdultItem
 
@@ -284,23 +289,8 @@ class AdultPipeline:
                 existing.nfo_path = local_nfo
 
             if was_unrecognized:
-                # 历史无 code 占位行升级，但要看同 code 是否已被其他行占用
-                clash = (
-                    db.query(AdultItem)
-                    .filter(AdultItem.code == code, AdultItem.id != existing.id)
-                    .first()
-                )
-                if clash:
-                    # 当前文件并入 clash，原占位行删掉
-                    clash.file_path = jf_path
-                    clash.file_mtime = mtime
-                    if local_poster:
-                        clash.poster_path = local_poster
-                    if local_nfo:
-                        clash.nfo_path = local_nfo
-                    db.delete(existing)
-                    db.commit()
-                    return clash.id, STATUS_MOVED
+                # 历史无 code 占位行升级（excluded=True 已被入口的 ① excluded 兜住）
+                # 现在 code 不唯一，直接补 code 即可，不再担心 clash
                 existing.code = code
                 db.commit()
                 return existing.id, STATUS_NEW  # 算新识别成功
@@ -308,19 +298,7 @@ class AdultPipeline:
             db.commit()
             return existing.id, STATUS_UPDATED
 
-        # 分支 B：file_path 不在，但同 code 已存在
-        code_existing = db.query(AdultItem).filter(AdultItem.code == code).first()
-        if code_existing:
-            code_existing.file_path = jf_path
-            code_existing.file_mtime = mtime
-            if local_poster:
-                code_existing.poster_path = local_poster
-            if local_nfo:
-                code_existing.nfo_path = local_nfo
-            db.commit()
-            return code_existing.id, STATUS_MOVED
-
-        # 分支 C：全新
+        # 分支 B：file_path 不命中 → 新建一行（同 code 多分段合法）
         new_item = AdultItem(
             code=code, file_path=jf_path, file_mtime=mtime,
             poster_path=local_poster, nfo_path=local_nfo,
