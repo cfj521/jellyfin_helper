@@ -325,12 +325,16 @@ def _classify_clean_reason(row: DownloadDispatchMap) -> str:
 
 def regular_cleanup() -> Optional[Dict]:
     """
-    定时跑：清理已达 target_ratio 或 min_seed_days 的种子。
+    定时跑：清理满足以下任一条件的种子（均需 qB 状态为 stop 类）：
+      A. 已完成 + 分享率 >= target_ratio（默认 1.0）
+      B. 做种时长 >= min_seed_days * 1 天（默认 3 天）
+
+    "stop 类" 指 qB 端进入停止状态（pausedUP / stoppedUP），表示 qB 认为本种子
+    完成做种或被显式停止，跟"正在下载/做种"区分。
     """
     seeding_cfg = settings.qbittorrent_seeding
     target_ratio = seeding_cfg.target_ratio
     min_days = seeding_cfg.min_seed_days
-    min_hours = seeding_cfg.min_seed_hours_per_torrent
 
     try:
         client = _get_qb()
@@ -358,24 +362,26 @@ def regular_cleanup() -> Optional[Dict]:
             ratio = float(t.get('ratio') or 0)
             size = int(t.get('size') or 0)
             state = (t.get('state') or '').lower()
+            progress = float(t.get('progress') or 0)
 
-            # qB 已自停（pausedUP / stoppedUP）+ ratio 达标 → 任务自身已完成，
-            # 短路 min_hours 兜底直接放行；否则按原 24h floor + (ratio OR days) 走
-            ratio_ok = ratio >= target_ratio
+            # 第一道闸：qB 状态必须是 stop 类（完成后的暂停/停止）
+            # pausedUP / stoppedUP 表示 qB 觉得本种子做完了；pausedDL / stoppedDL
+            # 是没下载完的暂停，不能清掉
+            state_stopped = state in ('pausedup', 'stoppedup')
+            if not state_stopped:
+                continue
+
+            # 第二道闸：A 或 B 任一满足
+            #   A. 已完成 + 分享率 >= target_ratio
+            #   B. 做种时长 >= min_seed_days 天（"完成时间 > N 天"语义等价）
+            completed = progress >= 1.0
+            ratio_ok = completed and ratio >= target_ratio
             days_ok = seeding_time >= min_days * 86400
-            qb_self_stopped = state in ('pausedup', 'stoppedup')
-            short_circuit = qb_self_stopped and ratio_ok
 
-            if not short_circuit:
-                if seeding_time < min_hours * 3600:
-                    continue
-                if not (ratio_ok or days_ok):
-                    continue
+            if not (ratio_ok or days_ok):
+                continue
 
-            reason = (
-                'qb-self-stopped+ratio' if short_circuit else
-                ('ratio' if ratio_ok else 'days')
-            )
+            reason = 'stop+ratio' if ratio_ok else 'stop+days'
             logger.info(
                 f"软清: 选中 {row.torrent_hash[:16]}.. ({t.get('name')!r}) "
                 f"size={size/1e9:.2f}GB ratio={ratio:.2f} "

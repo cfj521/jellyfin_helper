@@ -24,10 +24,17 @@ class QuotaConfig(BaseModel):
 
 
 class SeedingConfig(BaseModel):
-    """做种 / 软清策略。"""
+    """做种 / 软清策略。
+
+    清理规则（regular_cleanup）：qB state 为 stop 类（pausedUP/stoppedUP）+
+    任一满足 → 清掉：
+      A. 已完成 + ratio >= target_ratio
+      B. 做种时长 >= min_seed_days 天
+    """
     target_ratio: float = 1.0              # 默认分享率（私有种用户可调高）
-    min_seed_days: int = 7
-    min_seed_hours_per_torrent: int = 24
+    min_seed_days: int = 3                 # 完成时间 > 3 天即可清（配合 state=stop）
+    # min_seed_hours_per_torrent 已弃用（2026-05-25）：state=stop 闸已足够避免误清
+    min_seed_hours_per_torrent: int = 24   # 保留 yaml 兼容字段，代码不再读
     cleanup_interval_seconds: int = 86400  # 软清周期 1 天
 
 
