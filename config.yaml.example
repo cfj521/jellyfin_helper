@@ -178,9 +178,13 @@ qbittorrent:
     check_interval_seconds: 300
 
   # 做种策略：常规软清的判定条件
+  # 规则：state=stop（pausedUP/stoppedUP）+ 任一满足 → 清掉
+  #   A. 已完成 + ratio >= target_ratio
+  #   B. 做种时长 >= min_seed_days 天
   seeding:
     target_ratio: 1.0           # 默认分享率（私有种用户可调高）
-    min_seed_days: 7
+    min_seed_days: 3            # 完成时间 > 3 天即可清（配合 state=stop 闸）
+    # min_seed_hours_per_torrent 已弃用，代码不再读；保留兼容老 yaml
     min_seed_hours_per_torrent: 24
     cleanup_interval_seconds: 3600
 
