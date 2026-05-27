@@ -145,18 +145,41 @@ class AdultWatcher:
                     if fp:
                         known_paths.add(fp)
 
-        # ④ diff = fs - DB = 新文件
-        new_jf_paths = set(fs_files.keys()) - known_paths
+        # ④ 双向 diff
+        fs_set = set(fs_files.keys())
+        new_jf_paths = fs_set - known_paths       # fs 有 DB 没 = 新文件，走 pipeline
+        orphan_paths = known_paths - fs_set       # DB 有 fs 没 = 孤儿，从 DB 清掉
+
+        # ④a 反向 diff：清理孤儿（保护：fs 非空才允许；fs 空一律不动，疑似挂载丢失）
+        orphan_deleted = 0
+        if orphan_paths:
+            if fs_set:
+                with SessionLocal() as db:
+                    orphan_deleted = (
+                        db.query(AdultItem)
+                        .filter(AdultItem.file_path.in_(orphan_paths))
+                        .delete(synchronize_session=False)
+                    )
+                    db.commit()
+                logger.info(
+                    f"[polling] 库 {library_id} 孤儿清理 {orphan_deleted} 行 "
+                    f"(fs={len(fs_files)} 非空，确认是真删除而非挂载丢失)"
+                )
+            else:
+                logger.warning(
+                    f"[polling] 库 {library_id} fs 为空但 DB 有 {len(known_paths)} 行，"
+                    f"跳过孤儿清理（疑似挂载丢失）"
+                )
 
         if not new_jf_paths:
             # 完全无新增 —— 静默 debug，不打 INFO 噪音
             logger.debug(
                 f"[polling] 库 {library_id} fs={len(fs_files)} "
-                f"DB={len(known_paths)} diff=0"
+                f"DB={len(known_paths)} diff=0 orphan_deleted={orphan_deleted}"
             )
             return {'scanned': 0, 'new': 0, 'updated': 0,
                     'skipped': 0, 'unrecognized': 0, 'excluded': 0,
-                    'scraped': 0, 'failed': 0}
+                    'scraped': 0, 'failed': 0, 'orphan_deleted': orphan_deleted}
 
         # ⑤ 准备 stats + on_progress + pipeline
         stats = {'scanned': 0, 'new': 0, 'updated': 0,
@@ -201,11 +224,13 @@ class AdultWatcher:
         backup_note = '（兜底补漏 inotify 漏的）' if inotify_active else ''
         logger.info(
             f"[polling] 库 {library_id}{backup_note} fs={len(fs_files)} "
-            f"DB={len(known_paths)} diff={total} → new={stats['new']} "
-            f"updated={stats['updated']} unrecognized={stats['unrecognized']} "
+            f"DB={len(known_paths)} diff={total} orphan_del={orphan_deleted} "
+            f"→ new={stats['new']} updated={stats['updated']} "
+            f"skipped={stats['skipped']} unrecognized={stats['unrecognized']} "
             f"excluded={stats['excluded']} scraped={stats['scraped']} "
             f"failed={stats['failed']}"
         )
+        stats['orphan_deleted'] = orphan_deleted
         return stats
 
 
