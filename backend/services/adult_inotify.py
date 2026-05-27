@@ -160,9 +160,11 @@ class AdultInotifyWatcher:
                     outer._enqueue(lib_id, event.src_path)
 
             def on_moved(self, event):
-                # mv 进来的：dest_path 是新位置
-                if not event.is_directory:
-                    outer._enqueue(lib_id, getattr(event, 'dest_path', event.src_path))
+                # mv 进来的：dest_path 是新位置；同时旧位置 src_path 已"消失"，按删除处理
+                if event.is_directory:
+                    return
+                outer._handle_delete(lib_id, event.src_path)
+                outer._enqueue(lib_id, getattr(event, 'dest_path', event.src_path))
 
             def on_modified(self, event):
                 # Linux inotify 没有 IN_CLOSE_WRITE 抽象，cp 过程会反复触发 modified
@@ -170,7 +172,46 @@ class AdultInotifyWatcher:
                 if not event.is_directory:
                     outer._enqueue(lib_id, event.src_path)
 
+            def on_deleted(self, event):
+                # 用户删除文件 → 立刻清 DB 行（不删元数据文件 NFO/poster）
+                # 这样同 path 再次出现时（删后重加）pipeline 走 NEW 路径触发重刮
+                if not event.is_directory:
+                    outer._handle_delete(lib_id, event.src_path)
+
         return _Handler()
+
+    def _handle_delete(self, lib_id: str, fs_path: str):
+        """文件删除事件：从 DB 清掉对应 file_path 行；NFO/poster 文件保留不动。
+
+        删除是即时信号（不走 debounce），每个文件单独处理。
+        """
+        # 视频扩展名过滤（与 _enqueue 对齐）
+        if Path(fs_path).suffix.lower() not in VIDEO_EXTS:
+            return
+        from backend.database import SessionLocal, AdultItem
+        from backend.path_translator import reverse_translate_path_with_settings
+
+        jf_path = reverse_translate_path_with_settings(fs_path) or fs_path
+        try:
+            with SessionLocal() as db:
+                row = (
+                    db.query(AdultItem)
+                    .filter(AdultItem.file_path == jf_path)
+                    .first()
+                )
+                if row:
+                    logger.info(
+                        f"[inotify] 库 {lib_id} 文件删除 → 清 DB 行 "
+                        f"id={row.id} code={row.code} path={jf_path}"
+                    )
+                    db.delete(row)
+                    db.commit()
+                else:
+                    logger.debug(
+                        f"[inotify] 库 {lib_id} 删除事件但 DB 无对应行: {jf_path}"
+                    )
+        except Exception:
+            logger.exception(f"[inotify] 删除事件处理异常: {jf_path}")
 
     def _enqueue(self, lib_id: str, path: str):
         # 视频扩展名过滤（其它文件不进 pipeline）
@@ -231,8 +272,9 @@ class AdultInotifyWatcher:
                     f"[inotify] 库 {lib_id} 触发 {len(paths)} 事件 → "
                     f"实际处理 {len(existing)} 文件，"
                     f"new={stats['new']} updated={stats['updated']} "
-                    f"unrecognized={stats['unrecognized']} excluded={stats['excluded']} "
-                    f"scraped={stats['scraped']} failed={stats['failed']}"
+                    f"skipped={stats['skipped']} unrecognized={stats['unrecognized']} "
+                    f"excluded={stats['excluded']} scraped={stats['scraped']} "
+                    f"failed={stats['failed']}"
                 )
             except Exception:
                 logger.exception(f"[inotify] 库 {lib_id} flush 异常")
