@@ -29,10 +29,12 @@ class SeedingConfig(BaseModel):
     清理规则（regular_cleanup）：qB state 为 stop 类（pausedUP/stoppedUP）+
     任一满足 → 清掉：
       A. 已完成 + ratio >= target_ratio
-      B. 做种时长 >= min_seed_days 天
+      B. 完成距今 >= min_seed_days 天（物理时间，不看做种状态）
     """
     target_ratio: float = 1.0              # 默认分享率（私有种用户可调高）
-    min_seed_days: int = 3                 # 完成时间 > 3 天即可清（配合 state=stop）
+    # 完成距今 N 天即可清（基于 qB completion_on 字段算"完成 + 物理时间"
+    # 而非 seeding_time —— 完成后立即暂停的种子 seeding_time 不累加，物理时间一直在走）
+    min_seed_days: int = 3
     # min_seed_hours_per_torrent 已弃用（2026-05-25）：state=stop 闸已足够避免误清
     min_seed_hours_per_torrent: int = 24   # 保留 yaml 兼容字段，代码不再读
     cleanup_interval_seconds: int = 86400  # 软清周期 1 天

@@ -327,14 +327,21 @@ def regular_cleanup() -> Optional[Dict]:
     """
     定时跑：清理满足以下任一条件的种子（均需 qB 状态为 stop 类）：
       A. 已完成 + 分享率 >= target_ratio（默认 1.0）
-      B. 做种时长 >= min_seed_days * 1 天（默认 3 天）
+      B. 完成至今 >= min_seed_days 天（默认 3 天）—— 物理时间，不看做种状态
+
+    B 用 (now - completion_on) 而不是 seeding_time：完成后被立即暂停的种子
+    seeding_time 不再累加，但物理时间一直在走，按"完成 N 天"清更符合直觉，
+    也避免跟 A（高 ratio 通常也已经做种较久）语义重叠。
 
     "stop 类" 指 qB 端进入停止状态（pausedUP / stoppedUP），表示 qB 认为本种子
     完成做种或被显式停止，跟"正在下载/做种"区分。
     """
+    import time as _time
+
     seeding_cfg = settings.qbittorrent_seeding
     target_ratio = seeding_cfg.target_ratio
     min_days = seeding_cfg.min_seed_days
+    now_ts = _time.time()
 
     try:
         client = _get_qb()
@@ -358,11 +365,13 @@ def regular_cleanup() -> Optional[Dict]:
             t = qb_by_hash.get(row.torrent_hash)
             if not t:
                 continue
-            seeding_time = int(t.get('seeding_time') or 0)
             ratio = float(t.get('ratio') or 0)
             size = int(t.get('size') or 0)
             state = (t.get('state') or '').lower()
             progress = float(t.get('progress') or 0)
+            completion_on = int(t.get('completion_on') or 0)
+            # 完成距今多少秒（completion_on=0 表示还没完成 或 qB 没报告）
+            age_after_complete = (now_ts - completion_on) if completion_on > 0 else 0
 
             # 第一道闸：qB 状态必须是 stop 类（完成后的暂停/停止）
             # pausedUP / stoppedUP 表示 qB 觉得本种子做完了；pausedDL / stoppedDL
@@ -373,19 +382,19 @@ def regular_cleanup() -> Optional[Dict]:
 
             # 第二道闸：A 或 B 任一满足
             #   A. 已完成 + 分享率 >= target_ratio
-            #   B. 做种时长 >= min_seed_days 天（"完成时间 > N 天"语义等价）
+            #   B. 完成距今 >= min_seed_days 天（物理时间，不看做种状态）
             completed = progress >= 1.0
             ratio_ok = completed and ratio >= target_ratio
-            days_ok = seeding_time >= min_days * 86400
+            age_ok = completion_on > 0 and age_after_complete >= min_days * 86400
 
-            if not (ratio_ok or days_ok):
+            if not (ratio_ok or age_ok):
                 continue
 
-            reason = 'stop+ratio' if ratio_ok else 'stop+days'
+            reason = 'stop+ratio' if ratio_ok else 'stop+age'
             logger.info(
                 f"软清: 选中 {row.torrent_hash[:16]}.. ({t.get('name')!r}) "
                 f"size={size/1e9:.2f}GB ratio={ratio:.2f} "
-                f"seed_h={seeding_time/3600:.1f} state={state} "
+                f"age_d={age_after_complete/86400:.1f} state={state} "
                 f"reason={reason}"
             )
 
@@ -395,7 +404,8 @@ def regular_cleanup() -> Optional[Dict]:
                     cleaned.append({
                         'hash': row.torrent_hash, 'name': t.get('name'),
                         'size_gb': round(size / 1e9, 2),
-                        'ratio': ratio, 'seed_days': round(seeding_time / 86400, 1),
+                        'ratio': ratio,
+                        'age_days': round(age_after_complete / 86400, 1),
                         'reason': reason,
                         'deleted_files': deleted_files,
                     })
