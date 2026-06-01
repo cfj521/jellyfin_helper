@@ -155,158 +155,79 @@ jellyfin-helper/
 
 ---
 
-## 快速开始
+## 快速开始（Docker 一站式 · 推荐）
 
-### 环境要求
-
-- Python 3.12（推荐用 conda 隔离环境）
-- Node.js 20+
-- PostgreSQL 12+（先建库和用户）
-- 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
-- qBittorrent **5.2+ 必需**（用 API Key 认证替代 admin/admin 弱密；老版本无 API Key 支持，存在被植入挖矿木马的真实风险，详见下方「外部服务 → qBittorrent」）
-- 系统级工具（见下方「系统级依赖」章节）
-- **稳定的代理 / 透明科学上网链路**（顶部前置提醒已说明）
-
-### 1. 配置
+整个栈打包成 5 个服务：jellyfin-helper + Jellyfin + Jackett + qBittorrent
+5.2+ + PostgreSQL 16。`bootstrap` 一次性脚本会自动设好 qBittorrent /
+Jackett 的密码、API Key、indexer、RSS 开关，并回填到 `config.yaml`。
 
 ```bash
-cp config.yaml.example config.yaml
+git clone <this-repo> && cd jellyfin-helper
+
+# 1) 必填 .env：MEDIA_DIR / DOWNLOADS_DIR / POSTGRES_PASSWORD
+cp .env.example .env && $EDITOR .env
+
+# 2) 必填 config.yaml：auth 段（管理员密码 + JWT secret_key）+ 你自己申请的
+#    第三方 API Key（TMDB 必填，OpenSubtitles / ASSRT / MDBList 等按需）。
+#    完整凭据清单和申请地址见下面「外部服务 → 凭据获取速查表」。
+#    database / jellyfin / jackett / qbittorrent 这四段下一步 bootstrap 会自动写。
+cp config.yaml.example config.yaml && $EDITOR config.yaml
+
+# 3) 预填 qb/jackett 配置（生成密码 hash + API Key）
+docker compose --profile bootstrap run --rm bootstrap
+
+# 4) 起 5 个服务
+docker compose up -d
+
+# 5) Jackett 起来后再跑一次 bootstrap，添加 7 个公开 indexer
+#    （52BT / dmhy / OneJAV / ThePirateBay / TheRARBG / TorrentKitty / YTS）
+docker compose --profile bootstrap run --rm bootstrap
+
+# 6) 让 helper 重读 config.yaml
+docker compose restart helper
 ```
 
-至少填这几项（其它都可选）：
+完成。浏览器打开 `http://<宿主IP>:8099` 用 `config.yaml` 里的账号登录。
 
-```yaml
-database:
-  host: "127.0.0.1"
-  name: "jellyfin_helper"
-  user: "jellyfin_helper"
-  password: "your_password"
+Jellyfin 自己有 Setup Wizard 必须手工走一遍（建账号 + 媒体库指向 `/media`），
+然后在 Jellyfin 控制台生成 API Key 填进 `config.yaml` 的 `jellyfin.api_key`。
 
-jellyfin:
-  host: "http://your-jellyfin:8096"
-  api_key: "your_jellyfin_admin_api_key"
-  # 可选：jellyfin DB 直读加速 path→item 反查（同机或 SMB 挂载时填）
-  # db_path: "/var/lib/jellyfin/data/jellyfin.db"
+完整流程（含升级、备份、常见问题）：[docs/docker-deploy.md](docs/docker-deploy.md)
 
-tmdb:
-  api_key: "your_tmdb_api_key"
-```
+### 首次验证
 
-完整字段见 [config.yaml.example](config.yaml.example)；也可先空跑，再到前端 `/settings` 编辑（保存自动备份）。
+打开 **前端 → 配置 → 可用性检测**（左侧导航第一项）。一屏看清楚：
 
-### 2. 后端
+- **本地环境**：FFmpeg · FFprobe · MKVPropEdit · bsdtar（容器里都已预装）
+- **网络服务**：Jellyfin · qBittorrent · Jackett · TMDB · 豆瓣 · MDBList ·
+  Trakt · AniList · Wikidata · LLM · 字幕源 · 成人刮削站
+
+每项显示 `状态 / 信息 / 耗时`。**遇到问题先来这里看一眼**，能省一半排查时间。
+
+---
+
+## 裸机 / 开发模式
+
+不想用 Docker、要直接在宿主跑（开发或定制场景）需要自备：
+
+- Python 3.12（推荐 conda 隔离环境）+ Node 20+
+- PostgreSQL 12+（先建库和用户）
+- 一台 Jellyfin（10.9+ 推荐，需管理员 API Key）
+- qBittorrent **5.2+**（用 API Key 认证，详见下方「外部服务」）
+- Jackett
+- 系统工具：`ffmpeg / mkvtoolnix / bsdtar (libarchive ≥ 3.6 才支持 RAR5)`
+- 稳定代理 / 透明科学上网链路（前置提醒已说明）
+
+启动：
 
 ```bash
 pip install -r requirements.txt
-python -m backend.run
+python -m backend.run            # 后端 (默认 8000，BACKEND_PORT 覆盖)
+
+cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 ```
 
-端口优先级：环境变量 `BACKEND_PORT` > `config.yaml: server.backend_port` > 默认 8000。
-
-开发热重载：
-
-```bash
-# bash
-BACKEND_RELOAD=1 python -m backend.run
-
-# PowerShell
-$env:BACKEND_RELOAD='1'; python -m backend.run
-```
-
-### 3. 前端
-
-新开终端：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-vite 自动读 `config.yaml` 的 `server.frontend_port`。
-
-### 4. 访问
-
-- 前端：http://localhost:5173
-- API 文档（Swagger）：http://localhost:8000/docs
-
-### 5. 首次启动验证 ★
-
-打开 **前端 → 配置 → 可用性检测**（左侧导航第一项，进页面就在）。一屏看清楚：
-
-- **本地环境**（进入即跑，零网络成本）：FFmpeg · FFprobe · MKVPropEdit · bsdtar
-- **网络服务**（手动按钮）：Jellyfin · qBittorrent · Jackett · TMDB · 豆瓣 · MDBList · Trakt · AniList · Wikidata · LLM · 字幕源 · 成人刮削站
-
-每项显示 `状态 / 信息 / 耗时`。未启用的源灰显，按钮禁用。**遇到问题先来这里看一眼，能省一半排查时间**。
-
----
-
-## 系统级依赖
-
-除 Python 包（`requirements.txt`）外，部分功能依赖以下系统工具。**非必需**——缺失时对应功能自动退化（仅扫描/建议，不写入），不会崩溃。
-
-| 工具 | 用途 | 缺失时影响 |
-|---|---|---|
-| **ffmpeg / ffprobe** | 音轨扫描、字幕内嵌轨探测 | 无法检测内嵌字幕和音轨信息 |
-| **mkvtoolnix (mkvpropedit)** | 修改 MKV 文件默认音轨 flag | 音轨管理仅返回建议，不实际写入 |
-| **bsdtar (libarchive ≥ 3.6)** | 解压 rar / 7z 字幕包 | rar 字幕包无法解压，zip 不受影响 |
-
-> **bsdtar 的 libarchive 版本要 ≥ 3.6 才支持 RAR5**（现代字幕包基本都是 RAR5）。对照表：Ubuntu 22.04+ / Debian 12+ / macOS Homebrew / conda-forge 都满足。Ubuntu 20.04 / Debian 11 自带 libarchive 3.4，解 RAR5 会失败 —— 建议升级发行版，或者从 conda-forge 装。
-
-安装：
-
-```bash
-# Debian / Ubuntu 22.04+ / Debian 12+
-sudo apt install ffmpeg mkvtoolnix libarchive-tools
-
-# macOS（自带 bsdtar，无需额外装）
-brew install ffmpeg mkvtoolnix
-
-# Windows (Chocolatey)
-choco install ffmpeg mkvtoolnix
-# bsdtar 通过 conda 装：见下
-
-# Conda（跨平台一键，libarchive 3.7+ 自带 bsdtar，支持 RAR5）
-conda install -c conda-forge ffmpeg mkvtoolnix libarchive
-```
-
-验证：命令行 `ffprobe -version` / `mkvpropedit --version` / `bsdtar --version` 输出版本号即可。
-也可以直接打开 **前端 → 配置 → 可用性检测**，本地环境列里一目了然哪个工具在 PATH 上。
-
----
-
-## 文件系统权限
-
-后端进程运行的用户（systemd `User=` / Docker `user:` / 裸跑时的 shell 用户）必须有以下访问权限。**这是最常见的"看起来跑起来了但功能没动作"根因**：
-
-| 路径 | 需要权限 | 用途 | 配错时的症状 |
-|---|---|---|---|
-| Jellyfin SQLite（如 `/var/lib/jellyfin/data/jellyfin.db`） | **读** | `path → item` 反查直读加速（可选，4ms vs REST 1500ms） | 启动日志 `PermissionError`；运行时 fallback 到 REST，慢 100× |
-| qB 下载目录（如 `/download`） | **读 + 写** | 入库时 mv/cp 源文件；软清/硬清 `rm` 完成种子；磁盘配额监视 | 流水线搬不动文件；日志 `配额: 后端 stat 不到 '/download'，禁用配额监视/清理` |
-| Jellyfin 媒体库目录（如 `/library/videos`） | **读 + 写** | dispatch 入库写文件 + 落 NFO/poster；adult_scanner 探测本地附件 | 入库失败；NFO / poster 不落地；扫描结果"看见文件但识别不到" |
-
-**典型 systemd 部署**（推荐）：让后端用户加入 `jellyfin` 组，继承 jellyfin DB 默认 640 权限即可读；库目录用 group ownership + 775：
-
-```ini
-# /etc/systemd/system/jellyfin-helper.service.d/user.conf
-[Service]
-User=jellyfin_helper
-Group=jellyfin
-UMask=0002
-```
-
-```bash
-# 把后端用户加入 jellyfin 组（如果库目录归 jellyfin 用户）
-sudo usermod -aG jellyfin jellyfin_helper
-
-# 验证：以后端用户身份读 jellyfin DB / 写库目录
-sudo -u jellyfin_helper sqlite3 /var/lib/jellyfin/data/jellyfin.db ".tables" | head
-sudo -u jellyfin_helper touch /library/videos/_perm_test && rm /library/videos/_perm_test
-```
-
-**Docker 部署**：`docker-compose.yml` 里 `user: "1000:1000"` 跟挂载的宿主机目录 owner/group 对齐；或者在 entrypoint 里 `chown` 让数据卷 ownership 跟进。
-
-**裸跑（开发期）**：图省事可以 `sudo -u jellyfin python -m backend.run`，免去权限协调；生产不推荐共享 shell 用户。
+更详细的模块划分、调试技巧、添加新 router 见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
 ---
 
@@ -334,16 +255,42 @@ sudo -u jellyfin_helper touch /library/videos/_perm_test && rm /library/videos/_
 
 ## 外部服务
 
-详见 [docs/external-services.md](docs/external-services.md)。摘要：
+### 凭据获取速查表
 
-- **必需**：Jellyfin、TMDB、PostgreSQL
-- **强烈推荐**：Jackett + qBittorrent（启用下载入库流水线）
-- **字幕**：OpenSubtitles + ASSRT 任选其一即可，配齐两个最佳
-- **评分**：MDBList（可选）+ 豆瓣（无需 key）
-- **LLM**：任意 OpenAI 兼容服务（识别兜底，可选）
-- **成人内容**：JavBus / JavDB / AVBase / MissAV（带地理屏蔽与代理建议）
+下面这些 Key / Token 需要你自己去对应站点申请，然后填进 `config.yaml`。
+**Docker 部署**下 qBittorrent / Jackett / Postgres 三个 Key 由 bootstrap 自动生成 +
+回填，**不需要手动申请**。
 
-### qBittorrent 版本要求：**5.2+ 必需**
+| 服务 | 必需性 | 申请地址 | 填入字段 |
+|---|---|---|---|
+| **Jellyfin API Key** | 必需 | Jellyfin Web → 控制台 → API Keys → 新建 | `jellyfin.api_key` |
+| **TMDB API Key** | 必需 | https://www.themoviedb.org/settings/api（免费注册申请） | `tmdb.api_key` |
+| **PostgreSQL 密码** | 必需 | 自己定（Docker：`.env` 的 `POSTGRES_PASSWORD`） | `database.password` |
+| **qBittorrent API Key** | 必需 | Docker：bootstrap 自动；裸机：qB → Preferences → WebUI → Generate | `qbittorrent.api_key` |
+| **Jackett API Key** | 必需 | Docker：bootstrap 自动；裸机：Jackett UI 右上角直接显示 | `jackett.api_key` |
+| **MDBList API Key** | 推荐（评分） | https://mdblist.com/api 登录后生成（免费 1000 req/天） | `mdblist.api_key` |
+| **OpenSubtitles 三件套** | 推荐（字幕） | API Consumer → https://www.opensubtitles.com/consumers + 注册账号 | `subtitle.opensubtitles_api_key` + `opensubtitles_username` + `opensubtitles_password` |
+| **ASSRT API Token** | 推荐（中文字幕主力） | 注册后 → https://secure.assrt.net/usercp.php | `subtitle.assrt_api_token` |
+| **Trakt Client ID** | 可选（推荐源） | https://trakt.tv/oauth/applications 创建 app | `trakt.client_id` |
+| **LLM API Key** | 可选（识别兜底） | 任何 OpenAI 兼容服务（DeepSeek / 阿里通义 / OpenAI） | `llm.api_key` + `llm.base_url` |
+| **JWT secret_key** | 必需 | 自己生成：`python -c "import secrets; print(secrets.token_urlsafe(32))"` | `auth.secret_key` |
+| **管理员账号密码** | 必需 | 自己定（前端登录用） | `auth.users[].password` |
+
+**无需 Key 的源**（默认就能用，不用申请）：
+
+- 射手字幕 Shooter（hash 匹配）
+- AniList（GraphQL 公开端点，动漫元数据）
+- 豆瓣（网页爬取，带 5 次失败熔断）
+- Wikidata（演员图兜底，但要在 `wikidata.user_agent` 填你的联系方式，Wikimedia 要求）
+
+**成人内容**（按需启用）：JavBus / JavDB / AVBase / MissAV，无 API Key 但有地理屏蔽和反爬，
+详见 [docs/external-services.md](docs/external-services.md) 的代理建议。
+
+`config.yaml.example` 里每个字段旁也都贴了对应申请 URL，按节填即可。
+完整字段说明、调用频率、地理屏蔽情况、OpenClash 分流示例见
+[docs/external-services.md](docs/external-services.md)。
+
+### 为什么强制 qBittorrent 5.2+
 
 老版本（< 5.0）兼容已在 2026-06 移除，**原因是安全**：
 
@@ -352,32 +299,18 @@ sudo -u jellyfin_helper touch /library/videos/_perm_test && rm /library/videos/_
 - 真实事件：通过 `Preferences → Downloads → Run external program on torrent added / completed`
   被植入 `wget ... | sh` 后门，XMR 挖矿木马常见手法
 
-5.2.0+ 才引入 `Authorization: Bearer qbt_xxx` 这种 stateless API Key 机制，
-本项目要求最低版本，让认证强度有保证。
-
-### 配置 API Key
-
-去 qB **Preferences → WebUI → API Key 段** 点 Generate，复制 `qbt_xxx...` 到 `config.yaml`：
-
-```yaml
-qbittorrent:
-  host: "http://127.0.0.1:8080"
-  api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # 强烈推荐：stateless，不发明文密码
-  # 退而求其次（仍要求 qB 5.2+ 才能跑通其它 API 兼容）：
-  username: ""
-  password: ""
-```
-
-或者前端 **设置 → qBittorrent 下载管理** 里粘贴。配了 api_key 就**不必再填 username/password**。
+5.2.0+ 才引入 `Authorization: Bearer qbt_xxx` 这种 stateless API Key 机制；
+本项目用 Docker 部署时 bootstrap 脚本自动生成 API Key 并写进 `config.yaml`，
+裸机部署也务必在 qB UI 里手动 Generate 一个填入。
 
 ### ⚠️ qB 安全 checklist
 
-无论是否启用 API Key，都建议：
+不论 Docker 还是裸机，都要做：
 
-1. **监听地址改 `127.0.0.1`**（仅本机）或反代后加 IP 白名单
-2. **首次接管现有 qB 前**检查 `Preferences → Downloads → Run external program on torrent added / completed`
-   是否被植入可疑命令——这是历史弱密被打的常见痕迹
-3. 不要把 qB WebUI 直接暴露公网
+1. **WebUI 不暴露公网**（Docker 默认只映射到宿主，配合宿主防火墙；裸机改监听
+   `127.0.0.1` 或反代加 IP 白名单）
+2. **首次接管现有 qB 前**检查 `Preferences → Downloads → Run external program
+   on torrent added / completed` 是否被植入可疑命令——这是历史弱密被打的常见痕迹
 
 ---
 
@@ -395,16 +328,28 @@ qbittorrent:
 
 ### 后端启动失败
 
-1. 检查 PostgreSQL 是否可达，库和用户是否已创建（DB 连不上后端进程根本起不来，**到不了配置页**——直接看启动日志）
-2. 确认 `config.yaml` 的 `database` 段填写正确
-3. 确认 `requirements.txt` 全部装好
-4. 确认系统级依赖已安装（可用性检测「本地环境」会逐项显示）
+直接看启动日志（DB 连不上根本到不了配置页）：
 
-### 前端无法连接后端
+```bash
+docker compose logs -f helper           # Docker 部署
+# 或裸机：python -m backend.run 的输出
+```
+
+常见根因：
+
+1. `config.yaml` 的 `database` 段不对——Docker 部署 `host: postgres`，
+   裸机部署 `host: 127.0.0.1`
+2. Docker：bootstrap 没跑或 `POSTGRES_PASSWORD` 跟 `config.yaml` 不一致
+3. 裸机：`requirements.txt` 没装全 / 系统级依赖（ffmpeg / mkvtoolnix /
+   bsdtar）不在 PATH 上
+
+### 前端无法连接后端（仅裸机模式）
 
 1. 确认后端已启动在 `config.yaml` 中配置的端口
 2. 检查 `vite.config.js` 中的代理配置
 3. 检查 `cors_origins`（默认 `["*"]`）
+
+Docker 部署下前端是 FastAPI 直接托管的静态资源，不存在跨进程问题。
 
 ### 第三方源拉不到数据
 
@@ -417,11 +362,19 @@ qbittorrent:
 
 ### 数据库连接错误
 
+Docker 部署：
+
+```bash
+docker compose exec postgres psql -U jellyfin_helper -d jellyfin_helper -c "\dt"
+```
+
+裸机：
+
 ```bash
 psql -h <host> -p 5432 -U jellyfin_helper -d jellyfin_helper
 ```
 
-连不上时依次排查：网络、防火墙、`pg_hba.conf` 是否允许该 IP、用户密码、数据库是否存在。
+连不上时依次排查：容器名/网络可达性（Docker）、防火墙（裸机）、用户密码、数据库是否存在。
 
 ### 种子添加失败
 

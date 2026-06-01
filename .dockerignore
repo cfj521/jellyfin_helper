@@ -1,0 +1,45 @@
+# VCS / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.claude
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+.venv
+venv/
+
+# Node（前端 build 阶段会自己 npm ci，不需要打进 build context）
+frontend/node_modules
+frontend/dist
+
+# 运行时产物 / 数据 / 日志（绝不能进镜像）
+data/
+logs/
+*.log
+*.log.*
+
+# 用户密钥 / 备份（防止打进镜像泄漏）
+config.yaml
+config.yaml.bak.*
+*.bak
+
+# Docker 自身文件（避免循环 COPY）
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# 杂项
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
