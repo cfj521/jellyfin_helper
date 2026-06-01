@@ -64,6 +64,13 @@ path_mappings:
     # - { from: "/library/videos", to: "Z:/videos" }
     # - { from: "/library/adult",  to: "Z:/adult" }
 
+# 系统级工具的可执行文件目录（**仅 Windows 用户需要配**；Linux/macOS 一般在 PATH 上）
+# 后端启动时会把这些目录追加到进程 PATH 最前面，让 ffmpeg/ffprobe/mkvpropedit 能被找到。
+# 留空 → 不修改 PATH，依赖系统 PATH 已有这些命令
+tools:
+  ffmpeg_dir: ""          # 例：Windows "C:/ffmpeg/bin"
+  mkvtoolnix_dir: ""      # 例：Windows "C:/Program Files/MKVToolNix"
+
 # 缓存 TTL
 # 除了路径索引（30 秒，固定）外，所有可配缓存都在这里。
 # 改动需重启后端才生效。
