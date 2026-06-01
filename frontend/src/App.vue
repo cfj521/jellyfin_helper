@@ -105,23 +105,21 @@ watch(() => route.path, () => {
   background: var(--jt-logo-bg, linear-gradient(135deg, var(--jt-brand) 0%, var(--jt-accent) 100%));
   position: relative;
 
-  .logo-text {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    line-height: 1.15;
-  }
-
-  .logo-title {
+  span {
     white-space: nowrap;
   }
 
+  // 版本号绝对定位：不参与 flex 布局，不会把 icon + 标题挤偏
   .logo-version {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 4px;
+    text-align: center;
     font-size: 10px;
     font-weight: 400;
     letter-spacing: 0.4px;
     opacity: 0.7;
-    margin-top: 2px;
     user-select: none;
   }
 }

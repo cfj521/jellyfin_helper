@@ -2,10 +2,8 @@
   <div class="app-sidebar">
     <div class="logo">
       <el-icon :size="28"><MagicStick /></el-icon>
-      <div class="logo-text">
-        <span class="logo-title">Jellyfin Helper</span>
-        <span class="logo-version">v{{ appVersion }}</span>
-      </div>
+      <span>Jellyfin Helper</span>
+      <span class="logo-version">v{{ appVersion }}</span>
     </div>
 
     <el-menu
