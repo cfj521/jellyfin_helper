@@ -8,18 +8,19 @@
   'chs.eng'   ← 'chs.eng' / 'chs&eng' / 'chs_eng' / 'chs-eng'
   'chs.eng'   ← '简&英' / '简体&英文' / '简英' / '简体英文'
   'chs.eng'   ← 'movie.简体.英文.srt'
-  'chs.eng'   ← 'movie.zh-Hans.eng.srt'   ← 新落盘格式
-  'chs'       ← '简体' / '简' / 'GB' / 'GBK' / '.chs.' / '.zh-Hans.'
-  'cht'       ← '繁体' / '繁' / 'BIG5' / '.cht.' / '.zh-Hant.'
+  'chs.eng'   ← 'movie.zh-CN.eng.srt'     ← 新落盘格式
+  'chs'       ← '简体' / '简' / 'GB' / 'GBK' / '.chs.' / '.zh-CN.' / '.zh-Hans.'
+  'cht'       ← '繁体' / '繁' / 'BIG5' / '.cht.' / '.zh-TW.' / '.zh-Hant.'
   'eng'       ← 'English' / '英文' / '英' / '.eng.' / '.en.'
 
 落盘 vs 内部编码：
   - **内部代码** 始终是 chs/cht/eng/jpn/kor —— 配置项、preferred_langs、API
     参数等都用这一套。
-  - **落盘文件名** 中文统一用 BCP 47：chs → zh-Hans / cht → zh-Hant，
-    Jellyfin 才能正确识别并显示成"简体中文 / 繁体中文"。其它语言 (eng/jpn/kor)
-    保持 ISO 639-2/B 三字母，Jellyfin 也认。
-  - 旧落盘的 .chs.srt / .cht.srt 仍能被回读识别为 chs / cht（向后兼容）。
+  - **落盘文件名** 中文统一用 BCP 47 region 形式：chs → zh-CN / cht → zh-TW，
+    Jellyfin 和 PotPlayer 都能识别（PotPlayer 不认 script subtag Hans/Hant）。
+    其它语言 (eng/jpn/kor) 保持 ISO 639-2/B 三字母，Jellyfin 也认。
+  - 旧落盘的 .chs.srt / .cht.srt / .zh-Hans.srt / .zh-Hant.srt 仍能被回读识别
+    为 chs / cht（向后兼容）。
   - 写盘时用 `internal_to_filename_token()` 做映射；读盘走 `detect_lang_combo()`。
 
 设计要点：
@@ -37,7 +38,8 @@ from typing import List, Optional
 _INTERNAL_CODES = ('chs', 'cht', 'zh', 'eng', 'jpn', 'kor')
 
 # 显式 lang code 别名 → 内部代码
-# BCP 47 (zh-Hans/zh-Hant) 是落盘 canonical，必须能被反向识别
+# BCP 47 region 形式（zh-CN/zh-TW）是当前落盘 canonical，必须能被反向识别。
+# 老的 zh-Hans/zh-Hant 也保留映射 —— 历史落盘文件仍能被回读为简/繁。
 # 'zh' 单独存在（无 region / script）→ 通用中文 'zh'，**不再默认归 chs**
 #   - 历史代码：'zh': 'chs'（强行当简体）
 #   - 现在：'zh': 'zh'，让缺字幕判定可以"未指定简繁也算两边都命中"
@@ -57,12 +59,14 @@ _CODE_ALIAS = {
 }
 
 # 内部代码 → 落盘文件名 token（写盘 canonical）
-# Jellyfin 用 .NET CultureInfo 解析字幕文件名后缀；chs/cht 不在它的识别表里，
-# 用 BCP 47 才能让 jellyfin 显示成 "简体中文 / 繁体中文 / 中文"。
+# Jellyfin 用 .NET CultureInfo 解析字幕文件名后缀；chs/cht 不在它的识别表里。
+# 选用 BCP 47 region 形式 (zh-CN / zh-TW) 而不是 script 形式 (zh-Hans / zh-Hant) ——
+# 两者 Jellyfin 都认，但 PotPlayer 等外部播放器不认 Hans/Hant 这种 script subtag，
+# region 形式可以让同一份字幕文件在 Jellyfin 和 PotPlayer 里都被正确识别。
 # 其它语言保持原代码（eng/jpn/kor 都是 ISO 639-2/B，jellyfin 认识）。
 _INTERNAL_TO_FILENAME = {
-    'chs': 'zh-Hans',
-    'cht': 'zh-Hant',
+    'chs': 'zh-CN',
+    'cht': 'zh-TW',
     'zh':  'zh',          # 通用中文：写盘也用 BCP 47 'zh'，jellyfin 显示"中文"
     'eng': 'eng',
     'jpn': 'jpn',
@@ -74,8 +78,8 @@ def internal_to_filename_token(code: str) -> str:
     """
     把内部 lang code 映射为落盘文件名用的 token。
 
-    单语：'chs' → 'zh-Hans', 'cht' → 'zh-Hant', 'eng' → 'eng', ...
-    多语（dot 复合）：'chs.eng' → 'zh-Hans.eng', 'cht.eng' → 'zh-Hant.eng'
+    单语：'chs' → 'zh-CN', 'cht' → 'zh-TW', 'eng' → 'eng', ...
+    多语（dot 复合）：'chs.eng' → 'zh-CN.eng', 'cht.eng' → 'zh-TW.eng'
 
     未识别的 code 原样返回（兜底，避免误改外来代码）。
     """
