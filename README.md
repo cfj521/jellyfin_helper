@@ -1,28 +1,65 @@
 # Jellyfin Helper
 
-围绕 Jellyfin 的自动化辅助工具集 —— 把"找资源 → 下载 → 入库 → 元数据 / 字幕 / 音轨修复"整条链路用一个 Web 后台串起来。
-
-不是 Sonarr/Radarr/Bazarr 的替代品，而是把它们 + 国内场景常见的工具（豆瓣评分、JavBus/JavDB、ASSRT 字幕、Jackett）按个人偏好揉成一套。
-
-> ⚠️ 个人项目，仍在密集迭代。schema 变更时通常**直接清表重扫**而不是写迁移脚本，部署到生产请自行评估。
+围绕 Jellyfin 的自动化辅助工具集，把"**找资源 → 下载 → 入库 → 元数据/字幕/音轨修复**"
+整条链路用一个 Web 后台串起来。**不是 Sonarr/Radarr/Bazarr 的替代品**，而是把
+它们 + 国内场景常见的工具（豆瓣评分、JavBus/JavDB、ASSRT 字幕、Jackett）按个人
+偏好揉成一套。
 
 ---
 
-## 主要能力
+> ## ⚠️ 前置提醒：需要"魔法上网"
+>
+> 项目深度依赖境外服务（TMDB / Trakt / AniList / OpenSubtitles / IMDB / MDBList /
+> Wikidata 等），**没有稳定的科学上网链路用户体验会很差**——多数源会超时或被
+> 地理屏蔽。强烈建议在路由器层做透明代理（OpenClash / mihomo 等），把整个
+> jellyfin-helper 主机的出站流量按域名分流。本项目代码层**不处理代理逻辑**，
+> 默认假定网络是通的，所以连不通的报错都按上游故障处理而非代理配置。
 
-| 领域 | 核心能力 |
-|---|---|
-| **媒体库浏览** | 多库列表 + 详情页 + 海报视图，调 jellyfin REST 拿一手数据；支持本地 SQLite 直读加速 `path → item` 反查（同机部署可选） |
-| **下载入库自动化** | Jackett 搜种 → qBittorrent 推送（兼容 qB 4.6 ~ 5.2，支持 API Key 认证）→ 流水线 confidence-driven 识别（regex / TMDB / LLM 兜底）→ 按模板 + duplicate_policy 整理到媒体库 → 自动通知 jellyfin 刷新 |
-| **字幕全链路** | 多源下载（OpenSubtitles / ASSRT / Shooter）→ 评分融合 + 分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测 |
-| **元数据修复** | 演员照片（TMDB + Wikidata 兜底）、海报、NFO；jellyfin 演员库归一化 |
-| **音轨管理** | MKV 默认音轨按语种偏好批量设置；汉语/未识别轨例外保护 |
-| **评分聚合** | TMDB + MDBList（IMDB / RT / Metacritic / Trakt / Letterboxd）+ 豆瓣，统一存 `media_ratings`，每家独立 TTL；前端融合显示 |
-| **发现 / 推荐** | TMDB / Trakt / AniList / 豆瓣榜单聚合，无限滚动 + 预取 |
-| **资源搜索** | Jackett 跨 indexer 聚合，结果分类 + 大小 / Seeders 排序 |
-| **成人内容（可选）** | 番号识别、JavBus + JavDB 双源刮削、女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护 |
-| **任务系统** | 后台任务 + SSE 实时进度 + 取消 + shutdown 联动；前端任务详情页可展开各步明细 |
-| **维护工具** | 配置 Web 编辑（保存自动备份）、Sample 清理、强制重扫、日志查看、统计 |
+> 项目仍在密集迭代。schema 变更时通常**直接清表重扫**而不是写迁移脚本，
+> 部署到生产请自行评估并做好数据备份。
+
+---
+
+## 三大核心功能
+
+### 1. Jellyfin 媒体库辅助管理
+
+补 Jellyfin 自身缺位或弱势的环节：
+
+- **媒体库浏览**：多库列表 + 详情页 + 海报视图；可选本地 SQLite 直读加速
+  `path → item` 反查（同机部署时实测 4ms vs REST 1500ms）
+- **元数据修复**：演员照片（TMDB + Wikidata 兜底）、海报、NFO；
+  jellyfin 演员库归一化
+- **字幕全链路**：多源下载（OpenSubtitles / ASSRT / Shooter）→ 评分融合 +
+  分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测
+- **音轨管理**：MKV 默认音轨按语种偏好批量设置；汉语 / 未识别轨例外保护
+- **维护工具**：配置 Web 编辑（保存自动备份）、Sample 清理、强制重扫、日志查看、统计
+
+### 2. 资源（多种）发现与搜索
+
+聚合多个发现源做统一 UI，避免在十几个站点之间反复横跳：
+
+- **发现 / 推荐**：TMDB / Trakt / AniList / 豆瓣榜单聚合，无限滚动 + 预取
+- **评分聚合**：TMDB + MDBList（IMDB / RT / Metacritic / Trakt / Letterboxd）
+  + 豆瓣，统一存 `media_ratings`，每家独立 TTL；前端融合显示
+- **资源搜索**：Jackett 跨 indexer 聚合，结果分类 + 大小 / Seeders 排序，
+  一键推送到下载流水线
+- **成人内容（可选）**：番号识别、JavBus / JavDB / AVBase / MissAV 多源刮削、
+  女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护
+
+### 3. 下载流水线
+
+从"加种"到"入库"全自动，不需要手动 mv / 重命名：
+
+- **加种**：Jackett 搜种 → qBittorrent 推送（**要求 qB 5.2+**，建议启用
+  API Key 认证）
+- **识别**：confidence-driven 链（regex → TMDB → LLM 兜底），低置信落
+  needs_review 等人工
+- **入库**：按可配置模板 + duplicate_policy 整理到媒体库，自动通知 jellyfin 刷新
+- **做种与清理**：state=stop + (ratio≥target OR 完成 N 天) 双条件软清，
+  磁盘配额阈值触发硬清；保护用户做种数据
+- **任务系统**：后台任务 + SSE 实时进度 + 取消 + shutdown 联动；
+  前端任务详情页可展开各步明细
 
 ---
 
@@ -131,8 +168,9 @@ jellyfin-helper/
 - Node.js 20+
 - PostgreSQL 12+（先建库和用户）
 - 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
-- qBittorrent **4.6+ 全兼容**，5.2+ 推荐（启用 API Key 认证，详见下文）
+- qBittorrent **5.2+ 必需**（用 API Key 认证替代 admin/admin 弱密；老版本无 API Key 支持，存在被植入挖矿木马的真实风险，详见下方「外部服务 → qBittorrent」）
 - 系统级工具（见下方「系统级依赖」章节）
+- **稳定的代理 / 透明科学上网链路**（顶部前置提醒已说明）
 
 ### 1. 配置
 
@@ -275,38 +313,41 @@ conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 - **LLM**：任意 OpenAI 兼容服务（识别兜底，可选）
 - **成人内容**：JavBus / JavDB / AVBase / MissAV（带地理屏蔽与代理建议）
 
-### qBittorrent 版本兼容性
+### qBittorrent 版本要求：**5.2+ 必需**
 
-支持 qB **4.6 ~ 5.2**（含所有中间版本）。客户端会探测 `webapiVersion` 自动适配版本差异：
+老版本（< 5.0）兼容已在 2026-06 移除，**原因是安全**：
 
-| qB 版本 | 关键变化 | 我们的处理 |
-|---|---|---|
-| 4.6.x ~ 5.1.x | `/torrents/pause` `/torrents/resume`、`paused=true` 参数、`200 "Ok."` 文本响应 | 保留 4.x 路径 |
-| 5.0.0+ | 端点改 `/torrents/stop` `/torrents/start`，参数改 `stopped=true`，状态名 `pausedDL/UP` → `stoppedDL/UP` | 自动切换 |
-| 5.2.0+ | login 成功响应 `200 "Ok."` → **`204` 空 body**；add 响应改 JSON；重复 hash 返 **409** | login 双协议识别，add 解析 JSON / `success_count`，409 走专门错误分支 |
-| 5.2.0+ | 引入 **API Key 认证**（`Authorization: Bearer qbt_xxx`） | 配置 `qbittorrent.api_key` 后跳过 username/password 登录，更安全 |
+- 4.x / 5.0 / 5.1 都没有 API Key 认证，只能 username/password
+- qB 默认 admin/adminadmin 弱密被自动化脚本扫满公网，**直接 RCE 装挖矿**
+- 真实事件：通过 `Preferences → Downloads → Run external program on torrent added / completed`
+  被植入 `wget ... | sh` 后门，XMR 挖矿木马常见手法
 
-### 推荐配置（qB 5.2+）
+5.2.0+ 才引入 `Authorization: Bearer qbt_xxx` 这种 stateless API Key 机制，
+本项目要求最低版本，让认证强度有保证。
 
-去 qB **Preferences → WebUI → API Key 段**点 Generate，复制 `qbt_xxx...` 到 `config.yaml`：
+### 配置 API Key
+
+去 qB **Preferences → WebUI → API Key 段** 点 Generate，复制 `qbt_xxx...` 到 `config.yaml`：
 
 ```yaml
 qbittorrent:
   host: "http://127.0.0.1:8080"
-  api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # 优先于下方 username/password
+  api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # 强烈推荐：stateless，不发明文密码
+  # 退而求其次（仍要求 qB 5.2+ 才能跑通其它 API 兼容）：
   username: ""
   password: ""
 ```
 
 或者前端 **设置 → qBittorrent 下载管理** 里粘贴。配了 api_key 就**不必再填 username/password**。
 
-### ⚠️ qBittorrent 安全提醒
+### ⚠️ qB 安全 checklist
 
-如果你的 qB WebUI **暴露在公网或局域网弱密码状态**，强烈建议：
+无论是否启用 API Key，都建议：
 
-1. 启用 API Key 认证（替代 admin/adminadmin）
-2. 监听地址改 `127.0.0.1`（仅本机访问）或反代后加 IP 白名单
-3. 检查 **Preferences → Downloads → Run external program on torrent added / completed** 是否被植入 `wget ... | sh` 类命令 —— 这是 qB 弱密被打的标志性后门（XMR 挖矿木马常用）
+1. **监听地址改 `127.0.0.1`**（仅本机）或反代后加 IP 白名单
+2. **首次接管现有 qB 前**检查 `Preferences → Downloads → Run external program on torrent added / completed`
+   是否被植入可疑命令——这是历史弱密被打的常见痕迹
+3. 不要把 qB WebUI 直接暴露公网
 
 ---
 
@@ -351,12 +392,6 @@ psql -h <host> -p 5432 -U jellyfin_helper -d jellyfin_helper
 ```
 
 连不上时依次排查：网络、防火墙、`pg_hba.conf` 是否允许该 IP、用户密码、数据库是否存在。
-
-### qBittorrent 升级到 5.x 后无法连接
-
-- **症状**：升级 qB 到 5.0+（尤其 5.2.0）后，下载流水线全部失败、日志报"qBittorrent 推送失败"或登录失败
-- **根因**：qB 5.2.0 把 `/auth/login` 的成功响应从 `200 "Ok."` 改成 `204 空 body`；`/torrents/add` 改成 JSON；`pause/resume` 端点改名为 `stop/start`
-- **修复**：把项目更新到包含 qB 5.x 兼容补丁的版本（[兼容矩阵见上](#qbittorrent-版本兼容性)），重启后端即可。升级后推荐切到 API Key 认证（更稳）
 
 ### 种子添加失败
 

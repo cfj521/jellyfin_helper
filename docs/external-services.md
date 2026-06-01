@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | **Jellyfin** | `http://localhost:8096` | 媒体库管理（库列表/扫描刷新/元数据/演员图片） | `jellyfin_host` + `jellyfin_api_key` | API key 必须管理员级，`/Library/Media/Updated` 等端点要求 elevation |
 | **Jellyfin SQLite**（可选） | `/var/lib/jellyfin/data/jellyfin.db` | path → item 反查直读加速 | `jellyfin_db_path` | 10.9+ `BaseItems`；只读 + immutable + nolock 模式跨 SMB 安全；schema 不兼容 / 权限不通自动 fallback REST |
-| **qBittorrent** | `http://localhost:8080` | 种子下载（加种/暂停/恢复/删除/RSS 订阅与规则） | `qbittorrent_host` + `username` + `password` | 需 4.6+ 支持 `stop_condition='MetadataReceived'` |
+| **qBittorrent** | `http://localhost:8080` | 种子下载（加种/暂停/恢复/删除/RSS 订阅与规则） | `qbittorrent_host` + `api_key`（推荐）或 `username` + `password` | **要求 5.2+**：API Key 认证、`stop_condition='MetadataReceived'`、stop/start 端点 |
 | **Jackett** | `http://localhost:9117` | 搜索 PT/公开站索引器（包装成 Torznab/RSS） | `jackett_host` + `jackett_api_key` | RSS feed URL 可直接给 qB 订阅自动下载 |
 
 ---
