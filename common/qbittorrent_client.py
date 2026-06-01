@@ -2,25 +2,31 @@
 qBittorrent WebUI API 客户端
 https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-5.0)
 
-支持 qB 4.6 ~ 5.2+，自动按 webapiVersion 选老/新端点。
+**最低要求：qBittorrent 5.2+（webapi ≥ 2.11.4）**
 
-## 关键 4.6 → 5.2 变化（已自适应）
+老版本（< 5.0）兼容已在 2026-06 移除，原因是安全：4.x / 5.0 / 5.1 都没有
+API Key 认证，只能 username/password；qB 弱密被自动化扫描植入 XMR 挖矿木马
+（通过 `Run external program on torrent added/completed`）是真实事件。
+5.2.0+ 才引入 `Authorization: Bearer qbt_xxx` stateless API Key 机制。
 
-| 变化 | 4.x | 5.0+（webapi ≥ 2.11）|
-|------|-----|----------------------|
-| pause 端点 | `/torrents/pause` | `/torrents/stop` |
-| resume 端点 | `/torrents/resume` | `/torrents/start` |
-| `/torrents/add` 的暂停参数 | `paused=true` | `stopped=true` |
-| 状态名 | `pausedDL` / `pausedUP` | `stoppedDL` / `stoppedUP`（同义） |
-| login 成功响应 | `200 "Ok."` | `204` 空 body（5.2.0+） |
-| 空响应通用 | `200` | `204` |
+启动时如果探测到 webapiVersion < 2.11.4，登录会 ERROR 拒绝继续。
+
+## 5.2+ 端点 / 响应规范（hardcoded，不再做版本分支）
+
+| 操作 | 端点 / 响应 |
+|------|-------------|
+| pause / resume | `/torrents/stop` / `/torrents/start` |
+| `/torrents/add` 暂停参数 | `stopped=true` |
+| 状态名 | `stoppedDL` / `stoppedUP` |
+| login 成功响应 | `204` 空 body |
+| 重复 hash 添加 | `HTTP 409 Conflict` |
+| add 成功响应 | JSON `{success_count, failure_count, ...}` |
 
 ## 认证两种模式（按优先级）
 
-  1. **API Key**（qB ≥ 5.2.0 推荐）—— `Authorization: Bearer qbt_xxx` header，
-     stateless，不用调 /auth/login。Preferences → WebUI → API Key 段生成。
-  2. **Username/Password** —— 传统 cookie 会话；qB 5.2.0 起 /auth/login 成功
-     响应从 `200 "Ok."` 变成 `204 空 body`，本客户端两者都兼容。
+  1. **API Key**（推荐）—— `Authorization: Bearer qbt_xxx` header，stateless，
+     不用调 /auth/login。Preferences → WebUI → API Key 段生成。
+  2. **Username/Password** —— 传统 cookie 会话；仍要求 qB 5.2+。
 """
 import logging
 from typing import Dict, List, Optional
@@ -103,11 +109,14 @@ class QBittorrentClient:
         return self.login()
 
     # ============================================================================
-    # 版本探测 —— 缓存一次结果，给端点自适应用
+    # 版本探测 —— 启动时校验最低 5.2+，结果缓存
     # ============================================================================
 
+    # qB 5.2.0 对应 webapi 2.11.4（5.2.0 本身是 2.11.4，5.2.x 走 2.11.x）
+    MIN_WEBAPI = (2, 11, 4)
+
     def _webapi_version(self) -> Optional[tuple]:
-        """探测 /api/v2/app/webapiVersion，返回 (major, minor, [patch]) 元组。失败返 None。
+        """探测 /api/v2/app/webapiVersion，返回 (major, minor, patch) 元组。失败返 None。
         结果实例缓存，重复调用零开销。"""
         cached = getattr(self, '_cached_webapi_version', '__unset__')
         if cached != '__unset__':
@@ -125,19 +134,31 @@ class QBittorrentClient:
                 if parts:
                     result = parts
         except Exception as e:
-            logger.warning(f"探测 qB webapiVersion 失败（按 4.x 保守处理）: {e}")
+            logger.warning(f"探测 qB webapiVersion 失败: {e}")
         self._cached_webapi_version = result
         return result
 
-    def _is_v5_api(self) -> bool:
-        """webapi ≥ 2.11 ⇔ qB ≥ 5.0 ⇔ 用 stop/start 端点 + add 的 stopped 参数。
+    def check_min_version(self) -> bool:
+        """检查 qB 版本是否满足最低要求（5.2+ / webapi 2.11.4+）。
 
-        探测失败保守按 4.x 处理（用老 pause/resume 端点；qB 4.x 老版本上仍能跑）。
+        调用方：第一次实际使用 client 前调一次；不满足时返回 False 并打 ERROR。
+        探测失败（网络 / 老到没有 webapiVersion 端点）也按不满足处理 —— 安全优先。
         """
         v = self._webapi_version()
-        if not v or v[0] != 2:
+        if not v:
+            logger.error(
+                "qBittorrent webapiVersion 探测失败 —— 可能版本太老（< 5.0 没有该端点）。"
+                "本项目要求 qB 5.2+（webapi 2.11.4+），低版本无 API Key 认证存在安全风险。"
+            )
             return False
-        return v[1] >= 11
+        if v < self.MIN_WEBAPI:
+            logger.error(
+                f"qBittorrent webapi 版本 {'.'.join(map(str, v))} < "
+                f"{'.'.join(map(str, self.MIN_WEBAPI))}，本项目要求 qB 5.2+。"
+                f"原因：老版本无 API Key 认证，存在被植入挖矿木马的安全风险。"
+            )
+            return False
+        return True
 
     def add_torrent(
         self,
@@ -182,9 +203,8 @@ class QBittorrentClient:
         if tags:
             data['tags'] = ','.join(tags)
         if paused:
-            # qB 5.0+：参数名 paused → stopped（issue #22766: paused=true 在 5.x 不再生效）。
-            # 4.x：用 paused。版本探测失败按 4.x 保守。
-            data['stopped' if self._is_v5_api() else 'paused'] = 'true'
+            # qB 5.0+ 参数名 stopped（paused=true 在 5.x 不再生效，issue #22766）
+            data['stopped'] = 'true'
         if download_limit is not None:
             data['dlLimit'] = str(int(download_limit))
         if skip_checking:
@@ -335,16 +355,15 @@ class QBittorrentClient:
         列出所有种子。
 
         filter_status: all | downloading | seeding | completed | stopped | active | inactive
-          - 调用方传 'paused' 会自适应：5.0+ 自动改成 'stopped'（5.0+ paused filter 行为
-            不稳定，issue #21476），4.x 保持原样
+          - 调用方仍可传 'paused'（旧字面）→ 自动规范化为 'stopped'（5.0+ 唯一稳定写法）
         """
         if not self._ensure_login():
             return []
 
         params: Dict = {}
         if filter_status:
-            # 'paused' 是 4.x 用语，5.0+ 推荐 'stopped'（兼容性更好）
-            if filter_status == 'paused' and self._is_v5_api():
+            # 'paused' 是 4.x 旧字面，5.0+ 用 'stopped'（filter 行为更稳，issue #21476）
+            if filter_status == 'paused':
                 filter_status = 'stopped'
             params['filter'] = filter_status
 
@@ -361,13 +380,12 @@ class QBittorrentClient:
             return []
 
     def pause(self, torrent_hash: str) -> bool:
-        """暂停种子。qB 5.0+ 端点是 /torrents/stop，4.x 是 /torrents/pause（4.x 老端点在 5.x 返 404）。"""
-        action = 'stop' if self._is_v5_api() else 'pause'
-        return self._action(action, torrent_hash)
+        """暂停种子（qB 5.0+ 端点 /torrents/stop；老 /torrents/pause 已弃用）"""
+        return self._action('stop', torrent_hash)
 
     def resume(self, torrent_hash: str) -> bool:
-        """恢复种子。qB 5.0+ 端点是 /torrents/start，4.x 是 /torrents/resume。"""
-        action = 'start' if self._is_v5_api() else 'resume'
+        """恢复种子（qB 5.0+ 端点 /torrents/start；老 /torrents/resume 已弃用）"""
+        action = 'start'
         return self._action(action, torrent_hash)
 
     def delete(self, torrent_hash: str, delete_files: bool = False) -> bool:
