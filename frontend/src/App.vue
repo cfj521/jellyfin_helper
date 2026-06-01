@@ -5,116 +5,64 @@
 
     <!-- 正常布局 -->
     <el-container v-else class="app-container">
-      <!-- 侧边栏 -->
-      <el-aside width="220px" class="app-aside">
-        <div class="logo">
-          <el-icon :size="28"><MagicStick /></el-icon>
-          <span>Jellyfin Helper</span>
-        </div>
+      <!-- Mobile 顶栏：≤768px 显示 -->
+      <header class="mobile-topbar">
+        <el-icon class="hamburger" :size="26" @click="drawerOpen = true">
+          <Expand />
+        </el-icon>
+        <span class="mobile-title">Jellyfin Helper</span>
+      </header>
 
-        <el-menu
-          :default-active="$route.path"
-          router
-          class="app-menu"
+      <el-container class="app-body">
+        <!-- Desktop 侧栏：>768px 显示 -->
+        <el-aside width="180px" class="app-aside desktop-only">
+          <AppSidebar />
+        </el-aside>
+
+        <!-- Mobile drawer：≤768px 用，hamburger 打开 -->
+        <el-drawer
+          v-model="drawerOpen"
+          direction="ltr"
+          :with-header="false"
+          size="240px"
+          class="mobile-drawer-wrap"
         >
-          <el-menu-item index="/medialibraries">
-            <el-icon><Collection /></el-icon>
-            <span>媒体库</span>
-          </el-menu-item>
+          <AppSidebar />
+        </el-drawer>
 
-          <el-menu-item index="/discover">
-            <el-icon><TrendCharts /></el-icon>
-            <span>热门推荐</span>
-          </el-menu-item>
+        <!-- 主内容区（keep-alive include 的组件切换时不卸载，状态保留） -->
+        <el-main class="app-main">
+          <router-view v-slot="{ Component }">
+            <transition name="fade" mode="out-in">
+              <keep-alive :include="['TorrentSearch', 'Trending']">
+                <component :is="Component" />
+              </keep-alive>
+            </transition>
+          </router-view>
 
-          <el-menu-item index="/resourcesearch">
-            <el-icon><Search /></el-icon>
-            <span>资源搜索</span>
-          </el-menu-item>
-
-          <el-menu-item index="/downloadpipeline">
-            <el-icon><Download /></el-icon>
-            <span>下载流水线</span>
-          </el-menu-item>
-
-          <el-menu-item index="/tasks" class="tasks-menu-item">
-            <el-icon><List /></el-icon>
-            <span>任务管理</span>
-          </el-menu-item>
-
-          <el-menu-item index="/settings" class="settings-menu-item">
-            <el-icon><Setting /></el-icon>
-            <span>设置</span>
-          </el-menu-item>
-        </el-menu>
-
-        <!-- 主题切换 + 用户 -->
-        <div class="sidebar-footer">
-          <div class="theme-picker">
-            <el-tooltip
-              v-for="t in themes"
-              :key="t.key"
-              :content="t.name"
-              placement="top"
-              :show-after="300"
-            >
-              <div
-                class="theme-dot"
-                :class="{ active: currentTheme === t.key }"
-                :style="{ '--dot-color': t.color }"
-                @click="setTheme(t.key)"
-              />
-            </el-tooltip>
-          </div>
-          <div class="user-bar" v-if="currentUser">
-            <span class="user-name">{{ currentUser.username }}</span>
-            <el-tooltip content="退出登录" placement="top" :show-after="300">
-              <el-icon class="logout-btn" @click="handleLogout"><SwitchButton /></el-icon>
-            </el-tooltip>
-          </div>
-        </div>
-      </el-aside>
-
-      <!-- 主内容区（无 header，主内容直接占满）-->
-      <!-- keep-alive include：列出来的组件 name 在切换其他页面时不卸载，状态保留。
-           Downloads 不能进，因为它的轮询 timer 用 onMounted/onUnmounted 管理。
-           Search 是首选 —— 用户来回切不应该丢搜索结果和分页位置。 -->
-      <el-main class="app-main">
-        <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <keep-alive :include="['TorrentSearch', 'Trending']">
-              <component :is="Component" />
-            </keep-alive>
-          </transition>
-        </router-view>
-
-        <!-- 回到顶部：滚动 .app-main（全站统一滚动容器）超过 200px 显示，hover 出 tooltip -->
-        <el-tooltip content="回到顶部" placement="left" :show-after="300">
-          <el-backtop target=".app-main" :visibility-height="200" :right="40" :bottom="40" />
-        </el-tooltip>
-      </el-main>
+          <!-- 回到顶部：滚动 .app-main（全站统一滚动容器）超过 200px 显示 -->
+          <el-tooltip content="回到顶部" placement="left" :show-after="300">
+            <el-backtop target=".app-main" :visibility-height="200" :right="40" :bottom="40" />
+          </el-tooltip>
+        </el-main>
+      </el-container>
     </el-container>
   </el-config-provider>
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { useTheme } from '@/composables/useTheme'
+import AppSidebar from '@/components/AppSidebar.vue'
 
-const router = useRouter()
-const { themes, current: currentTheme, setTheme } = useTheme()
+const route = useRoute()
+const drawerOpen = ref(false)
 
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user') || 'null') } catch { return null }
+// 切换路由时自动关 mobile drawer（避免点完菜单 drawer 还遮挡）
+watch(() => route.path, () => {
+  drawerOpen.value = false
 })
-
-function handleLogout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-  router.push('/login')
-}
 </script>
 
 <style lang="scss">
@@ -123,6 +71,17 @@ function handleLogout() {
 // ============ 容器 ============
 .app-container {
   height: 100vh;
+  flex-direction: column;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;   // 让内部 flex 子元素能正确滚动
+}
+
+// ============ Mobile topbar（默认隐藏） ============
+.mobile-topbar {
+  display: none;
 }
 
 // ============ 侧边栏 ============
@@ -283,8 +242,8 @@ function handleLogout() {
 
   .logout-btn {
     cursor: pointer;
-    font-size: 18px;
-    opacity: 0.6;
+    font-size: 20px;
+    opacity: 0.75;
     transition: all 0.2s;
 
     &:hover {
@@ -316,20 +275,77 @@ function handleLogout() {
   }
 }
 
-// ============ 主内容 ============
-.app-main {
-  background: var(--jt-content-bg);
-  padding: 20px;
+// ============ Mobile drawer 容器样式 ============
+// 让 drawer 内部塞下 AppSidebar 时跟桌面 aside 视觉一致
+.el-drawer.mobile-drawer-wrap {
+  background: var(--jt-sidebar-bg);
+
+  .el-drawer__body {
+    padding: 0;
+    overflow: hidden;
+  }
 }
 
-// ============ 路由切换动画 ============
+// ============ 主内容区 ============
+.app-main {
+  background: var(--jt-content-bg, #f5f7fa);
+  padding: 20px;
+  overflow-y: auto;
+}
+
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s;
 }
 
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+// ============ Mobile 响应式切换 ============
+@media (max-width: 768px) {
+  // Desktop sidebar 隐藏
+  .desktop-only {
+    display: none !important;
+  }
+
+  // Mobile topbar 显示
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 16px;
+    background: var(--jt-logo-bg, linear-gradient(135deg, var(--jt-brand) 0%, var(--jt-accent) 100%));
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    flex-shrink: 0;
+
+    .hamburger {
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 4px;
+      transition: background 0.15s;
+
+      &:active {
+        background: rgba(255, 255, 255, 0.15);
+      }
+    }
+
+    .mobile-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+  }
+
+  // 主内容区 padding 减小，给小屏幕让路
+  .app-main {
+    padding: 12px 10px;
+  }
 }
 </style>
