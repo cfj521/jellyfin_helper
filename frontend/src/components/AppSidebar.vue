@@ -2,9 +2,11 @@
   <div class="app-sidebar">
     <div class="logo">
       <el-icon :size="28"><MagicStick /></el-icon>
-      <span>Jellyfin Helper</span>
+      <div class="logo-text">
+        <span class="logo-title">Jellyfin Helper</span>
+        <span class="logo-version">v{{ appVersion }}</span>
+      </div>
     </div>
-    <div class="version-tag">v{{ appVersion }}</div>
 
     <el-menu
       :default-active="$route.path"

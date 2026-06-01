@@ -105,20 +105,25 @@ watch(() => route.path, () => {
   background: var(--jt-logo-bg, linear-gradient(135deg, var(--jt-brand) 0%, var(--jt-accent) 100%));
   position: relative;
 
-  span {
+  .logo-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1.15;
+  }
+
+  .logo-title {
     white-space: nowrap;
   }
-}
 
-.version-tag {
-  padding: 6px 0 8px;
-  text-align: center;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.5px;
-  color: var(--jt-sidebar-text);
-  opacity: 0.5;
-  user-select: none;
+  .logo-version {
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.4px;
+    opacity: 0.7;
+    margin-top: 2px;
+    user-select: none;
+  }
 }
 
 // ============ 菜单 ============
