@@ -20,6 +20,14 @@ _LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 # 日志落盘：logs/jellyfin-helper.log，rotate 20MB × 10 个 = 最多 200MB 历史
 # 这次 !!unorganized 事故就是因为只有 stdout、终端关掉就没证据，必须留盘
 _ROOT_DIR = Path(__file__).parent.parent
+
+# 版本号 single source of truth：项目根的 VERSION 文件
+# 同时被 frontend/vite.config.js 注入到 __APP_VERSION__；改这里一处
+try:
+    APP_VERSION = (_ROOT_DIR / 'VERSION').read_text(encoding='utf-8').strip()
+except OSError:
+    APP_VERSION = '0.0.0'
+
 _LOG_DIR = _ROOT_DIR / 'logs'
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_FILE = _LOG_DIR / 'jellyfin-helper.log'
@@ -266,7 +274,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Jellyfin Tools",
     description="Jellyfin 媒体服务器工具集 Web API",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan
 )
 

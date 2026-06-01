@@ -110,6 +110,17 @@ watch(() => route.path, () => {
   }
 }
 
+.version-tag {
+  padding: 6px 0 8px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  color: var(--jt-sidebar-text);
+  opacity: 0.5;
+  user-select: none;
+}
+
 // ============ 菜单 ============
 .app-menu {
   flex: 1;

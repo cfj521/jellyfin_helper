@@ -38,7 +38,15 @@ function loadPorts() {
 const ports = loadPorts()
 console.log(`[vite] frontend dev port: ${ports.frontend}, backend proxy: http://localhost:${ports.backend}`)
 
+// 版本号 single source of truth：项目根的 VERSION 文件
+// 同时被 backend/main.py 读取；改 ../VERSION 一处，前后端一致
+// 用法：在 .vue 里直接写 __APP_VERSION__
+const APP_VERSION = fs.readFileSync(path.resolve(__dirname, '../VERSION'), 'utf-8').trim()
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   plugins: [vue()],
   resolve: {
     alias: {

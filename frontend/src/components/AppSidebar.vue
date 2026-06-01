@@ -4,6 +4,7 @@
       <el-icon :size="28"><MagicStick /></el-icon>
       <span>Jellyfin Helper</span>
     </div>
+    <div class="version-tag">v{{ appVersion }}</div>
 
     <el-menu
       :default-active="$route.path"
@@ -84,6 +85,8 @@ import { useTheme } from '@/composables/useTheme'
 
 const router = useRouter()
 const { themes, current: currentTheme, setTheme } = useTheme()
+
+const appVersion = __APP_VERSION__
 
 const currentUser = computed(() => {
   try { return JSON.parse(localStorage.getItem('user') || 'null') } catch { return null }
