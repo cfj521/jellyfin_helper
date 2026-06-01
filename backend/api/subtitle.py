@@ -64,7 +64,7 @@ class DownloadRequest(BaseModel):
 class AutoFixRequest(BaseModel):
     """一条龙：（可选复用最近）扫描 → 下载缺失字幕 → （可选）刷新 Jellyfin。
 
-    重命名对齐已**默认关闭**：下载器现在用 BCP 47 落盘命名（zh-Hans / zh-Hant），
+    重命名对齐已**默认关闭**：下载器现在用 BCP 47 落盘命名（zh-CN / zh-TW），
     刚下完的字幕一定带正确 lang 后缀；目录里"用户手放的裸名字幕"由独立的
     「字幕文件名对齐」按钮处理。"""
     path: Optional[str] = None
@@ -1852,7 +1852,7 @@ def multi_download(request: MultiDownloadRequest):
         preferred = request.downloading_langs or settings.downloading_langs or ['chs']
         lang = preferred[0] if preferred else 'chs'
         # 输出名 <stem>.<lang>.srt（OpenSubtitles 多数字幕是 .srt）
-        # 落盘 token：chs → zh-Hans / cht → zh-Hant，让 Jellyfin 正确识别
+        # 落盘 token：chs → zh-CN / cht → zh-TW，Jellyfin + PotPlayer 都能识别
         target = video_path.parent / f"{video_path.stem}.{internal_to_filename_token(lang)}.srt"
         if target.exists() and not request.overwrite:
             return {

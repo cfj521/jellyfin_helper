@@ -150,7 +150,7 @@ class _OpenSubtitlesProvider(_Provider):
         _SUB_EXT_WHITELIST = {'.srt', '.ass', '.ssa', '.sub', '.vtt', '.sup', '.idx', '.smi'}
         declared_fmt = (attrs.get('format') or attrs.get('subtitle_format') or '').lower().lstrip('.')
         ext = f'.{declared_fmt}' if f'.{declared_fmt}' in _SUB_EXT_WHITELIST else '.srt'
-        # 落盘 token：chs → zh-Hans / cht → zh-Hant，让 Jellyfin 正确识别
+        # 落盘 token：chs → zh-CN / cht → zh-TW，Jellyfin + PotPlayer 都能识别
         filename_lang = internal_to_filename_token(lang_code)
         output_name = f"{video_path.stem}.{filename_lang}{ext}"
         output_path = video_path.parent / output_name
@@ -427,7 +427,7 @@ class _ShooterProvider(_Provider):
         if not link:
             return {"status": "not_found"}
 
-        # 落盘 token：chs → zh-Hans / cht → zh-Hant；其它语言不变
+        # 落盘 token：chs → zh-CN / cht → zh-TW；其它语言不变
         output_name = f"{video_path.stem}.{internal_to_filename_token(best.language)}{ext}"
         target = video_path.parent / output_name
         if target.exists():
