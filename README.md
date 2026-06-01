@@ -1,23 +1,5 @@
 # Jellyfin Helper
 
-围绕 Jellyfin 的自动化辅助工具集，把"**找资源 → 下载 → 入库 → 元数据/字幕/音轨修复**"
-整条链路用一个 Web 后台串起来。**不是 Sonarr/Radarr/Bazarr 的替代品**，而是把
-它们 + 国内场景常见的工具（豆瓣评分、JavBus/JavDB、ASSRT 字幕、Jackett）按个人
-偏好揉成一套。
-
----
-
-> ## ⚠️ 前置提醒：需要"魔法上网"
->
-> 项目深度依赖境外服务（TMDB / Trakt / AniList / OpenSubtitles / IMDB / MDBList /
-> Wikidata 等），**没有稳定的科学上网链路用户体验会很差**——多数源会超时或被
-> 地理屏蔽。强烈建议在路由器层做透明代理（OpenClash / mihomo 等），把整个
-> jellyfin-helper 主机的出站流量按域名分流。本项目代码层**不处理代理逻辑**，
-> 默认假定网络是通的，所以连不通的报错都按上游故障处理而非代理配置。
-
-> 项目仍在密集迭代。schema 变更时通常**直接清表重扫**而不是写迁移脚本，
-> 部署到生产请自行评估并做好数据备份。
-
 ---
 
 ## 三大核心功能
@@ -34,6 +16,8 @@
   分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测
 - **音轨管理**：MKV 默认音轨按语种偏好批量设置；汉语 / 未识别轨例外保护
 - **维护工具**：配置 Web 编辑（保存自动备份）、Sample 清理、强制重扫、日志查看、统计
+- **成人内容（可选）**：番号识别、JavBus / JavDB / AVBase / MissAV 多源刮削、
+  女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护
 
 ### 2. 资源（多种）发现与搜索
 
@@ -44,8 +28,6 @@
   + 豆瓣，统一存 `media_ratings`，每家独立 TTL；前端融合显示
 - **资源搜索**：Jackett 跨 indexer 聚合，结果分类 + 大小 / Seeders 排序，
   一键推送到下载流水线
-- **成人内容（可选）**：番号识别、JavBus / JavDB / AVBase / MissAV 多源刮削、
-  女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护
 
 ### 3. 下载流水线
 
@@ -60,6 +42,19 @@
   磁盘配额阈值触发硬清；保护用户做种数据
 - **任务系统**：后台任务 + SSE 实时进度 + 取消 + shutdown 联动；
   前端任务详情页可展开各步明细
+
+---
+
+> ## ⚠️ 前置提醒：需要"魔法上网"
+>
+> 项目深度依赖境外服务（TMDB / Trakt / AniList / OpenSubtitles / IMDB / MDBList /
+> Wikidata 等），**没有稳定的科学上网链路用户体验会很差**——多数源会超时或被
+> 地理屏蔽。强烈建议在路由器层做透明代理（OpenClash / mihomo 等），把整个
+> jellyfin-helper 主机的出站流量按域名分流。本项目代码层**不处理代理逻辑**，
+> 默认假定网络是通的，所以连不通的报错都按上游故障处理而非代理配置。
+
+> 项目仍在密集迭代。schema 变更时通常**直接清表重扫**而不是写迁移脚本，
+> 部署到生产请自行评估并做好数据备份。
 
 ---
 
@@ -277,6 +272,41 @@ conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 
 验证：命令行 `ffprobe -version` / `mkvpropedit --version` / `bsdtar --version` 输出版本号即可。
 也可以直接打开 **前端 → 配置 → 可用性检测**，本地环境列里一目了然哪个工具在 PATH 上。
+
+---
+
+## 文件系统权限
+
+后端进程运行的用户（systemd `User=` / Docker `user:` / 裸跑时的 shell 用户）必须有以下访问权限。**这是最常见的"看起来跑起来了但功能没动作"根因**：
+
+| 路径 | 需要权限 | 用途 | 配错时的症状 |
+|---|---|---|---|
+| Jellyfin SQLite（如 `/var/lib/jellyfin/data/jellyfin.db`） | **读** | `path → item` 反查直读加速（可选，4ms vs REST 1500ms） | 启动日志 `PermissionError`；运行时 fallback 到 REST，慢 100× |
+| qB 下载目录（如 `/download`） | **读 + 写** | 入库时 mv/cp 源文件；软清/硬清 `rm` 完成种子；磁盘配额监视 | 流水线搬不动文件；日志 `配额: 后端 stat 不到 '/download'，禁用配额监视/清理` |
+| Jellyfin 媒体库目录（如 `/library/videos`） | **读 + 写** | dispatch 入库写文件 + 落 NFO/poster；adult_scanner 探测本地附件 | 入库失败；NFO / poster 不落地；扫描结果"看见文件但识别不到" |
+
+**典型 systemd 部署**（推荐）：让后端用户加入 `jellyfin` 组，继承 jellyfin DB 默认 640 权限即可读；库目录用 group ownership + 775：
+
+```ini
+# /etc/systemd/system/jellyfin-helper.service.d/user.conf
+[Service]
+User=jellyfin_helper
+Group=jellyfin
+UMask=0002
+```
+
+```bash
+# 把后端用户加入 jellyfin 组（如果库目录归 jellyfin 用户）
+sudo usermod -aG jellyfin jellyfin_helper
+
+# 验证：以后端用户身份读 jellyfin DB / 写库目录
+sudo -u jellyfin_helper sqlite3 /var/lib/jellyfin/data/jellyfin.db ".tables" | head
+sudo -u jellyfin_helper touch /library/videos/_perm_test && rm /library/videos/_perm_test
+```
+
+**Docker 部署**：`docker-compose.yml` 里 `user: "1000:1000"` 跟挂载的宿主机目录 owner/group 对齐；或者在 entrypoint 里 `chown` 让数据卷 ownership 跟进。
+
+**裸跑（开发期）**：图省事可以 `sudo -u jellyfin python -m backend.run`，免去权限协调；生产不推荐共享 shell 用户。
 
 ---
 
