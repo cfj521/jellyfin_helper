@@ -207,7 +207,8 @@ def update_config_yaml(qb_api_key: str, jackett_api_key: str) -> None:
     data['qbittorrent']['api_key'] = qb_api_key
 
     data.setdefault('jackett', {})
-    data['jackett']['url'] = 'http://jackett:9117'
+    # backend/config.py 读的字段名是 host（不是 url），写错了 helper 找不到 jackett
+    data['jackett']['host'] = 'http://jackett:9117'
     data['jackett']['api_key'] = jackett_api_key
 
     # 额外把 database / jellyfin 容器名同步好，省用户手改

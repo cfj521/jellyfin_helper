@@ -92,13 +92,16 @@ services:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-Asia/Shanghai}
-      WEBUI_PORT: ${QB_WEBUI_PORT:-8080}
+      # WEBUI_PORT 容器内固定 8080，不跟 .env 的 QB_WEBUI_PORT 走——否则
+      # helper / bootstrap 写死的 http://qbittorrent:8080 会连不上。
+      # 改宿主端口只动下面 ports 映射的左半边即可。
+      WEBUI_PORT: 8080
       TORRENTING_PORT: ${QB_TORRENT_PORT:-6881}
     volumes:
       - ./data/qbittorrent:/config
       - ${DOWNLOADS_DIR:?DOWNLOADS_DIR 必须在 .env 中设置（宿主下载目录）}:/downloads
     ports:
-      - "${QB_WEBUI_PORT:-8080}:${QB_WEBUI_PORT:-8080}"
+      - "${QB_WEBUI_PORT:-8080}:8080"
       - "${QB_TORRENT_PORT:-6881}:${QB_TORRENT_PORT:-6881}"
       - "${QB_TORRENT_PORT:-6881}:${QB_TORRENT_PORT:-6881}/udp"
 

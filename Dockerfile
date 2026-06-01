@@ -53,7 +53,6 @@ RUN pip install -r requirements.txt
 COPY backend/  ./backend/
 COPY common/   ./common/
 COPY tools/    ./tools/
-COPY src/      ./src/
 COPY VERSION   ./VERSION
 
 # 前端构建产物

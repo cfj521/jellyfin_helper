@@ -66,10 +66,25 @@ cp config.yaml.example config.yaml
 **Postgres / Jackett / qBittorrent / Jellyfin 这四样不用动**——下一步 bootstrap
 脚本会自动把它们的容器内地址和 API Key 写回来。
 
-### 3. 一次性 bootstrap（关键一步）
+### 3. 预创建数据目录（首次部署，**必须**）
+
+bind mount 的源目录如果不存在，docker daemon 会以 **root** 创建——但 helper /
+bootstrap 容器以 `${PUID}:${PGID}` 启动写不进 root 拥有的目录，启动会直接报
+"data 不可写"退出。所以首次部署前手动建好并 chown：
 
 ```bash
-# 3a. 预填 qbittorrent / jackett 的配置（生成 admin/jellyfin_helper 密码 + API Key）
+mkdir -p data/{postgres,jellyfin,jackett,qbittorrent,helper} logs
+
+# Linux / macOS：把属主改成 .env 里的 PUID:PGID
+sudo chown -R 1000:1000 data logs       # 改成你的 PUID:PGID
+```
+
+Windows + Docker Desktop 一般不存在这个问题（bind mount 走 SMB 转换层，权限模型不同）。
+
+### 4. 一次性 bootstrap（关键一步）
+
+```bash
+# 4a. 预填 qbittorrent / jackett 的配置（生成 admin/jellyfin_helper 密码 + API Key）
 docker compose --profile bootstrap run --rm bootstrap
 
 # 3b. 拉起所有服务
@@ -92,7 +107,7 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
 - 把以上 API Key 与容器内地址 (`postgres` / `jellyfin:8096` / `jackett:9117` /
   `qbittorrent:8080`) 回写到 `config.yaml`，并备份原文件
 
-### 4. 拿 Jellyfin API Key
+### 5. 拿 Jellyfin API Key
 
 只有 Jellyfin 需要手动拿 Key（因为它有 Setup Wizard 必须走一遍）：
 
@@ -102,11 +117,11 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
 3. 填进 `config.yaml` 的 `jellyfin.api_key`
 4. `docker compose restart helper`
 
-### 5. 访问 jellyfin-helper
+### 6. 访问 jellyfin-helper
 
 浏览器打开 `http://<宿主IP>:8099`，用 `config.yaml` 里 `auth.users` 配的账号登录。
 
-### 6.（可选）改后台密码
+### 7.（可选）改后台密码
 
 - qBittorrent / Jackett 的 Web UI 都已经能用 `admin` / `jellyfin_helper` 登录
   （Jackett 默认没强制密码，可在它 UI 里加）
