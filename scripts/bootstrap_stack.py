@@ -608,9 +608,9 @@ def main() -> int:
         description='jellyfin-helper docker stack bootstrap',
         epilog=(
             '使用流程：\n'
-            '  1. docker compose --profile bootstrap run --rm bootstrap --phase prep\n'
+            '  1. docker compose --profile bootstrap run --rm bootstrap-prep\n'
             '  2. docker compose up -d\n'
-            '  3. docker compose --profile bootstrap run --rm bootstrap --phase connect\n'
+            '  3. docker compose --profile bootstrap run --rm bootstrap-connect\n'
             '  4. docker compose restart helper\n'
             '\n'
             '两个阶段都幂等，反复跑安全。'
@@ -637,7 +637,7 @@ def main() -> int:
         log('prep 完成。接下来：')
         log('    docker compose up -d')
         log('服务起来后跑 connect：')
-        log('    docker compose --profile bootstrap run --rm bootstrap --phase connect')
+        log('    docker compose --profile bootstrap run --rm bootstrap-connect')
         log('-' * 60)
     else:  # connect
         run_connect()

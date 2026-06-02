@@ -177,7 +177,7 @@ cp config.yaml.example config.yaml && $EDITOR config.yaml
 # 3) bootstrap phase prep：预填 qb/jackett 配置 + 回写 config.yaml
 #    bootstrap / helper 容器以 root 启动，entrypoint 自动 chown
 #    ./data/* 和 ./logs 到 PUID:PGID，**不需要手动 mkdir / chown**
-docker compose --profile bootstrap run --rm bootstrap --phase prep
+docker compose --profile bootstrap run --rm bootstrap-prep
 
 # 4) 起 5 个服务
 docker compose up -d
@@ -185,7 +185,7 @@ docker compose up -d
 # 5) bootstrap phase connect：连 Jackett 加 7 个 indexer + 跑 Jellyfin
 #    Setup Wizard + 申请 API Key 回写 config.yaml
 #    （52BT / dmhy / OneJAV / ThePirateBay / TheRARBG / TorrentKitty / YTS）
-docker compose --profile bootstrap run --rm bootstrap --phase connect
+docker compose --profile bootstrap run --rm bootstrap-connect
 
 # 6) 让 helper 重读 config.yaml
 docker compose restart helper

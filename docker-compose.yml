@@ -20,6 +20,37 @@ networks:
     name: jellyfin-helper-net
     driver: bridge
 
+# bootstrap-prep / bootstrap-connect 共享的配置（DRY）
+x-bootstrap-common: &bootstrap-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: jellyfin-helper:local
+  profiles: ["bootstrap"]
+  # 以 root 启动，entrypoint chown /workspace/data 后 gosu 降权
+  environment:
+    TZ: ${TZ:-Asia/Shanghai}
+    PUID: ${PUID:-1000}
+    PGID: ${PGID:-1000}
+    BOOTSTRAP_ROOT: /workspace
+    QB_URL: http://qbittorrent:8080
+    JACKETT_URL: http://jackett:9117
+    QB_WEBUI_PORT: ${QB_WEBUI_PORT:-8080}
+    # Postgres 密码必须显式透传：bootstrap 写 config.yaml.database.password
+    # 时用的就是这个值。docker-compose 不会自动把 .env 变量塞进容器。
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jellyfin_helper}
+    # 复用 helper 的 docker-entrypoint.sh：bootstrap 不依赖 postgres，
+    # 且数据路径在 /workspace/data 而不是 /app/data，用 env 调整
+    CHOWN_DIRS: "/workspace/data"
+    SKIP_WAIT_POSTGRES: "1"
+    SKIP_MEDIA_CHECK: "1"
+  volumes:
+    - ./data:/workspace/data
+    - ./config.yaml:/workspace/config.yaml
+    - ./scripts:/workspace/scripts:ro
+  working_dir: /workspace
+  restart: "no"
+
 services:
   # ─────────────────────────────────────────────────────
   # PostgreSQL 16 — jellyfin-helper 业务库
@@ -154,44 +185,21 @@ services:
   # ─────────────────────────────────────────────────────
   # bootstrap — 一次性初始化（profile 隔离，默认不启）
   #
-  # 跑法：
-  #   docker compose --profile bootstrap run --rm bootstrap
+  # 拆成两个 service，phase 写死在 command 里（不靠命令行传参——
+  # `docker compose run SVC --phase x` 会用 `--phase x` 整个替换掉
+  # command，导致 entrypoint 收到的不是 python 脚本而是裸 flag）：
   #
-  # 它会：
-  #   1. 预填 qBittorrent.conf（admin / jellyfin_helper、API Key、RSS 开）
-  #   2. 预填 Jackett ServerConfig.json（API Key）
-  #   3. Jackett 启动后添加 7 个公开 indexer
-  #   4. 把两个 API Key 写回 config.yaml
-  # 幂等：重复跑不会覆盖已有 key；首次跑前 qb/jackett 不需要起
+  #   docker compose --profile bootstrap run --rm bootstrap-prep
+  #   docker compose up -d
+  #   docker compose --profile bootstrap run --rm bootstrap-connect
+  #   docker compose restart helper
+  #
+  # 两个阶段都幂等，重复跑安全。
   # ─────────────────────────────────────────────────────
-  bootstrap:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: jellyfin-helper:local
-    container_name: jh-bootstrap
-    profiles: ["bootstrap"]
-    # 同 helper：以 root 启动，entrypoint chown 后 gosu 降权
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
-      BOOTSTRAP_ROOT: /workspace
-      QB_URL: http://qbittorrent:8080
-      JACKETT_URL: http://jackett:9117
-      QB_WEBUI_PORT: ${QB_WEBUI_PORT:-8080}
-      # Postgres 密码必须显式透传：bootstrap 写 config.yaml.database.password
-      # 时用的就是这个值。docker-compose 不会自动把 .env 变量塞进容器。
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jellyfin_helper}
-      # 复用 helper 的 docker-entrypoint.sh：bootstrap 不依赖 postgres，
-      # 且数据路径在 /workspace/data 而不是 /app/data，用 env 调整
-      CHOWN_DIRS: "/workspace/data"
-      SKIP_WAIT_POSTGRES: "1"
-      SKIP_MEDIA_CHECK: "1"
-    volumes:
-      - ./data:/workspace/data
-      - ./config.yaml:/workspace/config.yaml
-      - ./scripts:/workspace/scripts:ro
-    working_dir: /workspace
-    command: ["python", "scripts/bootstrap_stack.py"]
-    restart: "no"
+  bootstrap-prep:
+    <<: *bootstrap-common
+    command: ["python", "scripts/bootstrap_stack.py", "--phase", "prep"]
+
+  bootstrap-connect:
+    <<: *bootstrap-common
+    command: ["python", "scripts/bootstrap_stack.py", "--phase", "connect"]
