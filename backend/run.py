@@ -12,8 +12,12 @@ from pathlib import Path
 
 import uvicorn
 
-# 让 backend.* 能被 import
-ROOT = Path(__file__).resolve().parent.parent.parent
+# 让 backend.* 能被 import。run.py 在 backend/ 层，父目录（含 backend 包）是
+# parent.parent —— 跟 backend/config.py、backend/main.py 的 ROOT_DIR 一致。
+# 注意 backend/api/*.py 在更深一层，那里才是 parent.parent.parent。
+# （原来误用 parent.parent.parent，容器里 /app/backend/run.py 会算到 /，
+#  导致 from backend.config 报 ModuleNotFoundError: No module named 'backend'）
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backend.config import settings
