@@ -3,34 +3,33 @@
 # config.yaml 已在 .gitignore 中排除，切勿提交到公开仓库。
 
 # ============================================================================
-# 认证（JWT + 用户列表）
+# 认证
 # ============================================================================
-# - secret_key：JWT 签名密钥；生产环境改成随机字符串
-#   (随机生成方法：python -c "import secrets; print(secrets.token_urlsafe(32))")
-# - token_expire_hours：登录态有效期；720 = 30 天
-# - users：硬编码账号列表；启动时同步进数据库 users 表，role 取 admin / guest
+# secret_key 随机生成：python -c "import secrets; print(secrets.token_urlsafe(32))"
+# token_expire_hours：登录有效期，720 = 30 天
+# users：账号列表，role 取 admin / guest
 auth:
   secret_key: "change-me-to-a-random-string"
   token_expire_hours: 720
   users:
-    # Docker：bootstrap 自动把密码设为 jellyfin_helper（如这里还是 CHANGE_ME）
-    # 想用别的密码：bootstrap 之前先在这里改好
+    # Docker：bootstrap 自动把 admin 密码设为 jellyfin_helper（这里若仍是 CHANGE_ME）
     - username: admin
       password: "CHANGE_ME"
       role: admin
-    # - username: guest
-    #   password: "guest"
-    #   role: guest
+    - username: guest
+      password: "guest"
+      role: guest
 
 # ============================================================================
-# 服务端口（前后端都从这里读）
-# 也可被环境变量 BACKEND_PORT / FRONTEND_PORT 临时覆盖
+# 服务端口
 # ============================================================================
 server:
-  backend_port: 8099      # 后端 (FastAPI / uvicorn) 监听端口
-  frontend_port: 5173     # 前端 (vite dev server) 端口
+  backend_port: 8099
+  frontend_port: 5173
 
-# 数据库配置 (PostgreSQL)
+# ============================================================================
+# PostgreSQL
+# ============================================================================
 database:
   host: "127.0.0.1"
   port: 5432
@@ -38,185 +37,164 @@ database:
   user: "jellyfin_helper"
   password: "CHANGE_ME"
 
-# Jellyfin 配置
-#   - Docker：bootstrap 自动跑 Setup Wizard（admin/jellyfin_helper）+ 申请
-#     API Key 写回这里，不需要手动填
-#   - 裸机：先在 Jellyfin Web → 控制台 → API Keys 新建一个填进 api_key
+# ============================================================================
+# Jellyfin
+# ============================================================================
+# Docker：bootstrap 自动跑 Setup Wizard（admin/jellyfin_helper）+ 申请 API Key
+# 裸机：Jellyfin Web → 控制台 → API Keys 新建后填入 api_key
 jellyfin:
   host: "http://127.0.0.1:8096"
-  # 公网访问地址（可选）：UI 在生成 Jellyfin 链接时优先用 external_url
-  # 仅服务端转发 / 浏览器跳转用，内部 API 调用始终走 host
+  # 公网访问地址（可选）：UI 生成跳转链接时优先用
   external_url: ""
-  api_key: "your_jellyfin_api_key"
-  # 可选：jellyfin SQLite 数据库本地可达路径（path → item 反查直读，绕开 REST API）
-  # 同机部署典型路径：/var/lib/jellyfin/data/jellyfin.db
-  # 跨主机走 SMB 挂载时填挂载点：W:/jellyfin/jellyfin.db
-  # 留空 → 全走 REST API（自动 fallback）
+  api_key: ""
+  # 可选：jellyfin SQLite 直读加速（同机部署填 /var/lib/jellyfin/data/jellyfin.db）
+  # 留空 → 全走 REST API
   db_path: ""
 
-# TMDB 配置（在 https://www.themoviedb.org/settings/api 申请）
+# ============================================================================
+# TMDB（必填，https://www.themoviedb.org/settings/api 申请）
+# ============================================================================
 tmdb:
-  api_key: "your_tmdb_api_key"
-  language: "zh-CN"         # 元数据语言（影响 title / overview 等）
+  api_key: ""
+  language: "zh-CN"
 
-# 路径映射（跨主机部署必备）
-# Jellyfin 在 Linux 上看到的路径 vs 后端在 Windows 上挂载的路径，二者需要互转。
-# 后端遍历规则按顺序匹配第一个命中即返回。
-# 留空 → 不做翻译，path 原样使用（同机部署不需要配）
+# ============================================================================
+# 路径映射（跨主机部署用；同机部署留 enabled: false）
+# ============================================================================
 path_mappings:
   enabled: false
   rules:
     # - { from: "/library/videos", to: "Z:/videos" }
-    # - { from: "/library/adult",  to: "Z:/adult" }
 
-# 系统级工具的可执行文件目录（**仅 Windows 用户需要配**；Linux/macOS 一般在 PATH 上）
-# 后端启动时会把这些目录追加到进程 PATH 最前面，让 ffmpeg/ffprobe/mkvpropedit 能被找到。
-# 留空 → 不修改 PATH，依赖系统 PATH 已有这些命令
+# ============================================================================
+# 系统工具路径（仅 Windows 需要，Linux/macOS 一般在 PATH 上）
+# ============================================================================
 tools:
   ffmpeg_dir: ""          # 例：Windows "C:/ffmpeg/bin"
   mkvtoolnix_dir: ""      # 例：Windows "C:/Program Files/MKVToolNix"
 
-# 缓存 TTL
-# 除了路径索引（30 秒，固定）外，所有可配缓存都在这里。
-# 改动需重启后端才生效。
+# ============================================================================
+# 缓存 TTL（改动后重启后端生效）
+# ============================================================================
 cache:
-  # TMDB 热门/详情等 API 响应
   tmdb_minutes: 120
-  # 库信息缓存（天）：媒体库统计 / 剧集树形子节点 / Series 聚合摘要 / 缺字幕统计
-  # 共用此 TTL；整库手动刷新或重启后端可强制失效
   library_days: 7
 
-# Wikidata 配置（演员图兜底来源）
-# 公共知识库，无需 API Key；但 Wikimedia 基金会要求每次请求带可识别的 User-Agent，
-# 否则可能被 403。建议带上你的联系方式或仓库 URL。
+# ============================================================================
+# Wikidata（演员图兜底，无需 Key；user_agent 改成你的联系方式或仓库 URL）
+# ============================================================================
 wikidata:
   enabled: true
   user_agent: "JellyfinHelper/1.0 (your_email@example.com)"
-  # 搜索语言顺序：按列表依次尝试，命中第一个就停。中文名优先 zh，欧美名优先 en
   language_order: ["zh", "en"]
 
-# MDB List 配置（评分聚合：IMDB / RT / Metacritic / Trakt / Letterboxd 一次拿）
-# 在 https://mdblist.com/api 登录后生成 API Key（免费 1000 req/天）
+# ============================================================================
+# MDBList（评分聚合，https://mdblist.com/api 申请，免费 1000 req/天）
+# ============================================================================
 mdblist:
   enabled: true
-  api_key: "your_mdblist_api_key"
-  # 缓存有效期（天），过期后下次访问会自动重取
+  api_key: ""
   cache_ttl_days: 30
 
-# 豆瓣评分（无官方 API，HTML 爬虫，懒拉取后台慢慢爬）
-# 国内访问无需代理；如部署在墙外通常需要走代理（这里不配，由系统级 proxy 处理）
+# ============================================================================
+# 豆瓣评分（无需 Key；境外部署需走系统代理）
+# ============================================================================
 douban:
   enabled: true
-  # 缓存有效期（天）。豆瓣反爬严（5s/req），评分对老片基本不变，比 MDB List 拉得长
   cache_ttl_days: 60
-  # User-Agent，模拟真实浏览器；过期换一下即可
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# 元数据存储行为（media_metadata 实体表）
+# ============================================================================
+# 元数据存储
+# ============================================================================
 metadata:
-  store_douban_full: true           # 豆瓣完整字段（简介/演员/标签）落库
-  lru_keep_days: 365                # 长期未访问条目的 LRU 保留期
-  refresh_ttl_days: 30              # 刷新阈值（同条记录 N 天内不重新拉远端）
-  scrape_language: "en"             # 刮削语言（en 命中率更高，避免 zh-CN 漏数据）
-  display_language: "en"            # 前端默认显示语言
+  store_douban_full: true     # 豆瓣完整字段（简介/演员/标签）落库
+  lru_keep_days: 365          # 长期未访问条目的 LRU 保留期
+  refresh_ttl_days: 30        # 同条记录 N 天内不重新拉远端
+  scrape_language: "en"       # 刮削语言
+  display_language: "en"      # 前端默认显示语言
 
-# 字幕设置
+# ============================================================================
+# 字幕
+# ============================================================================
+# OpenSubtitles：https://www.opensubtitles.com/consumers 申请 API Consumer
+# ASSRT 射手：https://secure.assrt.net/usercp.php 注册账号拿 API Token
 subtitle:
-  # ── 字幕语言：两套配置，职责分明 ──
-  #
-  # required_langs：判定"缺字幕"用的原子单语言列表。任一缺即视为缺字幕。
-  #   UI 上是 checkbox。值域 chs / cht / eng / jpn / kor。
-  #   特殊：通用中文 'zh'（未指定简繁）在判定时同时覆盖 chs 和 cht，不会让用户既缺简又缺繁。
+  # 判定"缺字幕"用：任一缺即视为缺。值域 chs / cht / eng / jpn / kor / zh（zh 同时覆盖简繁）
   required_langs: ["chs", "eng"]
-  #
-  # downloading_langs：自动下载字幕时的优先级排序池（前优先），支持双语复合 chs.eng / cht.eng。
-  #   UI 上是可拖动排序池。例：抓双语包失败再退化到单简体 / 单英文。
+  # 自动下载优先级，支持双语复合 chs.eng / cht.eng
   downloading_langs: ["chs.eng", "chs", "eng"]
-  #
-  # OpenSubtitles.com（不是 .org，新版 REST API）
-  # 在 https://www.opensubtitles.com/consumers 申请 API Consumer
+
   opensubtitles_api_key: ""
   opensubtitles_username: ""
   opensubtitles_password: ""
-  # 射手字幕 assrt.net（中文字幕主力源）
-  # 注册账号后在 https://secure.assrt.net/usercp.php 拿到 API Token
   assrt_api_token: ""
-  # 字幕下载源优先级（按顺序尝试，第一个命中即返回）
-  # 支持的源：
-  #   shooter      - 射手网 hash 接口（中文电影命中高）
-  #   assrt        - 射手网 API（中文 / 多语言）
-  #   opensubtitles- OpenSubtitles 多语言
+
+  # 下载源优先级，按顺序尝试，第一个命中即返回
   sources:
     - { name: shooter,       enabled: true }
     - { name: assrt,         enabled: true }
     - { name: opensubtitles, enabled: true }
-  # 字幕格式偏好（评分排序用：靠前权重高）
   preferred_formats: ["srt", "ass", "ssa", "sub", "vtt"]
 
-# 音轨设置
+# ============================================================================
+# 音轨（MKV 默认音轨偏好）
+# ============================================================================
 audio:
-  # MKV 默认音轨偏好（按列表顺序匹配；当前默认是 chs 时会跳过避免误改）
   preferred_langs: ["chs", "eng"]
 
-# Jackett 配置（种子搜索聚合）
+# ============================================================================
+# Jackett（种子搜索聚合）
+# ============================================================================
+# Docker：bootstrap 自动生成 api_key 并回写
+# 裸机：Jackett UI 右上角直接显示 API Key
 jackett:
   host: "http://127.0.0.1:9117"
-  api_key: "your_jackett_api_key"
-  # 默认搜索关键词（前端搜索页 placeholder + 一键搜索的预设列表）
+  api_key: ""
   search_keywords: []
   default_keywords: ""
 
-# qBittorrent 配置（下载管理）
-# 注意：下载根路径在 dispatch.download_path 配，配额功能从那里读真实容量
-#
-# 认证：qB ≥ 5.2.0 强制 API Key（Bearer Token，stateless，不暴露密码）
-#   - Docker 部署：bootstrap 自动生成 api_key 并回写这里，不用手动操作
-#   - 裸机部署：qB Web UI → Preferences → WebUI → API Key 生成（qbt_ 开头 32 字符）
-# qB 5.2.0 以下版本不支持，README 已说明强制升级原因（弱密被植入挖矿木马的真实事件）
+# ============================================================================
+# qBittorrent（要求 5.2.0+，强制 API Key 认证）
+# ============================================================================
+# Docker：bootstrap 自动生成 api_key 并回写
+# 裸机：qB → Preferences → WebUI → API Key 生成（qbt_ 开头 32 字符）
 qbittorrent:
   host: "http://127.0.0.1:8080"
-  api_key: ""                      # qbt_xxx... 32 字符
+  api_key: ""
 
-  # 配额管理：limit 动态读 dispatch.download_path 真实容量（shutil.disk_usage）
-  # 后端 stat 不到下载盘 → 整个配额功能禁用（不监视、不强清，UI 灰态）
+  # 配额：limit 动态读 dispatch.download_path 真实容量
   quota:
     enabled: true
-    warn_threshold: 0.85        # 85% UI 提醒
-    cleanup_threshold: 0.95     # 95% 触发硬清
-    target_after_cleanup: 0.70  # 清回 70% 留余量
+    warn_threshold: 0.85          # 85% UI 提醒
+    cleanup_threshold: 0.95       # 95% 触发硬清
+    target_after_cleanup: 0.70    # 清回 70% 留余量
     check_interval_seconds: 300
 
-  # 做种策略：常规软清的判定条件
-  # 规则：state=stop（pausedUP/stoppedUP）+ 任一满足 → 清掉
-  #   A. 已完成 + ratio >= target_ratio
-  #   B. 完成距今 >= min_seed_days 天（物理时间，不看做种状态）
+  # 做种策略：状态停止 + (达到分享率 或 完成 N 天) 即可软清
   seeding:
-    target_ratio: 1.0           # 默认分享率（私有种用户可调高）
-    min_seed_days: 3            # 完成距今 N 天即可清（基于 qB completion_on）
-    # min_seed_hours_per_torrent 已弃用，代码不再读；保留兼容老 yaml
+    target_ratio: 1.0
+    min_seed_days: 3
     min_seed_hours_per_torrent: 24
     cleanup_interval_seconds: 3600
 
-# 入库流水线：完成后自动转移到 Jellyfin 库 + 字幕/音轨后处理
+# ============================================================================
+# 下载入库流水线（完成后自动转移 + 字幕/音轨后处理）
+# ============================================================================
+# duplicate_policy 取值：
+#   higher_quality_wins  - 新种子质量更高才覆盖（默认）
+#   always_skip          - 永远保留旧的
+#   always_replace       - 永远用新的
+#   needs_review         - 标记待人工决策
 dispatch:
   enabled: true
-  # 下载根路径（同时也是 qBittorrent 配额功能读取容量的目录）
   download_path: "/downloads"
   poll_interval_seconds: 30
-  # 孤儿种子认领周期（兜底处理 qB Web 直接加 / Jackett RSS 推过来的种子）
   adopt_interval_seconds: 300
-  # trash 目录过期清理周期
   trash_interval_seconds: 86400
-  worker_concurrency: 1         # 单 worker 串行
+  worker_concurrency: 1
   trash_dir: "/downloads/.trash"
   default_move_mode: copy
-  # 各分类的目标库 + 路径模板（library_id 在前端选）
-  # 转移模式由 default_move_mode 全局统一，rule 内不再单独配
-  # duplicate_policy 取值：
-  #   higher_quality_wins  - 新种子质量更高 → 旧入 trash 再覆盖；否则跳过（默认）
-  #   always_skip          - 永远保留旧的（番号场景默认）
-  #   always_replace       - 永远用新的（旧入 trash 兜底）
-  #   needs_review         - 标记待人工决策（在前端流水线页处理）
   rules:
     movie:
       library_id: ""
@@ -239,58 +217,45 @@ dispatch:
       file_template: "{code}({title})"
       duplicate_policy: always_skip
 
-# LLM 媒体识别（实测 qwen-plus 30/30 准确率 100%，¥0.74/1000 调用）
-#
-# 识别链置信度参考（tools/dispatch/identify.py 用，**硬编码不可改**，列在这里供查阅）：
-#   regex_avcode_verified  = 0.95   番号 regex 命中 + scraper 验证存在
-#   regex_avcode_unverified= 0.50   番号 regex 命中但所有 scraper 都查不到 → 标 adult 待审核
-#   regex_episode + TMDB   = 0.90   SxxExx 命中 + TMDB tv 验证
-#   regex_episode (no TMDB)= 0.70   SxxExx 命中但 TMDB 没查到
-#   regex_anime            = 0.75   [字幕组]xxx - 01 风格
-#   tmdb_search (movie+yr) = 0.85   "Title YYYY" 命中 + TMDB title fuzzy 校验通过
-#   tmdb_search_weak       = 0.50   TMDB 命中但 title fuzzy 校验未过（防 "Planet Earth 2006" → 灾难片那种）
-#   tmdb_generic           = 0.70   清洗 release tag 后通用 tv/movie 搜索命中
-#   llm_with_tmdb          = LLM 给的 conf（高，TMDB 又能验证到）
-#   llm_only               = LLM 给的 conf（无 TMDB 验证，conf 低一档）
-#
-# HIGH 阈值（硬编码 0.70）：识别链中任一步置信度 ≥ 0.70 立即返回，不再往下走
-# 全部步骤都 < 0.70 时取累计 best；< analyzer 自动入流水线门槛时落 needs_review
+# ============================================================================
+# LLM 媒体识别（可选，作为正则/TMDB 识别失败时的兜底）
+# ============================================================================
 llm:
-  enabled: false                # 默认关闭（需配 api_key 后启用）
-  provider: qwen                # qwen / deepseek / openai / lmstudio
-  api_key: ""                   # 阿里云 dashscope key
+  enabled: false
+  provider: qwen                  # qwen / deepseek / openai / lmstudio
+  api_key: ""
   model: qwen-plus
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  timeout_seconds: 180          # 单次 LLM 调用最长等待时间（秒）
+  timeout_seconds: 180
   max_retries: 1
   cache_ttl_days: 30
-  # 默认 false：LLM 作为兜底（番号→动漫→TMDB→LLM）
-  # true：LLM 排在识别链首位，正则/TMDB 作为兜底（适合 LLM 准确率信得过的场景）
-  prefer_first: false
+  prefer_first: false             # true：LLM 排识别链首位
 
-# 第三方推荐源（互补 TMDB）
-# Trakt：实时观看活动信号；https://trakt.tv/oauth/applications 创建 app 拿 client_id
+# ============================================================================
+# Trakt（推荐源，https://trakt.tv/oauth/applications 创建 app 拿 client_id）
+# ============================================================================
 trakt:
   enabled: false
-  client_id: ""                 # 64 位十六进制
+  client_id: ""
   base_url: "https://api.trakt.tv"
-  cache_minutes: 60             # Trakt 是实时观看活动，缓存 1 小时即可
+  cache_minutes: 60
 
-# AniList：番剧专用；公开 GraphQL，**完全不需要账号和 key**
+# ============================================================================
+# AniList（番剧推荐，无需 Key）
+# ============================================================================
 anilist:
   enabled: true
   base_url: "https://graphql.anilist.co"
-  cache_minutes: 240            # 番剧排行变化慢，4 小时
+  cache_minutes: 240
 
-# 豆瓣片单：白名单形式
+# ============================================================================
+# 豆瓣片单
+# ============================================================================
 # doulist_id 取值：
-#   纯数字       → 经典 /doulist/<id>/ 片单（如 Top 250 的 240962）
-#   "chart"      → 豆瓣电影排行榜（/chart 默认 section）
-#   "nowplaying" → 正在上映（/cinema/nowplaying/）
-#   "upcoming"   → 上映在即
-# 反爬严：豆瓣对未登录访问触发限速会拉黑半小时；片单内容变化慢
-# → cache_days 默认 3 天；空结果不写缓存（避免反爬被命中后长期返回空）
-# 失效时打开 douban.com 找新片单 URL 中的 ID 替换即可
+#   纯数字       → /doulist/<id>/ 片单（如 Top 250 的 240962）
+#   "chart"      → 豆瓣电影排行榜
+#   "nowplaying" → 正在上映
+#   "upcoming"   → 即将上映
 douban_lists:
   enabled: true
   cache_days: 3
@@ -300,26 +265,18 @@ douban_lists:
     - { name: "正在上映",     doulist_id: "nowplaying", media_type: "movie" }
     - { name: "即将上映",     doulist_id: "upcoming",   media_type: "movie" }
 
-# 成人内容配置（默认关闭）
-# enabled=false 时菜单不显示，相关 API 路由也不挂载
+# ============================================================================
+# 成人内容（默认关闭；enabled=false 时菜单不显示）
+# ============================================================================
 adult:
   enabled: false
   media_path: ""
-  # 限定哪些 Jellyfin 库 ID 视为成人库（留空 → 走自动检测）
-  library_ids: []
-  # 额外的成人库本地路径（不在 jellyfin 库列表中的目录）
-  extra_paths: []
-  # 自动检测：通过 jellyfin 库名 / 路径关键字识别成人库
+  library_ids: []               # 指定哪些 Jellyfin 库 ID 视为成人库；留空 → 自动检测
+  extra_paths: []               # 额外的本地路径（不在 Jellyfin 库里的）
   auto_detect: true
-  # 自动刮削：新 item 入库后自动跑番号识别 + 元数据填充
-  auto_scrape: false
-  # 成人库扫描轮询间隔（分钟）。当前架构 inotify 是主路径（新文件几秒内自动识别），
-  # polling 仅作兜底补漏（rglob 全库 + DB diff）。默认 120 分钟（2h）够用；
-  # inotify 不可用（如 NFS 挂载）时建议改短到 30 分钟。下限 30 分钟。
-  poll_interval_min: 120
-  # 刮削源（按顺序回退，第一个命中即返回）。可关闭某些源。
-  #   avbase  - 商业番号兜底（DMM 图床高清封面）
-  #   missav  - 最终兜底：覆盖广（含 FC2）+ 中文化标题，但需 curl_cffi 绕 Cloudflare 较慢
+  auto_scrape: false            # 新 item 入库后自动跑番号识别
+  poll_interval_min: 120        # 扫描周期（最小 30 分钟）
+  # 刮削源按顺序回退
   sources:
     - { name: javbus,     enabled: true }
     - { name: javdb,      enabled: true }
@@ -327,9 +284,8 @@ adult:
     - { name: avbase,     enabled: true }
     - { name: missav,     enabled: true }
 
-
-# 调试 / 开发用开关
-# show_dry_run_in_toolbar：在媒体库 / 成人库的操作按钮 confirm 弹窗里显示"测试模式"勾选
-#   生产环境通常不需要展示；开发或验收时打开方便预演影响范围
+# ============================================================================
+# 调试
+# ============================================================================
 debug:
-  show_dry_run_in_toolbar: false
+  show_dry_run_in_toolbar: false   # UI 操作弹窗显示「测试模式」勾选
