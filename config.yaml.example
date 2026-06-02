@@ -63,8 +63,8 @@ tmdb:
 # ============================================================================
 path_mappings:
   enabled: false
-  rules:
-    # - { from: "/library/videos", to: "Z:/videos" }
+  # 示例规则：rules: [{ from: "/library/videos", to: "Z:/videos" }]
+  rules: []
 
 # ============================================================================
 # 系统工具路径（仅 Windows 需要，Linux/macOS 一般在 PATH 上）

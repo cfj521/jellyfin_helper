@@ -1761,6 +1761,10 @@ const mergeIntoForm = (cfg) => {
   form.adult.sources = form.adult.sources.filter(s => allSourceKeys.includes(s.name))
   if (!Array.isArray(form.adult.library_ids)) form.adult.library_ids = []
   if (!Array.isArray(form.jackett.search_keywords)) form.jackett.search_keywords = []
+  // path_mappings.rules：config.yaml 里 `rules:` 留空会被 YAML 解析成 null，
+  // 模板 line `form.path_mappings.rules.length` / v-for 会对 null 抛错 →
+  // 整个「基础配置」的 Jellyfin card（嵌了路径映射）渲染中断消失。兜底成 []。
+  if (!Array.isArray(form.path_mappings.rules)) form.path_mappings.rules = []
   // 后端 preferred_formats 是 string[]，前端 SourcePool 要 [{name}]，做一次归一化
   const rawFormats = form.subtitle.preferred_formats
   if (Array.isArray(rawFormats) && rawFormats.length && typeof rawFormats[0] === 'string') {
