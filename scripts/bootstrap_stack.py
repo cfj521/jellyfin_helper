@@ -343,12 +343,18 @@ def jellyfin_run_wizard() -> bool:
         ('Complete', '/Startup/Complete', None),
     ]
     for name, path, body in steps:
+        url = base + path
         try:
-            r = requests.post(base + path, json=body, timeout=15)
+            r = requests.post(url, json=body, timeout=15)
             if not r.ok:
-                log(f'Wizard {name} 失败：HTTP {r.status_code} {r.text[:200]}')
+                log(f'Wizard {name} 失败：POST {url} → HTTP {r.status_code}')
+                log(f'  body: {r.text[:300]}')
+                # 诊断：404 区分"路径没匹配"vs"方法不允许走了 SPA fallback"
+                log(f'  Allow={r.headers.get("Allow")!r} '
+                    f'Location={r.headers.get("Location")!r} '
+                    f'Content-Type={r.headers.get("Content-Type")!r}')
                 return False
-            log(f'Wizard {name} OK')
+            log(f'Wizard {name} OK (POST {url})')
         except requests.RequestException as e:
             log(f'Wizard {name} 异常：{e}')
             return False
@@ -448,16 +454,15 @@ def bootstrap_jellyfin() -> Optional[str]:
 # ============================================================
 # Jackett indexer 添加
 # ============================================================
-def wait_jackett(api_key: str, timeout: int = 60) -> bool:
+def wait_jackett_up(timeout: int = 60) -> bool:
+    """探测 Jackett 端口活着（GET /UI/Login 无需认证，200/302 都算起来了）。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             r = requests.get(
-                f'{JACKETT_INTERNAL_URL}/api/v2.0/server/config',
-                params={'apikey': api_key},
-                timeout=3,
+                f'{JACKETT_INTERNAL_URL}/UI/Login', timeout=3, allow_redirects=False
             )
-            if r.ok:
+            if r.status_code in (200, 302):
                 return True
         except requests.RequestException:
             pass
@@ -465,10 +470,36 @@ def wait_jackett(api_key: str, timeout: int = 60) -> bool:
     return False
 
 
-def list_jackett_indexers(api_key: str) -> list[dict]:
-    r = requests.get(
+def jackett_login(session: requests.Session) -> bool:
+    """
+    设了 AdminPassword 后，/api/v2.0/* 管理 API 必须 cookie 认证——apikey query
+    参数只对 Torznab 搜索 API 有效，对 indexer 管理 API 会 302 重定向到登录页
+    （之前 "Expecting value: line 1 column 1" 就是把登录页 HTML 当 JSON 解析）。
+    登录端点：POST /UI/Dashboard 表单 password；成功 SignInAsync 下发 cookie。
+    源：github.com/Jackett/Jackett .../Controllers/UIController.cs
+    """
+    try:
+        r = session.post(
+            f'{JACKETT_INTERNAL_URL}/UI/Dashboard',
+            data={'password': JACKETT_PASSWORD},
+            timeout=10,
+            allow_redirects=False,
+        )
+    except requests.RequestException as e:
+        log(f'Jackett 登录异常：{e}')
+        return False
+    # 成功：302 Redirect("Dashboard") + Set-Cookie。密码错也 302 但不下发认证 cookie。
+    if r.status_code in (200, 302) and len(session.cookies) > 0:
+        log('Jackett 登录成功（cookie 已获取）')
+        return True
+    log(f'Jackett 登录失败：HTTP {r.status_code}, cookies={len(session.cookies)}（密码不对？）')
+    return False
+
+
+def list_jackett_indexers(session: requests.Session) -> list[dict]:
+    r = session.get(
         f'{JACKETT_INTERNAL_URL}/api/v2.0/indexers',
-        params={'apikey': api_key, 'configured': 'false'},
+        params={'configured': 'false'},
         timeout=10,
     )
     r.raise_for_status()
@@ -489,16 +520,15 @@ def resolve_indexer_id(available: list[dict], wanted_id: str, wanted_name: str) 
     return None
 
 
-def add_indexer(api_key: str, indexer_id: str) -> bool:
+def add_indexer(session: requests.Session, indexer_id: str) -> bool:
     """
-    Jackett 加 indexer 流程：
+    Jackett 加 indexer 流程（都走 cookie 认证，session 已登录）：
       GET  /api/v2.0/indexers/<id>/config  → 拿配置模板（array of fields）
       POST /api/v2.0/indexers/<id>/config  → 提交（公开 indexer 直接回填即可）
     """
     try:
-        r = requests.get(
+        r = session.get(
             f'{JACKETT_INTERNAL_URL}/api/v2.0/indexers/{indexer_id}/config',
-            params={'apikey': api_key},
             timeout=15,
         )
         if not r.ok:
@@ -506,9 +536,8 @@ def add_indexer(api_key: str, indexer_id: str) -> bool:
             return False
         config_template = r.json()
 
-        r2 = requests.post(
+        r2 = session.post(
             f'{JACKETT_INTERNAL_URL}/api/v2.0/indexers/{indexer_id}/config',
-            params={'apikey': api_key},
             json=config_template,
             timeout=60,
         )
@@ -522,16 +551,22 @@ def add_indexer(api_key: str, indexer_id: str) -> bool:
         return False
 
 
-def bootstrap_indexers(api_key: str) -> None:
+def bootstrap_indexers() -> None:
     log(f'等待 Jackett {JACKETT_INTERNAL_URL} 启动...')
-    if not wait_jackett(api_key, timeout=60):
+    if not wait_jackett_up(timeout=60):
         log('Jackett 60s 内未就绪；indexer 添加阶段跳过')
-        log('如果你还没跑 docker compose up -d，那是正常的——up 之后再跑一次本脚本')
+        log('如果你还没跑 docker compose up -d，那是正常的——up 之后再跑 connect')
+        return
+
+    session = requests.Session()
+    if not jackett_login(session):
+        log('Jackett 登录失败；跳过 indexer 添加')
+        log('手动加：浏览器开 http://<宿主IP>:9117 用 admin/jellyfin_helper 登录后 Add Indexer')
         return
 
     log('Jackett 已就绪，开始添加 indexer：')
     try:
-        available = list_jackett_indexers(api_key)
+        available = list_jackett_indexers(session)
     except Exception as e:
         log(f'拿 Jackett indexer 列表失败：{e}')
         return
@@ -551,7 +586,7 @@ def bootstrap_indexers(api_key: str) -> None:
             log(f'  {real_id}: 已配置，跳过')
             success += 1
             continue
-        if add_indexer(api_key, real_id):
+        if add_indexer(session, real_id):
             success += 1
         else:
             missing.append(real_id)
@@ -589,7 +624,7 @@ def run_connect() -> None:
     qb_key = prep_qbittorrent_conf()
     jackett_key = prep_jackett_conf()
 
-    bootstrap_indexers(jackett_key)
+    bootstrap_indexers()
 
     log('-' * 60)
     log('开始 Jellyfin Setup Wizard + 申请 API Key...')
