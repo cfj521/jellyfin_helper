@@ -1977,6 +1977,9 @@ const actressDelay = ref(5)
 let actressPollTimer = null
 
 const refreshActressStatus = async () => {
+  // adult 模块关闭时 /api/adult/* router 未挂载，轮询会 404 + 全局拦截器弹
+  // "not found"。关闭就直接跳过（config 未加载时 form.adult 为空也跳过）。
+  if (!form.adult?.enabled) return
   try {
     const r = await adultApi.actressBuildStatus()
     actressStatus.value = r.data || {}
