@@ -205,7 +205,7 @@ bootstrap 用「预填 conf 文件」方式把 qb / Jackett 的密码和 API Key
 | **jellyfin-helper** | `http://<宿主IP>:8099` | 看 `config.yaml.auth.users` 自己配的 | 同左 | 主入口 |
 | **qBittorrent** | `http://<宿主IP>:8080` | `admin` | `jellyfin_helper` | 改密码：WebUI → Options → Web UI → Authentication |
 | **Jackett** | `http://<宿主IP>:9117` | — | （无密码）| 加密码：WebUI → Configuration → Admin password |
-| **Jellyfin** | `http://<宿主IP>:8096` | 首次跑 Setup Wizard 自建 | 同左 | 走完向导后在控制台 → API Keys 生成 key 回填 `config.yaml.jellyfin.api_key` |
+| **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard 设置好；API Key 已自动写回 config.yaml；进 UI 后第一件事加媒体库指向 `/media` |
 | **PostgreSQL** | `postgres:5432`（仅栈内） | `jellyfin_helper` | `jellyfin_helper` | 5432 不暴露宿主，仅栈内访问 |
 
 > 想改 qb 默认密码：上 qb WebUI 改完后，**同步**生成新 API Key 写回
@@ -283,7 +283,7 @@ cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 
 | 服务 | 必需性 | 申请地址 | 填入字段 |
 |---|---|---|---|
-| **Jellyfin API Key** | 必需 | Jellyfin Web → 控制台 → API Keys → 新建 | `jellyfin.api_key` |
+| **Jellyfin API Key** | 必需 | Docker：bootstrap 自动跑 Wizard + 申请；裸机：Jellyfin Web → 控制台 → API Keys → 新建 | `jellyfin.api_key` |
 | **TMDB API Key** | 必需 | https://www.themoviedb.org/settings/api（免费注册申请） | `tmdb.api_key` |
 | **PostgreSQL 密码** | Docker 自动 | Docker 默认 `jellyfin_helper`（stack 内用，不外露）；裸机自己定 | `database.password` |
 | **qBittorrent API Key** | 必需（5.2+ 强制） | Docker：bootstrap 自动；裸机：qB → Preferences → WebUI → API Key Generate | `qbittorrent.api_key`（**不需要** username/password） |

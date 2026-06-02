@@ -108,15 +108,26 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
 - 把以上 API Key 与容器内地址 (`postgres` / `jellyfin:8096` / `jackett:9117` /
   `qbittorrent:8080`) 回写到 `config.yaml`，并备份原文件
 
-### 5. 拿 Jellyfin API Key
+### 5. Jellyfin 媒体库添加（API Key 已自动）
 
-只有 Jellyfin 需要手动拿 Key（因为它有 Setup Wizard 必须走一遍）：
+第 4 步 bootstrap 已经替你跑完 Jellyfin Setup Wizard（admin/jellyfin_helper）、
+申请好 API Key 并写回 `config.yaml.jellyfin.api_key`，**不需要手动操作**。
 
-1. 浏览器开 `http://<宿主IP>:8096` 走完 Jellyfin 首启向导（建账号、添加媒体库
-   指向 `/media`）
-2. 控制台 → API Keys → 新建一个 → 复制
-3. 填进 `config.yaml` 的 `jellyfin.api_key`
-4. `docker compose restart helper`
+唯一要做的是加媒体库（bootstrap 不动这个，避免猜错你的目录结构）：
+
+1. 浏览器开 `http://<宿主IP>:8096`，用 `admin` / `jellyfin_helper` 登录
+2. 控制台 → 媒体库 → 添加媒体库 → 选类型（Movies / TV Shows / Music 等）
+   → 文件夹指向 `/media/电影`、`/media/剧集` 等子目录
+3. 点保存，Jellyfin 自动扫描
+
+> 如果第 4 步 bootstrap 报「Jellyfin bootstrap 未拿到 api_key」，说明
+> jellyfin 容器还没起完（Wizard 是 phase 2 跑的，需要 jellyfin 已 healthy）。
+> 等 `docker compose ps` 看 jellyfin 状态 `Up`，重跑 phase 2：
+>
+> ```bash
+> docker compose --profile bootstrap run --rm bootstrap
+> docker compose restart helper
+> ```
 
 ### 6. Web UI 登录凭据汇总
 
@@ -129,7 +140,7 @@ bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 
 | **jellyfin-helper** | `http://<宿主IP>:8099` | 看 `config.yaml.auth.users` | 同左 | 主入口 |
 | **qBittorrent** | `http://<宿主IP>:8080` | `admin` | `jellyfin_helper` | 改密码见下方 |
 | **Jackett** | `http://<宿主IP>:9117` | — | （无密码）| 加密码：UI → Configuration → Admin password |
-| **Jellyfin** | `http://<宿主IP>:8096` | 见步骤 5 Setup Wizard | 同左 | API Key 在控制台拿 |
+| **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard；API Key 已回填 |
 | **PostgreSQL** | `postgres:5432` | `jellyfin_helper` | `jellyfin_helper` | 仅栈内访问，5432 不暴露宿主 |
 
 ### 7.（可选）改 qBittorrent 密码

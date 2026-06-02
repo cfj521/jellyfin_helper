@@ -6,7 +6,8 @@ jellyfin-helper docker stack 一次性 bootstrap。
   1. 预填 qBittorrent 配置（密码 jellyfin_helper、API Key、启用 RSS + 自动下载）
   2. 预填 Jackett 配置（API Key）
   3. 等 Jackett 启动后添加 7 个公开 indexer
-  4. 把生成的 API Key 写回 config.yaml
+  4. 等 Jellyfin 启动后跑 Setup Wizard（admin/jellyfin_helper）+ 申请 API Key
+  5. 把所有生成的 API Key 写回 config.yaml
 
 设计原则：
   - **幂等**：跑几次都安全；已生成的 key 不会被覆盖
@@ -45,8 +46,18 @@ CONFIG_YAML = ROOT / 'config.yaml'
 
 QB_INTERNAL_URL = os.environ.get('QB_URL', 'http://qbittorrent:8080')
 JACKETT_INTERNAL_URL = os.environ.get('JACKETT_URL', 'http://jackett:9117')
+JELLYFIN_INTERNAL_URL = os.environ.get('JELLYFIN_URL', 'http://jellyfin:8096')
 
 QB_PASSWORD = 'jellyfin_helper'
+JELLYFIN_USERNAME = 'admin'
+JELLYFIN_PASSWORD = 'jellyfin_helper'
+JELLYFIN_APIKEY_APP = 'jellyfin-helper'
+
+# Jellyfin AuthenticateByName 强制要求 X-Emby-Authorization 标识 client
+JELLYFIN_CLIENT_HEADER = (
+    'MediaBrowser Client="jellyfin-helper-bootstrap", '
+    'Device="bootstrap-script", DeviceId="jh-bootstrap", Version="1.0"'
+)
 
 # 用户要的 7 个 indexer。Jackett 内部 ID 全小写无符号；按 name 兜底匹配。
 INDEXER_TARGETS = [
@@ -194,7 +205,11 @@ def prep_jackett_conf() -> str:
 # ============================================================
 # config.yaml 回写
 # ============================================================
-def update_config_yaml(qb_api_key: str, jackett_api_key: str) -> None:
+def update_config_yaml(
+    qb_api_key: str,
+    jackett_api_key: str,
+    jellyfin_api_key: Optional[str] = None,
+) -> None:
     if not CONFIG_YAML.exists():
         log(f'config.yaml 不存在；跳过回写。请先 cp config.yaml.example config.yaml')
         return
@@ -225,6 +240,13 @@ def update_config_yaml(qb_api_key: str, jackett_api_key: str) -> None:
     # jellyfin SQLite 直读：默认指向同 stack 已挂好的路径
     if not data['jellyfin'].get('db_path'):
         data['jellyfin']['db_path'] = '/jellyfin-data/jellyfin.db'
+    # Jellyfin API Key（phase 2 jellyfin bootstrap 完成后才有；phase 1 调用时 None 跳过）
+    if jellyfin_api_key:
+        existing = data['jellyfin'].get('api_key', '')
+        if existing in (None, '', 'your_jellyfin_api_key'):
+            data['jellyfin']['api_key'] = jellyfin_api_key
+        elif existing != jellyfin_api_key:
+            log(f'config.yaml 已有 jellyfin.api_key（{existing[:8]}...），保留不覆盖')
 
     # 备份后写
     backup = CONFIG_YAML.with_suffix(f'.yaml.bak.bootstrap.{int(time.time())}')
@@ -235,6 +257,158 @@ def update_config_yaml(qb_api_key: str, jackett_api_key: str) -> None:
         encoding='utf-8',
     )
     log(f'已回写 config.yaml（备份 → {backup.name}）')
+
+
+# ============================================================
+# Jellyfin bootstrap：跑 Startup Wizard + 拿 API Key（10.x REST API）
+# 端点参考：
+#   POST /Startup/Configuration     - 设置 UI/元数据语言（FirstTimeSetup 期间免授权）
+#   POST /Startup/User              - 设置首个 admin 用户名 + 密码（同上）
+#   POST /Startup/RemoteAccess      - 设置远程访问 / UPnP
+#   POST /Startup/Complete          - 标记 wizard 完成
+#   POST /Users/AuthenticateByName  - admin 登录拿 AccessToken
+#   POST /Auth/Keys?app=<name>      - 创建 API Key（返回 204 NoContent，不带 key 值）
+#   GET  /Auth/Keys                 - 列出所有 key，按 AppName 找出刚创建的那条
+# ============================================================
+def wait_jellyfin(timeout: int = 180) -> Optional[dict]:
+    """轮询 /System/Info/Public；返回 system info 或 None 超时。"""
+    log(f'等 Jellyfin: {JELLYFIN_INTERNAL_URL}')
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            r = requests.get(f'{JELLYFIN_INTERNAL_URL}/System/Info/Public', timeout=5)
+            if r.ok:
+                info = r.json()
+                log(f'Jellyfin 已就绪：ver={info.get("Version")}, '
+                    f'startup_wizard_done={info.get("StartupWizardCompleted")}')
+                return info
+        except requests.RequestException:
+            pass
+        time.sleep(3)
+    log('Jellyfin 等待超时（180s）')
+    return None
+
+
+def jellyfin_run_wizard() -> bool:
+    """跑 Startup Wizard 4 步。FirstTimeSetup 阶段所有 /Startup/* 端点豁免授权。"""
+    base = JELLYFIN_INTERNAL_URL
+    steps = [
+        ('Configuration', '/Startup/Configuration', {
+            'UICulture': 'zh-CN',
+            'MetadataCountryCode': 'CN',
+            'PreferredMetadataLanguage': 'zh',
+        }),
+        ('User', '/Startup/User', {
+            'Name': JELLYFIN_USERNAME,
+            'Password': JELLYFIN_PASSWORD,
+        }),
+        ('RemoteAccess', '/Startup/RemoteAccess', {
+            'EnableRemoteAccess': True,
+            'EnableAutomaticPortMapping': False,
+        }),
+        ('Complete', '/Startup/Complete', None),
+    ]
+    for name, path, body in steps:
+        try:
+            r = requests.post(base + path, json=body, timeout=15)
+            if not r.ok:
+                log(f'Wizard {name} 失败：HTTP {r.status_code} {r.text[:200]}')
+                return False
+            log(f'Wizard {name} OK')
+        except requests.RequestException as e:
+            log(f'Wizard {name} 异常：{e}')
+            return False
+    return True
+
+
+def jellyfin_login() -> Optional[str]:
+    """admin 登录，返回 AccessToken。"""
+    try:
+        r = requests.post(
+            f'{JELLYFIN_INTERNAL_URL}/Users/AuthenticateByName',
+            json={'Username': JELLYFIN_USERNAME, 'Pw': JELLYFIN_PASSWORD},
+            headers={'X-Emby-Authorization': JELLYFIN_CLIENT_HEADER},
+            timeout=15,
+        )
+    except requests.RequestException as e:
+        log(f'登录异常：{e}')
+        return None
+    if not r.ok:
+        log(f'登录失败：HTTP {r.status_code} {r.text[:200]}')
+        return None
+    token = r.json().get('AccessToken')
+    if not token:
+        log('登录响应缺 AccessToken')
+        return None
+    log(f'admin 登录成功，token={token[:8]}...')
+    return token
+
+
+def jellyfin_get_or_create_apikey(token: str) -> Optional[str]:
+    """复用已有 AppName=jellyfin-helper 的 key；否则 POST 创建后再 GET 列表取。"""
+    base = JELLYFIN_INTERNAL_URL
+    auth_header = {'Authorization': f'MediaBrowser Token="{token}"'}
+
+    def list_keys() -> list:
+        try:
+            r = requests.get(f'{base}/Auth/Keys', headers=auth_header, timeout=10)
+        except requests.RequestException as e:
+            log(f'GET /Auth/Keys 异常：{e}')
+            return []
+        if not r.ok:
+            log(f'GET /Auth/Keys 失败：HTTP {r.status_code}')
+            return []
+        return r.json().get('Items', [])
+
+    existing = [k for k in list_keys() if k.get('AppName') == JELLYFIN_APIKEY_APP]
+    if existing:
+        key = existing[0].get('AccessToken')
+        log(f'复用已有 API Key: {key[:8]}...')
+        return key
+
+    try:
+        r = requests.post(
+            f'{base}/Auth/Keys',
+            params={'app': JELLYFIN_APIKEY_APP},
+            headers=auth_header,
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        log(f'POST /Auth/Keys 异常：{e}')
+        return None
+    if not r.ok:
+        log(f'POST /Auth/Keys 失败：HTTP {r.status_code} {r.text[:200]}')
+        return None
+
+    # 创建端点返回 204 NoContent 不带 key 值，要再 GET 列表取
+    for k in list_keys():
+        if k.get('AppName') == JELLYFIN_APIKEY_APP:
+            key = k.get('AccessToken')
+            log(f'生成 API Key: {key[:8]}...')
+            return key
+    log('创建后 GET 列表里仍找不到 jellyfin-helper key')
+    return None
+
+
+def bootstrap_jellyfin() -> Optional[str]:
+    """完整流程：等 ready → wizard（如未完成）→ 登录 → 拿 api_key。返回 key 或 None。"""
+    info = wait_jellyfin()
+    if not info:
+        return None
+
+    if not info.get('StartupWizardCompleted'):
+        log('StartupWizard 未完成，开始向导...')
+        if not jellyfin_run_wizard():
+            log('向导失败，跳过 API Key 申请')
+            return None
+        log(f'Wizard 完成。Jellyfin admin = {JELLYFIN_USERNAME} / {JELLYFIN_PASSWORD}')
+    else:
+        log('StartupWizard 已完成，跳过向导直接拿 API Key')
+
+    token = jellyfin_login()
+    if not token:
+        return None
+    return jellyfin_get_or_create_apikey(token)
 
 
 # ============================================================
@@ -370,8 +544,18 @@ def main() -> int:
     log('然后再跑一次本 bootstrap 让它给 Jackett 加 indexer。')
     log('-' * 60)
 
-    # ── Phase 2：加 indexer（jackett 已起）──
+    # ── Phase 2：加 indexer + Jellyfin wizard + api_key（这一波都要服务已起）──
     bootstrap_indexers(jackett_key)
+
+    log('-' * 60)
+    log('Phase 2a 完成。开始 Jellyfin wizard + API Key 申请...')
+    jellyfin_key = bootstrap_jellyfin()
+    if jellyfin_key:
+        # 二次回写：把 jellyfin api_key 也存进去
+        update_config_yaml(qb_key, jackett_key, jellyfin_api_key=jellyfin_key)
+    else:
+        log('Jellyfin bootstrap 未拿到 api_key；helper 仍可启动但 jellyfin 相关功能未就绪。')
+        log('排查：docker compose logs jellyfin；手动走 Wizard 后在控制台 → API Keys 自建并填 config.yaml')
 
     log('-' * 60)
     log('Bootstrap 完成。最后一步：')

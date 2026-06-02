@@ -37,6 +37,9 @@ database:
   password: "CHANGE_ME"
 
 # Jellyfin 配置
+#   - Docker：bootstrap 自动跑 Setup Wizard（admin/jellyfin_helper）+ 申请
+#     API Key 写回这里，不需要手动填
+#   - 裸机：先在 Jellyfin Web → 控制台 → API Keys 新建一个填进 api_key
 jellyfin:
   host: "http://127.0.0.1:8096"
   # 公网访问地址（可选）：UI 在生成 Jellyfin 链接时优先用 external_url
