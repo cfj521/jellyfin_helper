@@ -271,7 +271,7 @@ cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 | **Jellyfin API Key** | 必需 | Jellyfin Web → 控制台 → API Keys → 新建 | `jellyfin.api_key` |
 | **TMDB API Key** | 必需 | https://www.themoviedb.org/settings/api（免费注册申请） | `tmdb.api_key` |
 | **PostgreSQL 密码** | Docker 自动 | Docker 默认 `jellyfin_helper`（stack 内用，不外露）；裸机自己定 | `database.password` |
-| **qBittorrent API Key** | 必需 | Docker：bootstrap 自动；裸机：qB → Preferences → WebUI → Generate | `qbittorrent.api_key` |
+| **qBittorrent API Key** | 必需（5.2+ 强制） | Docker：bootstrap 自动；裸机：qB → Preferences → WebUI → API Key Generate | `qbittorrent.api_key`（**不需要** username/password） |
 | **Jackett API Key** | 必需 | Docker：bootstrap 自动；裸机：Jackett UI 右上角直接显示 | `jackett.api_key` |
 | **MDBList API Key** | 推荐（评分） | https://mdblist.com/api 登录后生成（免费 1000 req/天） | `mdblist.api_key` |
 | **OpenSubtitles 三件套** | 推荐（字幕） | API Consumer → https://www.opensubtitles.com/consumers + 注册账号 | `subtitle.opensubtitles_api_key` + `opensubtitles_username` + `opensubtitles_password` |

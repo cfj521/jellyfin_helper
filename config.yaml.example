@@ -164,16 +164,13 @@ jackett:
 # qBittorrent 配置（下载管理）
 # 注意：下载根路径在 dispatch.download_path 配，配额功能从那里读真实容量
 #
-# 认证两种模式（按优先级）：
-#   1. API Key（≥qB 5.2.0 推荐）：Preferences → WebUI → API Key 生成
-#      qbt_ 开头 32 字符，stateless，不暴露密码
-#   2. Username/Password（传统）：username/password 走 cookie 会话
-# 同时设了 api_key 和 username/password 时优先 api_key
+# 认证：qB ≥ 5.2.0 强制 API Key（Bearer Token，stateless，不暴露密码）
+#   - Docker 部署：bootstrap 自动生成 api_key 并回写这里，不用手动操作
+#   - 裸机部署：qB Web UI → Preferences → WebUI → API Key 生成（qbt_ 开头 32 字符）
+# qB 5.2.0 以下版本不支持，README 已说明强制升级原因（弱密被植入挖矿木马的真实事件）
 qbittorrent:
   host: "http://127.0.0.1:8080"
-  api_key: ""                      # 配了 api_key 就不必填下面 username/password
-  username: "admin"
-  password: "CHANGE_ME"
+  api_key: ""                      # qbt_xxx... 32 字符
 
   # 配额管理：limit 动态读 dispatch.download_path 真实容量（shutil.disk_usage）
   # 后端 stat 不到下载盘 → 整个配额功能禁用（不监视、不强清，UI 灰态）
