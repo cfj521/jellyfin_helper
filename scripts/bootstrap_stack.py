@@ -345,11 +345,22 @@ def jellyfin_run_wizard() -> bool:
     for name, path, body in steps:
         url = base + path
         try:
+            # jellyfin 10.11 关键：POST /Startup/User 是「更新首个用户」，要求用户
+            # 已存在，否则 GetFirstUser() is null → 返回 404。GET /Startup/User
+            # 内部会调 UserManager.InitializeAsync() 创建默认用户（jellyfin-web 也是
+            # 先 GET 再 POST）。源：StartupController.GetFirstUser 注释明说
+            # "wizard requires an existing user"。少了这步 POST 必 404。
+            if name == 'User':
+                g = requests.get(url, timeout=15)
+                if not g.ok:
+                    log(f'Wizard User 预备 GET 失败：HTTP {g.status_code} {g.text[:200]}')
+                    return False
+                log('Wizard User 预备 GET OK（已触发创建默认用户）')
+
             r = requests.post(url, json=body, timeout=15)
             if not r.ok:
                 log(f'Wizard {name} 失败：POST {url} → HTTP {r.status_code}')
                 log(f'  body: {r.text[:300]}')
-                # 诊断：404 区分"路径没匹配"vs"方法不允许走了 SPA fallback"
                 log(f'  Allow={r.headers.get("Allow")!r} '
                     f'Location={r.headers.get("Location")!r} '
                     f'Content-Type={r.headers.get("Content-Type")!r}')
