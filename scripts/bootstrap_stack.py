@@ -264,9 +264,11 @@ def update_config_yaml(
     data.setdefault('jellyfin', {})
     if data['jellyfin'].get('host') in (None, '', 'http://127.0.0.1:8096', 'http://localhost:8096'):
         data['jellyfin']['host'] = 'http://jellyfin:8096'
-    # jellyfin SQLite 直读：默认指向同 stack 已挂好的路径
-    if not data['jellyfin'].get('db_path'):
-        data['jellyfin']['db_path'] = '/jellyfin-data/jellyfin.db'
+    # jellyfin SQLite 直读：默认不启用（compose 默认没挂 /jellyfin-data，
+    # 因为 docker daemon 以 root 创建 ./data/jellyfin/data 会让 jellyfin
+    # 容器写不进）。用户想启用直读：先 chown 那个子目录给 PUID:PGID，
+    # 然后在 docker-compose.yml helper.volumes 加 mount + 这里填路径。
+    # 不主动写 db_path，让 backend fallback REST API。
     # Jellyfin API Key（phase 2 jellyfin bootstrap 完成后才有；phase 1 调用时 None 跳过）
     if jellyfin_api_key:
         existing = data['jellyfin'].get('api_key', '')

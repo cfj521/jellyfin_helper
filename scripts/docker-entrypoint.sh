@@ -27,13 +27,24 @@ if [ "$(id -u)" = "0" ]; then
     # bootstrap 容器走 /workspace/data；其它场景可按需扩展
     CHOWN_DIRS="${CHOWN_DIRS:-/app/data /app/logs}"
 
-    log "以 root 启动；chown 目录 [${CHOWN_DIRS}] → ${PUID}:${PGID}"
+    log "以 root 启动；准备 chown [${CHOWN_DIRS}] → ${PUID}:${PGID}"
 
-    # bind mount 源不存在时 docker 会以 root 创建空目录；
-    # 这里兜底 mkdir 一次确保目录在容器视角存在
     for d in $CHOWN_DIRS; do
+        # bind mount 源不存在时 docker 会以 root 创建空目录；
+        # 这里兜底 mkdir 一次确保目录在容器视角存在
         mkdir -p "$d"
+
+        # 幂等加速：marker 文件记录上次 chown 的 PUID:PGID；
+        # 如果跟当前一致，跳过递归 chown（大目录如 ./data/postgres
+        # 增长到几 GB 后每次 bootstrap 都 chown -R 浪费几秒到几十秒）
+        marker="$d/.bootstrap-chown"
+        if [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "${PUID}:${PGID}" ]; then
+            log "  $d → 跳过（已 chown 过 ${PUID}:${PGID}）"
+            continue
+        fi
+        log "  $d → chown -R ${PUID}:${PGID}"
         chown -R "${PUID}:${PGID}" "$d"
+        echo "${PUID}:${PGID}" > "$marker"
     done
 
     # /media /downloads 是用户的外部目录，不擅自 chown

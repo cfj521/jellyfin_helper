@@ -134,8 +134,11 @@ services:
       # 媒体和下载目录与 jellyfin / qb 一致路径，省 path_mappings 翻译
       - ${MEDIA_DIR:?MEDIA_DIR 必须在 .env 中设置（宿主媒体库根目录）}:/media
       - ${DOWNLOADS_DIR:?DOWNLOADS_DIR 必须在 .env 中设置（宿主下载目录）}:/downloads
-      # 可选：jellyfin SQLite 直读加速（同 stack 默认能拿到）
-      - ./data/jellyfin/data:/jellyfin-data:ro
+      # 注：SQLite 直读加速（path → item 反查 4ms vs REST 1500ms）默认不挂
+      # 原因：docker daemon 以 root 创建子目录 ./data/jellyfin/data，jellyfin
+      # 容器以 PUID 跑会因属主不对写不进。helper 自动 fallback REST API。
+      # 想启用直读：jellyfin 完整起来后，手动 chown 该目录给 PUID，再加
+      # mount 进 helper 并 restart helper。
     ports:
       - "${HELPER_PORT:-8099}:8099"
     depends_on:
@@ -177,6 +180,9 @@ services:
       QB_URL: http://qbittorrent:8080
       JACKETT_URL: http://jackett:9117
       QB_WEBUI_PORT: ${QB_WEBUI_PORT:-8080}
+      # Postgres 密码必须显式透传：bootstrap 写 config.yaml.database.password
+      # 时用的就是这个值。docker-compose 不会自动把 .env 变量塞进容器。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jellyfin_helper}
       # 复用 helper 的 docker-entrypoint.sh：bootstrap 不依赖 postgres，
       # 且数据路径在 /workspace/data 而不是 /app/data，用 env 调整
       CHOWN_DIRS: "/workspace/data"

@@ -70,7 +70,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8099
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8099/api/health || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
