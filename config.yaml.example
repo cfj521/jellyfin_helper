@@ -13,6 +13,8 @@ auth:
   secret_key: "change-me-to-a-random-string"
   token_expire_hours: 720
   users:
+    # Docker：bootstrap 自动把密码设为 jellyfin_helper（如这里还是 CHANGE_ME）
+    # 想用别的密码：bootstrap 之前先在这里改好
     - username: admin
       password: "CHANGE_ME"
       role: admin

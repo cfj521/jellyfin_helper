@@ -49,9 +49,11 @@ JACKETT_INTERNAL_URL = os.environ.get('JACKETT_URL', 'http://jackett:9117')
 JELLYFIN_INTERNAL_URL = os.environ.get('JELLYFIN_URL', 'http://jellyfin:8096')
 
 QB_PASSWORD = 'jellyfin_helper'
+JACKETT_PASSWORD = 'jellyfin_helper'
 JELLYFIN_USERNAME = 'admin'
 JELLYFIN_PASSWORD = 'jellyfin_helper'
 JELLYFIN_APIKEY_APP = 'jellyfin-helper'
+HELPER_DEFAULT_PASSWORD = 'jellyfin_helper'  # config.yaml auth.users[0].password 默认值
 
 # Jellyfin AuthenticateByName 强制要求 X-Emby-Authorization 标识 client
 JELLYFIN_CLIENT_HEADER = (
@@ -154,6 +156,19 @@ Session\\RefreshInterval=30
 # ============================================================
 # Jackett 配置预填
 # ============================================================
+def jackett_hash_password(password: str, api_key: str) -> str:
+    """
+    复现 Jackett SecurityService.HashPassword（C#）：
+      var ue = new UnicodeEncoding();        // .NET = UTF-16 LE 无 BOM
+      input = password + api_key
+      hash = SHA512(ue.GetBytes(input))
+      return hex(hash) 小写
+    源：https://github.com/Jackett/Jackett/blob/master/src/Jackett.Server/Services/SecurityService.cs
+    """
+    combined = (password + api_key).encode('utf-16-le')
+    return hashlib.sha512(combined).hexdigest()
+
+
 def prep_jackett_conf() -> str:
     """
     预填 Jackett ServerConfig.json；返回 API Key。
@@ -171,11 +186,14 @@ def prep_jackett_conf() -> str:
             log(f'ServerConfig.json 解析失败 ({e})，重写')
 
     api_key = secrets.token_hex(16)  # Jackett API key 通常是 32 字符 hex
+    # AdminPassword 必须用 SHA512(password + api_key) UTF-16 LE 小写 hex
+    # 顺序敏感：先生成 api_key 再 hash 密码
+    admin_password_hash = jackett_hash_password(JACKETT_PASSWORD, api_key)
     cfg = {
         'Port': 9117,
         'AllowExternal': True,
         'APIKey': api_key,
-        'AdminPassword': '',
+        'AdminPassword': admin_password_hash,
         'InstanceId': secrets.token_hex(16),
         'BlackholeDir': '',
         'UpdateDisabled': False,
@@ -198,7 +216,7 @@ def prep_jackett_conf() -> str:
         json.dumps(cfg, indent=2, ensure_ascii=False),
         encoding='utf-8',
     )
-    log(f'已写入 ServerConfig.json；APIKey={api_key[:8]}...')
+    log(f'已写入 ServerConfig.json；admin 密码={JACKETT_PASSWORD}，APIKey={api_key[:8]}...')
     return api_key
 
 
@@ -216,6 +234,15 @@ def update_config_yaml(
 
     raw = CONFIG_YAML.read_text(encoding='utf-8')
     data = yaml.safe_load(raw) or {}
+
+    # auth.users[0].password：如果还是 CHANGE_ME / 空，自动设默认 jellyfin_helper
+    auth = data.setdefault('auth', {})
+    users = auth.setdefault('users', [])
+    if users and users[0].get('password') in (None, '', 'CHANGE_ME'):
+        users[0]['password'] = HELPER_DEFAULT_PASSWORD
+        users[0].setdefault('username', 'admin')
+        users[0].setdefault('role', 'admin')
+        log(f'auth.users[0] 密码设为默认 {HELPER_DEFAULT_PASSWORD}')
 
     data.setdefault('qbittorrent', {})
     data['qbittorrent']['host'] = 'http://qbittorrent:8080'

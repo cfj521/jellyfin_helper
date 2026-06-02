@@ -167,10 +167,11 @@ git clone <this-repo> && cd jellyfin-helper
 # 1) 必填 .env：MEDIA_DIR / DOWNLOADS_DIR（POSTGRES_PASSWORD 默认 jellyfin_helper 不用改）
 cp .env.example .env && $EDITOR .env
 
-# 2) 必填 config.yaml：auth 段（管理员密码 + JWT secret_key）+ 你自己申请的
-#    第三方 API Key（TMDB 必填，OpenSubtitles / ASSRT / MDBList 等按需）。
+# 2) 必填 config.yaml：JWT secret_key + 你自己申请的第三方 API Key
+#    （TMDB 必填，OpenSubtitles / ASSRT / MDBList 等按需）。
 #    完整凭据清单和申请地址见下面「外部服务 → 凭据获取速查表」。
-#    database / jellyfin / jackett / qbittorrent 这四段下一步 bootstrap 会自动写。
+#    database / jellyfin / jackett / qbittorrent / auth.users[0] 这几段
+#    下一步 bootstrap 会自动写（含 helper 默认密码 jellyfin_helper）。
 cp config.yaml.example config.yaml && $EDITOR config.yaml
 
 # 3) 预创建 bind mount 目录并设置属主（Linux/macOS 必需；不预建会被 docker
@@ -202,9 +203,9 @@ bootstrap 用「预填 conf 文件」方式把 qb / Jackett 的密码和 API Key
 
 | 服务 | URL | 账号 | 密码 | 说明 |
 |---|---|---|---|---|
-| **jellyfin-helper** | `http://<宿主IP>:8099` | 看 `config.yaml.auth.users` 自己配的 | 同左 | 主入口 |
+| **jellyfin-helper** | `http://<宿主IP>:8099` | `admin` | `jellyfin_helper` | 主入口；改密码：编辑 `config.yaml.auth.users` 后 restart helper |
 | **qBittorrent** | `http://<宿主IP>:8080` | `admin` | `jellyfin_helper` | 改密码：WebUI → Options → Web UI → Authentication |
-| **Jackett** | `http://<宿主IP>:9117` | — | （无密码）| 加密码：WebUI → Configuration → Admin password |
+| **Jackett** | `http://<宿主IP>:9117` | `admin` | `jellyfin_helper` | 改密码：WebUI → Configuration → Admin password |
 | **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard 设置好；API Key 已自动写回 config.yaml；进 UI 后第一件事加媒体库指向 `/media` |
 | **PostgreSQL** | `postgres:5432`（仅栈内） | `jellyfin_helper` | `jellyfin_helper` | 5432 不暴露宿主，仅栈内访问 |
 
@@ -294,7 +295,7 @@ cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 | **Trakt Client ID** | 可选（推荐源） | https://trakt.tv/oauth/applications 创建 app | `trakt.client_id` |
 | **LLM API Key** | 可选（识别兜底） | 任何 OpenAI 兼容服务（DeepSeek / 阿里通义 / OpenAI） | `llm.api_key` + `llm.base_url` |
 | **JWT secret_key** | 必需 | 自己生成：`python -c "import secrets; print(secrets.token_urlsafe(32))"` | `auth.secret_key` |
-| **管理员账号密码** | 必需 | 自己定（前端登录用） | `auth.users[].password` |
+| **管理员账号密码** | Docker 自动 | Docker 默认 `admin` / `jellyfin_helper`（bootstrap 写）；裸机自己定 | `auth.users[].password` |
 
 **无需 Key 的源**（默认就能用，不用申请）：
 

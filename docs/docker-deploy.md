@@ -137,9 +137,9 @@ bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 
 
 | 服务 | URL | 账号 | 密码 | 备注 |
 |---|---|---|---|---|
-| **jellyfin-helper** | `http://<宿主IP>:8099` | 看 `config.yaml.auth.users` | 同左 | 主入口 |
+| **jellyfin-helper** | `http://<宿主IP>:8099` | `admin` | `jellyfin_helper` | 改密码：编辑 `config.yaml.auth.users` + restart helper |
 | **qBittorrent** | `http://<宿主IP>:8080` | `admin` | `jellyfin_helper` | 改密码见下方 |
-| **Jackett** | `http://<宿主IP>:9117` | — | （无密码）| 加密码：UI → Configuration → Admin password |
+| **Jackett** | `http://<宿主IP>:9117` | `admin` | `jellyfin_helper` | 改密码：UI → Configuration → Admin password |
 | **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard；API Key 已回填 |
 | **PostgreSQL** | `postgres:5432` | `jellyfin_helper` | `jellyfin_helper` | 仅栈内访问，5432 不暴露宿主 |
 
