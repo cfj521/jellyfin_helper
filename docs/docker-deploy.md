@@ -64,8 +64,22 @@ cp config.yaml.example config.yaml
 
 只需要手动改 `auth` 节（管理员密码 + JWT secret）和**第三方 API 凭据**
 （TMDB / MDBList / OpenSubtitles / ASSRT 等你自己申请的）。
-**Postgres / Jackett / qBittorrent / Jellyfin 这四样不用动**——下一步 bootstrap
+**Postgres / Jackett / qBittorrent / Jellyfin 这四样的 host 不用动**——下一步 bootstrap
 脚本会自动把它们的容器内地址和 API Key 写回来。
+
+> **建议填 `external_url`（浏览器跳转链接用）**：helper 里点「打开 Jellyfin /
+> Jackett / qBittorrent」的链接走的是 `external_url`，留空才 fallback 到 `host`。
+> 而 Docker 部署下 `host` 是容器名（`http://jellyfin:8096`），**你的浏览器在
+> 容器网络外解析不了**，跳转会打不开。给三个服务的 `external_url` 填上宿主可访问
+> 地址即可：
+>
+> ```yaml
+> jellyfin:    { external_url: "http://<宿主IP>:8096" }
+> jackett:     { external_url: "http://<宿主IP>:9117" }
+> qbittorrent: { external_url: "http://<宿主IP>:8080" }
+> ```
+>
+> `host`（容器名）给 helper 后端内部调用，`external_url`（宿主 IP）给浏览器跳转，各司其职。
 
 ### 3. 一次性 bootstrap（关键一步）
 

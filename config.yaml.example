@@ -149,7 +149,8 @@ audio:
 # Docker：bootstrap 自动生成 api_key 并回写
 # 裸机：Jackett UI 右上角直接显示 API Key
 jackett:
-  host: "http://127.0.0.1:9117"
+  host: "http://127.0.0.1:9117"          # 后端连接用（Docker 填容器名 http://jackett:9117）
+  external_url: ""                        # 浏览器「打开 Jackett」跳转用；Docker 部署填宿主 IP
   api_key: ""
   search_keywords: []
   default_keywords: ""
@@ -160,7 +161,8 @@ jackett:
 # Docker：bootstrap 自动生成 api_key 并回写
 # 裸机：qB → Preferences → WebUI → API Key 生成（qbt_ 开头 32 字符）
 qbittorrent:
-  host: "http://127.0.0.1:8080"
+  host: "http://127.0.0.1:8080"          # 后端连接用（Docker 填容器名 http://qbittorrent:8080）
+  external_url: ""                        # 浏览器「打开 qBittorrent」跳转用；Docker 部署填宿主 IP
   api_key: ""
 
   # 配额：limit 动态读 dispatch.download_path 真实容量
