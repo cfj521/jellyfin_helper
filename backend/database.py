@@ -624,10 +624,16 @@ def _apply_oneshot_migrations():
 
 
 def init_db():
-    """初始化数据库：一次性迁移 → 建表 → 应用新增列（顺序敏感）。
+    """初始化数据库：建表 → 一次性迁移 → 应用新增列（顺序敏感）。
 
-    注意：一次性迁移先跑（含 TRUNCATE / DROP），再 create_all 让新增表/列补齐。
+    create_all 必须最先跑：全新部署时业务表还不存在，而 _ONESHOT_MIGRATIONS
+    里的 ALTER / TRUNCATE / DROP CONSTRAINT / UPDATE 都需要表已存在（否则
+    报 UndefinedTable，helper 启动即崩）。这些 oneshot SQL 全部幂等
+    （IF NOT EXISTS / IF EXISTS / 空表 TRUNCATE），所以：
+      - 全新库：create_all 建出带所有新列/约束的表 → oneshot 全变无操作
+      - 老库：create_all 不动已存在的表 → oneshot 照常做就地结构调整 + 数据迁移
+    （早期版本把 oneshot 放在 create_all 之前，全新 Docker 部署必崩，已修正）
     """
-    _apply_oneshot_migrations()
     Base.metadata.create_all(bind=engine)
+    _apply_oneshot_migrations()
     _apply_schema_patches()
