@@ -10,6 +10,10 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
+# vite.config.js 用 path.resolve(__dirname, '../VERSION') 读项目根版本号，
+# 容器里 __dirname=/build → 解析 /VERSION，所以 COPY 到那里
+COPY VERSION /VERSION
+
 # 再拷源码做构建（config.yaml 不存在时 vite 用默认端口 fallback，对静态产物无影响）
 COPY frontend/ ./
 RUN npm run build
