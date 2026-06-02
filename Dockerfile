@@ -78,7 +78,7 @@ RUN if [ -n "$PIP_INDEX_URL" ]; then \
         echo "[build] pip index → $PIP_INDEX_URL"; \
         pip config set global.index-url "$PIP_INDEX_URL"; \
     fi && \
-    pip install -r requirements.txt
+    pip install --retries 5 --timeout 60 -r requirements.txt
 
 # 后端 / 共享模块 / 业务工具 / 版本号
 COPY backend/  ./backend/
