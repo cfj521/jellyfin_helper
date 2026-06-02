@@ -112,11 +112,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # 构建时镜像加速；.env 留空 = 用上游官方源（国际用户）
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY-https://registry.npmmirror.com/}
-        PIP_INDEX_URL: ${PIP_INDEX_URL-https://pypi.tuna.tsinghua.edu.cn/simple}
-        APT_MIRROR: ${APT_MIRROR-mirrors.tuna.tsinghua.edu.cn}
     image: jellyfin-helper:local
     container_name: jh-helper
     restart: unless-stopped
@@ -170,10 +165,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY-https://registry.npmmirror.com/}
-        PIP_INDEX_URL: ${PIP_INDEX_URL-https://pypi.tuna.tsinghua.edu.cn/simple}
-        APT_MIRROR: ${APT_MIRROR-mirrors.tuna.tsinghua.edu.cn}
     image: jellyfin-helper:local
     container_name: jh-bootstrap
     profiles: ["bootstrap"]

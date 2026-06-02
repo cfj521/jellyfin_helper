@@ -4,19 +4,11 @@
 # ============================================================
 FROM node:20-alpine AS frontend-builder
 
-# 可选：npm registry 镜像（中国大陆默认走淘宝镜像加速，国际用户在 .env
-# 把 NPM_REGISTRY 设为空字符串即可回退到 registry.npmjs.org）
-ARG NPM_REGISTRY=https://registry.npmmirror.com/
-
 WORKDIR /build
 
 # 先拷 manifest 利用 layer 缓存
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN if [ -n "$NPM_REGISTRY" ]; then \
-        echo "[build] npm registry → $NPM_REGISTRY"; \
-        npm config set registry "$NPM_REGISTRY"; \
-    fi && \
-    npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 # vite.config.js 用 path.resolve(__dirname, '../VERSION') 读项目根版本号，
 # 容器里 __dirname=/build → 解析 /VERSION，所以 COPY 到那里
@@ -31,25 +23,11 @@ RUN npm run build
 # ============================================================
 FROM python:3.12-slim AS runtime
 
-# 可选：pip 国内镜像 + Debian apt 国内镜像。中国大陆默认走清华源，
-# 国际用户 .env 把 PIP_INDEX_URL / APT_MIRROR 设为空即可回退官方源。
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
-
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TZ=Asia/Shanghai
-
-# 切 apt 国内源（仅 debian bookworm；APT_MIRROR 留空 → 跳过）
-RUN if [ -n "$APT_MIRROR" ]; then \
-        echo "[build] apt mirror → $APT_MIRROR"; \
-        sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" \
-            /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-        sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" \
-            /etc/apt/sources.list; \
-    fi
 
 # 系统依赖：
 #   ffmpeg     - 字幕内嵌探测 / 转码
@@ -57,6 +35,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 #   libpq5     - psycopg2-binary 运行时
 #   libarchive-tools - bsdtar，支持 RAR5 解压（字幕源用）
 #   tini       - PID 1 信号转发，避免僵尸进程
+#   gosu       - 安全降权（entrypoint root → PUID:PGID）
 #   curl       - HEALTHCHECK 用
 #   tzdata     - 时区
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -74,11 +53,7 @@ WORKDIR /app
 
 # 先装 Python 依赖（独立 layer，requirements 不变就命中缓存）
 COPY requirements.txt ./
-RUN if [ -n "$PIP_INDEX_URL" ]; then \
-        echo "[build] pip index → $PIP_INDEX_URL"; \
-        pip config set global.index-url "$PIP_INDEX_URL"; \
-    fi && \
-    pip install --retries 5 --timeout 60 -r requirements.txt
+RUN pip install --retries 5 --timeout 60 -r requirements.txt
 
 # 后端 / 共享模块 / 业务工具 / 版本号
 COPY backend/  ./backend/
