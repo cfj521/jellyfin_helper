@@ -103,9 +103,9 @@ bootstrap 干了这些（**两阶段都幂等**，重复跑安全）：
 
 **phase prep**（容器没起前）：
 - 写 `data/qbittorrent/qBittorrent/qBittorrent.conf`：用户名 `admin` /
-  密码 `jellyfin_helper`、生成随机 API Key、启用 RSS + 自动下载规则处理
+  密码 `jellyfin_helper`、启用 RSS + 自动下载规则处理（API Key 不预填，见步骤 6）
 - 写 `data/jackett/Jackett/ServerConfig.json`：生成 API Key、`admin/jellyfin_helper`、`AllowExternal=true`
-- 把以上 API Key 与容器内地址 (`postgres` / `jellyfin:8096` / `jackett:9117` /
+- 把 Jackett API Key 与容器内地址 (`postgres` / `jellyfin:8096` / `jackett:9117` /
   `qbittorrent:8080`) 回写到 `config.yaml`，并备份到 `data/config.yaml.bak.bootstrap.*`
 
 **phase connect**（服务起来后）：
@@ -135,9 +135,10 @@ bootstrap 干了这些（**两阶段都幂等**，重复跑安全）：
 
 ### 5. Web UI 登录凭据汇总
 
-bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 + API Key
-一起写进 `qBittorrent.conf` / `ServerConfig.json`），所以 helper 拿 API Key 不需要
-走「登录 → Generate」交互流程。但 qb WebUI 浏览器登录仍需密码，下面是各服务凭据：
+bootstrap 预填 qb / Jackett 的 conf：**Jackett 的 API Key 能预填**（helper 直接用）；
+**qBittorrent 的 API Key 不能预填**——qB 5.2 的 key 是内部生成的 `qbt_` 串，写进
+conf 无效（qB 不认，helper 会拿到 403）。所以 qb 的 key 要起来后手动生成一次（步骤 6）。
+各服务 WebUI 登录凭据：
 
 | 服务 | URL | 账号 | 密码 | 备注 |
 |---|---|---|---|---|
@@ -147,18 +148,20 @@ bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 
 | **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard；API Key 已回填 |
 | **PostgreSQL** | `postgres:5432` | `jellyfin_helper` | `jellyfin_helper` | 仅栈内访问，5432 不暴露宿主 |
 
-### 6.（可选）改 qBittorrent 密码
+### 6.（必做）生成 qBittorrent API Key
 
-`admin / jellyfin_helper` 是 stack 内的默认值，想换：
+qB 5.2 的 API Key 是内部生成的 `qbt_` 串，bootstrap 无法预填，要手动生成一次：
 
-1. qb WebUI → Options → Web UI → Authentication → 改用户名/密码
-2. **同步改 API Key**：同一页面下方 Generate 新 API Key → 复制
-3. 把新 key 写回 `config.yaml.qbittorrent.api_key`
+1. 浏览器开 `http://<宿主IP>:8080`，用 `admin / jellyfin_helper` 登录
+2. 选项 → WebUI → 「API 密钥」→ 生成，复制 `qbt_` 开头的 key
+3. 写进 `config.yaml` 的 `qbittorrent.api_key`
 4. `docker compose restart helper`
 
-注意：helper 调 qb 用的是 **API Key 不是密码**。光改密码不会断 helper；改 API Key 才会。
-qb 自己会把新设置落盘到 `data/qbittorrent/qBittorrent/qBittorrent.conf`，
-下次容器重启依然生效。
+helper 调 qb 用的是 **API Key（Bearer）不是密码**。没填 key 时 qb 相关功能
+（下载列表 / 推种 / 配额）不可用，helper 本身仍正常启动。
+
+> 想换 qb 登录密码：同一页面 Authentication 改即可，不影响 helper（helper 用 API Key 不用密码）。
+> qb 会把设置落盘到 `data/qbittorrent/qBittorrent/qBittorrent.conf`，重启仍生效。
 
 ---
 

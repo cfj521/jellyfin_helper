@@ -207,9 +207,10 @@ bootstrap 用「预填 conf 文件」方式把 qb / Jackett 的密码和 API Key
 | **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard 设置好；API Key 已自动写回 config.yaml；进 UI 后第一件事加媒体库指向 `/media` |
 | **PostgreSQL** | `postgres:5432`（仅栈内） | `jellyfin_helper` | `jellyfin_helper` | 5432 不暴露宿主，仅栈内访问 |
 
-> 想改 qb 默认密码：上 qb WebUI 改完后，**同步**生成新 API Key 写回
-> `config.yaml.qbittorrent.api_key`（helper 用的是 API Key，不是密码，
-> 改密码本身不会影响 helper，但改 API Key 会）。
+> **qBittorrent API Key 需手动生成一次**（qB 5.2 的 key 是内部生成的 `qbt_` 串，
+> bootstrap 无法预填）：进 qb WebUI（`admin`/`jellyfin_helper`）→ 选项 → WebUI →
+> 「API 密钥」→ 生成，把 `qbt_` 开头的 key 写进 `config.yaml.qbittorrent.api_key`，
+> 再 `docker compose restart helper`。没填前 qb 相关功能不可用但 helper 正常启动。
 
 完整流程（含升级、备份、常见问题）：[docs/docker-deploy.md](docs/docker-deploy.md)
 
@@ -285,7 +286,7 @@ cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 | **Jellyfin API Key** | 必需 | Docker：bootstrap 自动跑 Wizard + 申请；裸机：Jellyfin Web → 控制台 → API Keys → 新建 | `jellyfin.api_key` |
 | **TMDB API Key** | 必需 | https://www.themoviedb.org/settings/api（免费注册申请） | `tmdb.api_key` |
 | **PostgreSQL 密码** | Docker 自动 | Docker 默认 `jellyfin_helper`（stack 内用，不外露）；裸机自己定 | `database.password` |
-| **qBittorrent API Key** | 必需（5.2+ 强制） | Docker：bootstrap 自动；裸机：qB → Preferences → WebUI → API Key Generate | `qbittorrent.api_key`（**不需要** username/password） |
+| **qBittorrent API Key** | 必需（5.2+ 强制，需手动生成一次） | qB WebUI（`admin`/`jellyfin_helper`）→ 选项 → WebUI → API 密钥 → 生成 | `qbittorrent.api_key`（**不需要** username/password） |
 | **Jackett API Key** | 必需 | Docker：bootstrap 自动；裸机：Jackett UI 右上角直接显示 | `jackett.api_key` |
 | **MDBList API Key** | 推荐（评分） | https://mdblist.com/api 登录后生成（免费 1000 req/天） | `mdblist.api_key` |
 | **OpenSubtitles 三件套** | 推荐（字幕） | API Consumer → https://www.opensubtitles.com/consumers + 注册账号 | `subtitle.opensubtitles_api_key` + `opensubtitles_username` + `opensubtitles_password` |

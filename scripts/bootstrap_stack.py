@@ -100,26 +100,22 @@ def qb_pbkdf2_hash(password: str) -> str:
     return f'@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(dk).decode()})'
 
 
-def prep_qbittorrent_conf() -> str:
+def prep_qbittorrent_conf() -> None:
     """
-    预填 qBittorrent.conf；返回 API Key（无论新生成还是已有）。
-    qB 启动时读 conf 发现密码 / API key 已设，就不会生成临时密码 / 触发首启向导。
+    预填 qBittorrent.conf：设 admin 密码 (jellyfin_helper) + RSS 自动下载。
+    qB 启动时读到密码已设，就不会生成临时随机密码。
+
+    不预填 API Key：qB 5.2 的 API Key 是 `qbt_` 前缀的内部生成串（160-bit），
+    既无法预填明文到 conf（写了 qB 也不认 → 403），也没有程序化生成的 REST 端点。
+    用户需在 qB 起来后进 WebUI → 选项 → WebUI → API 密钥 → 生成，填入
+    config.yaml.qbittorrent.api_key。详见 docs/docker-deploy.md。
     """
     QB_CONF.parent.mkdir(parents=True, exist_ok=True)
 
     if QB_CONF.exists():
-        text = QB_CONF.read_text(encoding='utf-8')
-        m = re.search(r'^WebUI\\APIKey\s*=\s*(\S+)\s*$', text, re.M)
-        if m:
-            log(f'qBittorrent.conf 已存在，复用 API Key: {m.group(1)[:8]}...')
-            return m.group(1)
-        log('qBittorrent.conf 已存在但缺 APIKey，追加')
-        api_key = secrets.token_urlsafe(32)
-        text = text.rstrip() + f'\nWebUI\\APIKey={api_key}\n'
-        QB_CONF.write_text(text, encoding='utf-8')
-        return api_key
+        log('qBittorrent.conf 已存在，跳过（保留已有密码/设置）')
+        return
 
-    api_key = secrets.token_urlsafe(32)
     password_field = qb_pbkdf2_hash(QB_PASSWORD)
 
     # 最小可用配置；其余字段 qB 自己用默认补
@@ -133,7 +129,6 @@ Session\\TempPathEnabled=false
 [Preferences]
 WebUI\\Username=admin
 WebUI\\Password_PBKDF2="{password_field}"
-WebUI\\APIKey={api_key}
 WebUI\\Address=*
 WebUI\\Port={int(os.environ.get('QB_WEBUI_PORT', 8080))}
 WebUI\\CSRFProtection=true
@@ -150,8 +145,7 @@ Session\\EnableFetching=true
 Session\\RefreshInterval=30
 """
     QB_CONF.write_text(conf, encoding='utf-8')
-    log(f'已写入 qBittorrent.conf；密码=jellyfin_helper，APIKey={api_key[:8]}...')
-    return api_key
+    log('已写入 qBittorrent.conf；admin 密码=jellyfin_helper（API Key 需起来后手动生成）')
 
 
 # ============================================================
@@ -225,7 +219,6 @@ def prep_jackett_conf() -> str:
 # config.yaml 回写
 # ============================================================
 def update_config_yaml(
-    qb_api_key: str,
     jackett_api_key: str,
     jellyfin_api_key: Optional[str] = None,
 ) -> None:
@@ -247,7 +240,9 @@ def update_config_yaml(
 
     data.setdefault('qbittorrent', {})
     data['qbittorrent']['host'] = 'http://qbittorrent:8080'
-    data['qbittorrent']['api_key'] = qb_api_key
+    # api_key 不自动写：qB 5.2 的 key 需用户在 WebUI 手动生成后填这里，
+    # 不覆盖已有值（用户填过就保留）
+    data['qbittorrent'].setdefault('api_key', '')
 
     data.setdefault('jackett', {})
     # backend/config.py 读的字段名是 host（不是 url），写错了 helper 找不到 jackett
@@ -613,14 +608,14 @@ def bootstrap_indexers() -> None:
 def run_prep() -> None:
     """
     phase prep（首次部署前跑）：
-      1. 预填 qBittorrent.conf（admin/jellyfin_helper + API Key + RSS）
+      1. 预填 qBittorrent.conf（admin/jellyfin_helper 密码 + RSS；API Key 需手动）
       2. 预填 Jackett ServerConfig.json（API Key + admin 密码）
-      3. 把 qb/jackett api_key + database/jellyfin 容器名同步到 config.yaml
+      3. 把 jackett api_key + database/jellyfin 容器名同步到 config.yaml
     幂等：conf 已存在 → 复用已有 key 不重写；config.yaml 字段不覆盖已设值
     """
-    qb_key = prep_qbittorrent_conf()
+    prep_qbittorrent_conf()
     jackett_key = prep_jackett_conf()
-    update_config_yaml(qb_key, jackett_key)
+    update_config_yaml(jackett_key)
 
 
 def run_connect() -> None:
@@ -631,8 +626,8 @@ def run_connect() -> None:
     幂等：Jackett 已配置过的 indexer 自动跳过；Jellyfin wizard 已完成则
     跳过 wizard 直接拿 key；同名 AppName 的 key 复用不重建
     """
-    # 从已写的 conf 复用 keys（prep 函数自带"已存在则复用"逻辑）
-    qb_key = prep_qbittorrent_conf()
+    # 从已写的 conf 复用 jackett key（prep 自带"已存在则复用"逻辑）
+    prep_qbittorrent_conf()
     jackett_key = prep_jackett_conf()
 
     bootstrap_indexers()
@@ -640,10 +635,16 @@ def run_connect() -> None:
     log('-' * 60)
     log('开始 Jellyfin Setup Wizard + 申请 API Key...')
     jellyfin_key = bootstrap_jellyfin()
-    if jellyfin_key:
-        update_config_yaml(qb_key, jackett_key, jellyfin_api_key=jellyfin_key)
-    else:
+    # 总是回写 jackett key；jellyfin_key 有就一并写（None 时 update 内部跳过）
+    update_config_yaml(jackett_key, jellyfin_api_key=jellyfin_key)
+    if not jellyfin_key:
         log('Jellyfin bootstrap 未拿到 api_key；手动 wizard 后在控制台 → API Keys 自建并填 config.yaml')
+
+    log('-' * 60)
+    log('⚠ qBittorrent API Key 需手动生成（qB 5.2 限制，无法自动配）：')
+    log('  1. 浏览器开 http://<宿主IP>:8080，用 admin / jellyfin_helper 登录')
+    log('  2. 选项 → WebUI → 「API 密钥」→ 生成，复制 qbt_ 开头的 key')
+    log('  3. 填入 config.yaml 的 qbittorrent.api_key，然后 docker compose restart helper')
 
 
 # ============================================================
