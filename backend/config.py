@@ -202,7 +202,7 @@ class Settings(BaseSettings):
 
     # Jackett 配置
     jackett_host: str = _yaml_config.get('jackett', {}).get('host', 'http://127.0.0.1:9117')
-    jackett_api_key: str = _yaml_config.get('jackett', {}).get('api_key', '***REMOVED***')
+    jackett_api_key: str = _yaml_config.get('jackett', {}).get('api_key', '')
     # 搜索关键字 chip 列表（单个词，可在 UI 中点击 toggle 进/出搜索框）
     jackett_search_keywords: List[str] = _yaml_config.get('jackett', {}).get('search_keywords') or [
         '2160p', '1080p', '720p',
