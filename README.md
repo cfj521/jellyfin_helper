@@ -194,8 +194,23 @@ docker compose restart helper
 
 完成。浏览器打开 `http://<宿主IP>:8099` 用 `config.yaml` 里的账号登录。
 
-Jellyfin 自己有 Setup Wizard 必须手工走一遍（建账号 + 媒体库指向 `/media`），
-然后在 Jellyfin 控制台生成 API Key 填进 `config.yaml` 的 `jellyfin.api_key`。
+### Web UI 登录凭据
+
+bootstrap 用「预填 conf 文件」方式把 qb / Jackett 的密码和 API Key 在容器启动前
+就一起写进去（不走 WebUI 登录交互），所以 helper 拿 API Key 不需要先登录。
+但 **qb WebUI 仍需密码登录**（浏览种子、改设置时）—— 用下面这套：
+
+| 服务 | URL | 账号 | 密码 | 说明 |
+|---|---|---|---|---|
+| **jellyfin-helper** | `http://<宿主IP>:8099` | 看 `config.yaml.auth.users` 自己配的 | 同左 | 主入口 |
+| **qBittorrent** | `http://<宿主IP>:8080` | `admin` | `jellyfin_helper` | 改密码：WebUI → Options → Web UI → Authentication |
+| **Jackett** | `http://<宿主IP>:9117` | — | （无密码）| 加密码：WebUI → Configuration → Admin password |
+| **Jellyfin** | `http://<宿主IP>:8096` | 首次跑 Setup Wizard 自建 | 同左 | 走完向导后在控制台 → API Keys 生成 key 回填 `config.yaml.jellyfin.api_key` |
+| **PostgreSQL** | `postgres:5432`（仅栈内） | `jellyfin_helper` | `jellyfin_helper` | 5432 不暴露宿主，仅栈内访问 |
+
+> 想改 qb 默认密码：上 qb WebUI 改完后，**同步**生成新 API Key 写回
+> `config.yaml.qbittorrent.api_key`（helper 用的是 API Key，不是密码，
+> 改密码本身不会影响 helper，但改 API Key 会）。
 
 完整流程（含升级、备份、常见问题）：[docs/docker-deploy.md](docs/docker-deploy.md)
 

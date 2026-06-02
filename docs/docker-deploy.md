@@ -118,17 +118,32 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
 3. 填进 `config.yaml` 的 `jellyfin.api_key`
 4. `docker compose restart helper`
 
-### 6. 访问 jellyfin-helper
+### 6. Web UI 登录凭据汇总
 
-浏览器打开 `http://<宿主IP>:8099`，用 `config.yaml` 里 `auth.users` 配的账号登录。
+bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 + API Key
+一起写进 `qBittorrent.conf` / `ServerConfig.json`），所以 helper 拿 API Key 不需要
+走「登录 → Generate」交互流程。但 qb WebUI 浏览器登录仍需密码，下面是各服务凭据：
 
-### 7.（可选）改后台密码
+| 服务 | URL | 账号 | 密码 | 备注 |
+|---|---|---|---|---|
+| **jellyfin-helper** | `http://<宿主IP>:8099` | 看 `config.yaml.auth.users` | 同左 | 主入口 |
+| **qBittorrent** | `http://<宿主IP>:8080` | `admin` | `jellyfin_helper` | 改密码见下方 |
+| **Jackett** | `http://<宿主IP>:9117` | — | （无密码）| 加密码：UI → Configuration → Admin password |
+| **Jellyfin** | `http://<宿主IP>:8096` | 见步骤 5 Setup Wizard | 同左 | API Key 在控制台拿 |
+| **PostgreSQL** | `postgres:5432` | `jellyfin_helper` | `jellyfin_helper` | 仅栈内访问，5432 不暴露宿主 |
 
-- qBittorrent / Jackett 的 Web UI 都已经能用 `admin` / `jellyfin_helper` 登录
-  （Jackett 默认没强制密码，可在它 UI 里加）
-- 想换 qBittorrent 密码：直接在 qB Options → Web UI 里改，**改完后同步**
-  容器内的 `data/qbittorrent/qBittorrent/qBittorrent.conf` 已自动落盘，
-  无需手工同步
+### 7.（可选）改 qBittorrent 密码
+
+`admin / jellyfin_helper` 是 stack 内的默认值，想换：
+
+1. qb WebUI → Options → Web UI → Authentication → 改用户名/密码
+2. **同步改 API Key**：同一页面下方 Generate 新 API Key → 复制
+3. 把新 key 写回 `config.yaml.qbittorrent.api_key`
+4. `docker compose restart helper`
+
+注意：helper 调 qb 用的是 **API Key 不是密码**。光改密码不会断 helper；改 API Key 才会。
+qb 自己会把新设置落盘到 `data/qbittorrent/qBittorrent/qBittorrent.conf`，
+下次容器重启依然生效。
 
 ---
 
