@@ -276,7 +276,11 @@ def update_config_yaml(
             log(f'config.yaml 已有 jellyfin.api_key（{existing[:8]}...），保留不覆盖')
 
     # 备份后写
-    backup = CONFIG_YAML.with_suffix(f'.yaml.bak.bootstrap.{int(time.time())}')
+    # 备份落到 data/ 下（必然可写，已被 entrypoint chown）；
+    # 不写在 CONFIG_YAML 同目录，因为容器里 /workspace 父目录是 root 拥有的
+    backup_dir = ROOT / 'data'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f'config.yaml.bak.bootstrap.{int(time.time())}'
     backup.write_text(raw, encoding='utf-8')
 
     CONFIG_YAML.write_text(
