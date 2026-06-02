@@ -215,6 +215,10 @@ def update_config_yaml(qb_api_key: str, jackett_api_key: str) -> None:
     data.setdefault('database', {})
     if data['database'].get('host') in (None, '', '127.0.0.1', 'localhost'):
         data['database']['host'] = 'postgres'
+    # 密码也一并写：跟 .env 默认 POSTGRES_PASSWORD=jellyfin_helper 对齐
+    # 用户如果在 .env 改了别的密码，需手动同步这里
+    if data['database'].get('password') in (None, '', 'CHANGE_ME'):
+        data['database']['password'] = os.environ.get('POSTGRES_PASSWORD', 'jellyfin_helper')
     data.setdefault('jellyfin', {})
     if data['jellyfin'].get('host') in (None, '', 'http://127.0.0.1:8096', 'http://localhost:8096'):
         data['jellyfin']['host'] = 'http://jellyfin:8096'

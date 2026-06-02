@@ -47,10 +47,11 @@ helper 和 jellyfin 看到的是同一个值，`config.yaml` 里 `path_mappings`
 
 ```bash
 cp .env.example .env
-# 必改三项：
+# 必改两项：
 #   MEDIA_DIR=/your/media/root
 #   DOWNLOADS_DIR=/your/downloads
-#   POSTGRES_PASSWORD=<强密码>
+# POSTGRES_PASSWORD 默认 jellyfin_helper，stack 内用、5432 不外露，不用改。
+# 想外露或安全洁癖再改强密码（注意同步 config.yaml database.password）。
 ```
 
 `MEDIA_DIR` / `DOWNLOADS_DIR` 没填的话 compose 会拒绝启动并报错。

@@ -164,7 +164,7 @@ Jackett 的密码、API Key、indexer、RSS 开关，并回填到 `config.yaml`�
 ```bash
 git clone <this-repo> && cd jellyfin-helper
 
-# 1) 必填 .env：MEDIA_DIR / DOWNLOADS_DIR / POSTGRES_PASSWORD
+# 1) 必填 .env：MEDIA_DIR / DOWNLOADS_DIR（POSTGRES_PASSWORD 默认 jellyfin_helper 不用改）
 cp .env.example .env && $EDITOR .env
 
 # 2) 必填 config.yaml：auth 段（管理员密码 + JWT secret_key）+ 你自己申请的
@@ -270,7 +270,7 @@ cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 |---|---|---|---|
 | **Jellyfin API Key** | 必需 | Jellyfin Web → 控制台 → API Keys → 新建 | `jellyfin.api_key` |
 | **TMDB API Key** | 必需 | https://www.themoviedb.org/settings/api（免费注册申请） | `tmdb.api_key` |
-| **PostgreSQL 密码** | 必需 | 自己定（Docker：`.env` 的 `POSTGRES_PASSWORD`） | `database.password` |
+| **PostgreSQL 密码** | Docker 自动 | Docker 默认 `jellyfin_helper`（stack 内用，不外露）；裸机自己定 | `database.password` |
 | **qBittorrent API Key** | 必需 | Docker：bootstrap 自动；裸机：qB → Preferences → WebUI → Generate | `qbittorrent.api_key` |
 | **Jackett API Key** | 必需 | Docker：bootstrap 自动；裸机：Jackett UI 右上角直接显示 | `jackett.api_key` |
 | **MDBList API Key** | 推荐（评分） | https://mdblist.com/api 登录后生成（免费 1000 req/天） | `mdblist.api_key` |
