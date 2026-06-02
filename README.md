@@ -174,22 +174,19 @@ cp .env.example .env && $EDITOR .env
 #    下一步 bootstrap 会自动写（含 helper 默认密码 jellyfin_helper）。
 cp config.yaml.example config.yaml && $EDITOR config.yaml
 
-# 3) 预创建 bind mount 目录并设置属主（Linux/macOS 必需；不预建会被 docker
-#    以 root 创建，导致 PUID 容器写不进。Windows + Docker Desktop 可跳过）
-mkdir -p data/{postgres,jellyfin,jackett,qbittorrent,helper} logs
-sudo chown -R 1000:1000 data logs       # 改成你 .env 里的 PUID:PGID
-
-# 4) 预填 qb/jackett 配置（生成密码 hash + API Key）
+# 3) 预填 qb/jackett 配置（生成密码 hash + API Key）
+#    bootstrap / helper 容器以 root 启动，entrypoint 自动 chown
+#    ./data/* 和 ./logs 到 PUID:PGID，**不需要手动 mkdir / chown**
 docker compose --profile bootstrap run --rm bootstrap
 
-# 5) 起 5 个服务
+# 4) 起 5 个服务
 docker compose up -d
 
-# 6) Jackett 起来后再跑一次 bootstrap，添加 7 个公开 indexer
+# 5) Jackett 起来后再跑一次 bootstrap，添加 7 个公开 indexer
 #    （52BT / dmhy / OneJAV / ThePirateBay / TheRARBG / TorrentKitty / YTS）
 docker compose --profile bootstrap run --rm bootstrap
 
-# 7) 让 helper 重读 config.yaml
+# 6) 让 helper 重读 config.yaml
 docker compose restart helper
 ```
 

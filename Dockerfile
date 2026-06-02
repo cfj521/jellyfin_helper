@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         libarchive-tools \
         tini \
+        gosu \
         curl \
         tzdata \
     && rm -rf /var/lib/apt/lists/*

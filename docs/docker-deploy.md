@@ -67,25 +67,15 @@ cp config.yaml.example config.yaml
 **Postgres / Jackett / qBittorrent / Jellyfin 这四样不用动**——下一步 bootstrap
 脚本会自动把它们的容器内地址和 API Key 写回来。
 
-### 3. 预创建数据目录（首次部署，**必须**）
+### 3. 一次性 bootstrap（关键一步）
 
-bind mount 的源目录如果不存在，docker daemon 会以 **root** 创建——但 helper /
-bootstrap 容器以 `${PUID}:${PGID}` 启动写不进 root 拥有的目录，启动会直接报
-"data 不可写"退出。所以首次部署前手动建好并 chown：
-
-```bash
-mkdir -p data/{postgres,jellyfin,jackett,qbittorrent,helper} logs
-
-# Linux / macOS：把属主改成 .env 里的 PUID:PGID
-sudo chown -R 1000:1000 data logs       # 改成你的 PUID:PGID
-```
-
-Windows + Docker Desktop 一般不存在这个问题（bind mount 走 SMB 转换层，权限模型不同）。
-
-### 4. 一次性 bootstrap（关键一步）
+> 💡 不用手动 `mkdir` / `sudo chown`：bootstrap 和 helper 容器都以 root 启动，
+> entrypoint 自动 `chown -R PUID:PGID /app/data /app/logs`（bootstrap 同理改
+> `/workspace/data`），然后 `gosu` 降权到 PUID:PGID 跑业务。所有 bind mount
+> 的属主问题在容器内自动处理。
 
 ```bash
-# 4a. 预填 qbittorrent / jackett 的配置（生成 admin/jellyfin_helper 密码 + API Key）
+# 3a. 预填 qbittorrent / jackett 的配置（生成 admin/jellyfin_helper 密码 + API Key）
 docker compose --profile bootstrap run --rm bootstrap
 
 # 3b. 拉起所有服务
@@ -108,7 +98,7 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
 - 把以上 API Key 与容器内地址 (`postgres` / `jellyfin:8096` / `jackett:9117` /
   `qbittorrent:8080`) 回写到 `config.yaml`，并备份原文件
 
-### 5. Jellyfin 媒体库添加（API Key 已自动）
+### 4. Jellyfin 媒体库添加（API Key 已自动）
 
 第 4 步 bootstrap 已经替你跑完 Jellyfin Setup Wizard（admin/jellyfin_helper）、
 申请好 API Key 并写回 `config.yaml.jellyfin.api_key`，**不需要手动操作**。
@@ -129,7 +119,7 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
 > docker compose restart helper
 > ```
 
-### 6. Web UI 登录凭据汇总
+### 5. Web UI 登录凭据汇总
 
 bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 + API Key
 一起写进 `qBittorrent.conf` / `ServerConfig.json`），所以 helper 拿 API Key 不需要
@@ -143,7 +133,7 @@ bootstrap 在 qb / Jackett 容器启动前直接**预填 conf 文件**（密码 
 | **Jellyfin** | `http://<宿主IP>:8096` | `admin` | `jellyfin_helper` | bootstrap 自动跑 Wizard；API Key 已回填 |
 | **PostgreSQL** | `postgres:5432` | `jellyfin_helper` | `jellyfin_helper` | 仅栈内访问，5432 不暴露宿主 |
 
-### 7.（可选）改 qBittorrent 密码
+### 6.（可选）改 qBittorrent 密码
 
 `admin / jellyfin_helper` 是 stack 内的默认值，想换：
 

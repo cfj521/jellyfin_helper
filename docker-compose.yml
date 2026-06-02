@@ -115,9 +115,12 @@ services:
     image: jellyfin-helper:local
     container_name: jh-helper
     restart: unless-stopped
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # 容器以 root 启动，entrypoint 在 chown /app/data /app/logs 后用 gosu
+    # 降权到 PUID:PGID。这样宿主不需要手动 chown ./data/helper、./logs
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: "8099"
       POSTGRES_HOST: postgres
@@ -165,18 +168,24 @@ services:
     image: jellyfin-helper:local
     container_name: jh-bootstrap
     profiles: ["bootstrap"]
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # 同 helper：以 root 启动，entrypoint chown 后 gosu 降权
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       BOOTSTRAP_ROOT: /workspace
       QB_URL: http://qbittorrent:8080
       JACKETT_URL: http://jackett:9117
       QB_WEBUI_PORT: ${QB_WEBUI_PORT:-8080}
+      # 复用 helper 的 docker-entrypoint.sh：bootstrap 不依赖 postgres，
+      # 且数据路径在 /workspace/data 而不是 /app/data，用 env 调整
+      CHOWN_DIRS: "/workspace/data"
+      SKIP_WAIT_POSTGRES: "1"
+      SKIP_MEDIA_CHECK: "1"
     volumes:
       - ./data:/workspace/data
       - ./config.yaml:/workspace/config.yaml
       - ./scripts:/workspace/scripts:ro
     working_dir: /workspace
-    entrypoint: ["/usr/bin/tini", "--"]
     command: ["python", "scripts/bootstrap_stack.py"]
     restart: "no"
