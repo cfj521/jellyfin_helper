@@ -74,29 +74,43 @@ cp config.yaml.example config.yaml
 > `/workspace/data`），然后 `gosu` 降权到 PUID:PGID 跑业务。所有 bind mount
 > 的属主问题在容器内自动处理。
 
+bootstrap 有两个阶段，**必须显式指定 `--phase`**（防止误跑导致状态混乱）：
+
+| phase | 何时跑 | 干啥 |
+|---|---|---|
+| `prep` | docker compose up 之前 | 预填 qb/jackett 的 conf 文件 + 回写 config.yaml |
+| `connect` | docker compose up 之后 | 连 jackett 加 indexer + 跑 Jellyfin Setup Wizard + 申请 API Key |
+
+两个阶段都**幂等**，重复跑安全。
+
 ```bash
-# 3a. 预填 qbittorrent / jackett 的配置（生成 admin/jellyfin_helper 密码 + API Key）
-docker compose --profile bootstrap run --rm bootstrap
+# 3a. phase prep：预填 qb/jackett conf + 回写 config.yaml
+docker compose --profile bootstrap run --rm bootstrap --phase prep
 
 # 3b. 拉起所有服务
 docker compose up -d
 
-# 3c. 再跑一次 bootstrap，给 Jackett 添加 7 个公开 indexer
+# 3c. phase connect：连 jackett 加 7 个公开 indexer + 跑 Jellyfin Wizard
+#     + 申请 API Key 回写 config.yaml
 #     （52BT / dmhy / OneJAV / ThePirateBay / TheRARBG / TorrentKitty / YTS）
-docker compose --profile bootstrap run --rm bootstrap
+docker compose --profile bootstrap run --rm bootstrap --phase connect
 
 # 3d. 让 helper 重读 config.yaml
 docker compose restart helper
 ```
 
-bootstrap 干了这些（**幂等**，重复跑安全）：
+bootstrap 干了这些（**两阶段都幂等**，重复跑安全）：
 
+**phase prep**（容器没起前）：
 - 写 `data/qbittorrent/qBittorrent/qBittorrent.conf`：用户名 `admin` /
   密码 `jellyfin_helper`、生成随机 API Key、启用 RSS + 自动下载规则处理
-- 写 `data/jackett/Jackett/ServerConfig.json`：生成 API Key、`AllowExternal=true`
-- 添加 7 个 indexer（公开站点，无需 cookie）
+- 写 `data/jackett/Jackett/ServerConfig.json`：生成 API Key、`admin/jellyfin_helper`、`AllowExternal=true`
 - 把以上 API Key 与容器内地址 (`postgres` / `jellyfin:8096` / `jackett:9117` /
-  `qbittorrent:8080`) 回写到 `config.yaml`，并备份原文件
+  `qbittorrent:8080`) 回写到 `config.yaml`，并备份到 `data/config.yaml.bak.bootstrap.*`
+
+**phase connect**（服务起来后）：
+- 添加 7 个 Jackett indexer（公开站点，无需 cookie）
+- 跑 Jellyfin Setup Wizard 建 admin/jellyfin_helper、申请 API Key 回写 `config.yaml.jellyfin.api_key`
 
 ### 4. Jellyfin 媒体库添加（API Key 已自动）
 
@@ -110,12 +124,12 @@ bootstrap 干了这些（**幂等**，重复跑安全）：
    → 文件夹指向 `/media/电影`、`/media/剧集` 等子目录
 3. 点保存，Jellyfin 自动扫描
 
-> 如果第 4 步 bootstrap 报「Jellyfin bootstrap 未拿到 api_key」，说明
-> jellyfin 容器还没起完（Wizard 是 phase 2 跑的，需要 jellyfin 已 healthy）。
-> 等 `docker compose ps` 看 jellyfin 状态 `Up`，重跑 phase 2：
+> 如果 phase connect 报「Jellyfin bootstrap 未拿到 api_key」，说明
+> jellyfin 容器还没起完。等 `docker compose ps` 看 jellyfin 状态 `Up`，
+> 重跑 phase connect（幂等，已加过的 indexer / 已完成的 wizard 都会自动跳过）：
 >
 > ```bash
-> docker compose --profile bootstrap run --rm bootstrap
+> docker compose --profile bootstrap run --rm bootstrap --phase connect
 > docker compose restart helper
 > ```
 
@@ -214,9 +228,9 @@ docker compose logs jh-qbittorrent | grep -i "temporary password"
 ```bash
 docker compose stop qbittorrent jackett
 rm -rf data/qbittorrent data/jackett
-docker compose --profile bootstrap run --rm bootstrap
+docker compose --profile bootstrap run --rm bootstrap --phase prep
 docker compose start qbittorrent jackett
-docker compose --profile bootstrap run --rm bootstrap   # phase 2 加 indexer
+docker compose --profile bootstrap run --rm bootstrap --phase connect
 ```
 
 注意：清掉 `data/qbittorrent` 会丢做种历史，仅在初始化阶段这么做。

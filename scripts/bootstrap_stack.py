@@ -22,6 +22,7 @@ jellyfin-helper docker stack 一次性 bootstrap。
 """
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import json
@@ -561,39 +562,90 @@ def bootstrap_indexers(api_key: str) -> None:
 
 
 # ============================================================
-# 入口
+# 阶段函数（都是幂等的，反复跑安全）
 # ============================================================
-def main() -> int:
-    log(f'ROOT = {ROOT}')
-
-    # ── Phase 1：预填 conf（必须先于 qb/jackett 容器首次启动）──
+def run_prep() -> None:
+    """
+    phase prep（首次部署前跑）：
+      1. 预填 qBittorrent.conf（admin/jellyfin_helper + API Key + RSS）
+      2. 预填 Jackett ServerConfig.json（API Key + admin 密码）
+      3. 把 qb/jackett api_key + database/jellyfin 容器名同步到 config.yaml
+    幂等：conf 已存在 → 复用已有 key 不重写；config.yaml 字段不覆盖已设值
+    """
     qb_key = prep_qbittorrent_conf()
     jackett_key = prep_jackett_conf()
     update_config_yaml(qb_key, jackett_key)
 
-    log('-' * 60)
-    log('Phase 1 完成。如果这是首次部署，现在请执行：')
-    log('    docker compose up -d')
-    log('然后再跑一次本 bootstrap 让它给 Jackett 加 indexer。')
-    log('-' * 60)
 
-    # ── Phase 2：加 indexer + Jellyfin wizard + api_key（这一波都要服务已起）──
+def run_connect() -> None:
+    """
+    phase connect（docker compose up -d 之后跑）：
+      1. 连 Jackett 加 7 个公开 indexer
+      2. 连 Jellyfin 跑 Setup Wizard（如未完成）+ 申请 API Key 回写 config.yaml
+    幂等：Jackett 已配置过的 indexer 自动跳过；Jellyfin wizard 已完成则
+    跳过 wizard 直接拿 key；同名 AppName 的 key 复用不重建
+    """
+    # 从已写的 conf 复用 keys（prep 函数自带"已存在则复用"逻辑）
+    qb_key = prep_qbittorrent_conf()
+    jackett_key = prep_jackett_conf()
+
     bootstrap_indexers(jackett_key)
 
     log('-' * 60)
-    log('Phase 2a 完成。开始 Jellyfin wizard + API Key 申请...')
+    log('开始 Jellyfin Setup Wizard + 申请 API Key...')
     jellyfin_key = bootstrap_jellyfin()
     if jellyfin_key:
-        # 二次回写：把 jellyfin api_key 也存进去
         update_config_yaml(qb_key, jackett_key, jellyfin_api_key=jellyfin_key)
     else:
-        log('Jellyfin bootstrap 未拿到 api_key；helper 仍可启动但 jellyfin 相关功能未就绪。')
-        log('排查：docker compose logs jellyfin；手动走 Wizard 后在控制台 → API Keys 自建并填 config.yaml')
+        log('Jellyfin bootstrap 未拿到 api_key；手动 wizard 后在控制台 → API Keys 自建并填 config.yaml')
 
-    log('-' * 60)
-    log('Bootstrap 完成。最后一步：')
-    log('    docker compose restart helper      # 让 helper 重读 config.yaml')
-    log('-' * 60)
+
+# ============================================================
+# 入口
+# ============================================================
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description='jellyfin-helper docker stack bootstrap',
+        epilog=(
+            '使用流程：\n'
+            '  1. docker compose --profile bootstrap run --rm bootstrap --phase prep\n'
+            '  2. docker compose up -d\n'
+            '  3. docker compose --profile bootstrap run --rm bootstrap --phase connect\n'
+            '  4. docker compose restart helper\n'
+            '\n'
+            '两个阶段都幂等，反复跑安全。'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        '--phase',
+        choices=['prep', 'connect'],
+        required=True,
+        help=(
+            'prep: 预填 qb/jackett conf + 回写 config.yaml（容器未起前跑）；'
+            'connect: 连 jackett 加 indexer + Jellyfin Setup Wizard + 申请 API Key（服务起来后跑）'
+        ),
+    )
+    args = parser.parse_args()
+
+    log(f'ROOT = {ROOT}')
+    log(f'phase = {args.phase}')
+
+    if args.phase == 'prep':
+        run_prep()
+        log('-' * 60)
+        log('prep 完成。接下来：')
+        log('    docker compose up -d')
+        log('服务起来后跑 connect：')
+        log('    docker compose --profile bootstrap run --rm bootstrap --phase connect')
+        log('-' * 60)
+    else:  # connect
+        run_connect()
+        log('-' * 60)
+        log('connect 完成。最后一步：')
+        log('    docker compose restart helper      # 让 helper 重读 config.yaml')
+        log('-' * 60)
+
     return 0
 
 
