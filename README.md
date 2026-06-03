@@ -373,14 +373,6 @@ qbittorrent:
 
 ---
 
-## 文档
-
-- 开发者向：[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) —— 模块组织、添加新 router 的流程、调试技巧
-- 第三方服务：[docs/external-services.md](docs/external-services.md) —— 调用频率、地理屏蔽、OpenClash 分流示例
-- 历史 PRD / 决策记录：[docs/archive/](docs/archive/) —— 已实现功能的设计文档归档
-
----
-
 ## 常见问题
 
 > **先去配置页 → 可用性检测**（左侧导航第一项）。本地环境会自动跑、网络服务可一键测，多数问题在那里就能看到根因。
