@@ -326,7 +326,7 @@ sudo -u jellyfin_helper touch /library/videos/_perm_test && rm /library/videos/_
 
 ## 外部服务
 
-详见 [docs/external-services.md](docs/external-services.md)。摘要：
+摘要：
 
 - **必需**：Jellyfin、TMDB、PostgreSQL
 - **强烈推荐**：Jackett + qBittorrent（启用下载入库流水线）
