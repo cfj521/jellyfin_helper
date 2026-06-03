@@ -75,22 +75,28 @@
 
 ```
 jellyfin-helper/
-├── config.yaml                    # 主配置（含 API Key，git 不提交）
-├── config.yaml.example            # 配置模板
-├── common/                        # 第三方服务客户端 + 工具
+├── config.yaml.example            # 配置模板（复制为 config.yaml 填真实值，后者 git 不提交）
+├── requirements.txt               # Python 依赖
+├── VERSION                        # 版本号（前后端共用的 single source）
+│
+├── backend/                       # FastAPI 后端
+│   ├── main.py                    #   应用入口 + lifespan + SPA 静态托管
+│   ├── run.py                     #   uvicorn 启动器
+│   ├── config.py / config_models.py  #   pydantic settings
+│   ├── database.py                #   SQLAlchemy models + 一次性迁移
+│   ├── auth_middleware.py         #   JWT 认证中间件
+│   ├── diagnostics.py             #   性能 / DB 池监控 / access log 过滤
+│   ├── api/                       #   按功能切片的 router（见下表）
+│   └── services/                  #   后台服务（jellyfin 事件监听等）
+│
+├── common/                        # 第三方服务客户端
 │   ├── jellyfin_client.py         #   jellyfin REST
 │   ├── jellyfin_db.py             #   jellyfin SQLite 直读（path→item 反查加速，可选）
-│   ├── tmdb_client.py
-│   ├── trakt_client.py            #   Trakt 趋势 / 评分
-│   ├── anilist_client.py          #   动漫元数据
-│   ├── mdblist_client.py          #   评分聚合
-│   ├── douban_client.py           #   中文评分（带熔断）
-│   ├── wikidata_client.py         #   演员照片兜底
-│   ├── jackett_client.py
-│   ├── qbittorrent_client.py
-│   ├── llm_client.py              #   LLM 媒体识别兜底
-│   ├── lang_utils.py              #   字幕语言代码归一化（含 zh / chs / cht / BCP 47）
-│   └── label_cleaner.py
+│   ├── tmdb_client.py / trakt_client.py / anilist_client.py
+│   ├── mdblist_client.py / douban_client.py / wikidata_client.py
+│   ├── jackett_client.py / qbittorrent_client.py / llm_client.py
+│   ├── lang_utils.py              #   字幕语言代码归一化（zh / chs / cht / BCP 47）
+│   └── label_cleaner.py / rate_limiter.py
 │
 ├── tools/                         # 业务模块（被后端 import）
 │   ├── subtitle_manager/          #   扫描 / 重命名 / 内嵌探测
@@ -102,39 +108,24 @@ jellyfin-helper/
 │       ├── pipeline_worker.py     #     状态机推进
 │       ├── analyzer.py            #     identify confidence-driven
 │       ├── organizer.py           #     按模板复制 + duplicate_policy
-│       ├── adopt.py               #     qB 外部加种发现
-│       ├── post_process.py        #     字幕 / 音轨后处理编排
 │       └── ...
 │
-├── web/
-│   ├── backend/                   # FastAPI 后端
-│   │   ├── main.py                #   应用入口 + lifespan + shutdown
-│   │   ├── run.py                 #   uvicorn 启动器
-│   │   ├── config.py              #   配置 + pydantic settings
-│   │   ├── database.py            #   SQLAlchemy models
-│   │   ├── diagnostics.py         #   性能 + DB 池监控 + access log 过滤
-│   │   ├── api/                   #   18 个 router（按功能切片，见下）
-│   │   ├── services/              #   后台服务（jellyfin WS 监听等）
-│   │   └── scrapers/              #   旧字幕抓取（保留兼容）
-│   │
-│   └── frontend/                  # Vue SPA
-│       ├── package.json
-│       ├── vite.config.js
-│       └── src/
-│           ├── views/             #   页面（含 medialibraries / downloadpipeline / settings 等）
-│           ├── components/        #   通用组件（含 task-detail 系列）
-│           └── api/               #   axios 封装
-│
-└── docs/
-    ├── DEVELOPMENT.md             # 开发指南
-    ├── external-services.md       # 第三方服务清单 + 代理建议
-    └── archive/                   # 已实现 PRD / 历史决策归档
+└── frontend/                      # Vue 3 SPA
+    ├── package.json / vite.config.js
+    └── src/
+        ├── views/                 #   页面（medialibraries / downloadpipeline / settings 等）
+        ├── components/            #   通用组件
+        ├── composables/ stores/   #   组合式函数 / Pinia store
+        └── api/ router/ utils/ styles/
 ```
+
+> `docs/`（开发文档）和 `data/` `logs/`（运行时数据）默认 `.gitignore`，不入库。
 
 ### Backend API 路由
 
 | 前缀 | 文件 | 主要职责 |
 |---|---|---|
+| `/api/auth` | `auth.py` | 登录 / JWT 签发 / 用户列表 |
 | `/api/medialibraries` | `medialibraries.py` | 库列表 / 详情 / item 反查（DB 直读 + REST 兜底）|
 | `/api/media` | `media.py` | 文件浏览、重复检测、存储分析 |
 | `/api/subtitle` | `subtitle.py` | 扫描 / 重命名 / 自动下载 / 字幕语言探测 |
@@ -152,6 +143,7 @@ jellyfin-helper/
 | `/api/config` | `config_api.py` | 读写 config.yaml + 自动备份 |
 | `/api/logs` | `logs.py` | 后端日志查看 |
 | `/api/img_proxy` | `img_proxy.py` | 第三方图片代理（绕跨域 + CDN） |
+| `/api/diagnostics` | `diagnostics.py` | 可用性检测（本地工具 + 各网络服务）/ 性能监控 |
 
 ---
 
