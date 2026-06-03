@@ -202,7 +202,7 @@ class Settings(BaseSettings):
 
     # Jackett 配置
     jackett_host: str = _yaml_config.get('jackett', {}).get('host', 'http://127.0.0.1:9117')
-    jackett_api_key: str = _yaml_config.get('jackett', {}).get('api_key', '***REMOVED***')
+    jackett_api_key: str = _yaml_config.get('jackett', {}).get('api_key', '')
     # 搜索关键字 chip 列表（单个词，可在 UI 中点击 toggle 进/出搜索框）
     jackett_search_keywords: List[str] = _yaml_config.get('jackett', {}).get('search_keywords') or [
         '2160p', '1080p', '720p',
@@ -222,11 +222,11 @@ class Settings(BaseSettings):
     )
 
     # qBittorrent 配置
-    qbittorrent_host: str = _yaml_config.get('qbittorrent', {}).get('host', 'http://127.0.0.1')
+    qbittorrent_host: str = _yaml_config.get('qbittorrent', {}).get('host', 'http://127.0.0.1:8080')
+    # qB ≥ 5.2.0 强制 API Key 认证（Bearer Token），qbittorrent_client 检测 api_key 后
+    # 不再调 /auth/login，下面两个字段仅作 5.0/5.1 老 stack 的兼容兜底（不推荐）
     qbittorrent_username: str = _yaml_config.get('qbittorrent', {}).get('username', 'admin')
-    qbittorrent_password: str = _yaml_config.get('qbittorrent', {}).get('password', '***REMOVED***')
-    # qB ≥ 5.2.0 起支持 API Key（Preferences → WebUI → API Key 生成）。配了就用 Bearer 认证，
-    # 不走 /auth/login。同时设了 api_key 和 username/password 时优先 api_key。
+    qbittorrent_password: str = _yaml_config.get('qbittorrent', {}).get('password', '')
     qbittorrent_api_key: str = _yaml_config.get('qbittorrent', {}).get('api_key', '')
     qbittorrent_download_path: str = _yaml_config.get('dispatch', {}).get('download_path', '/downloads')
 

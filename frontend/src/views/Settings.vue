@@ -628,6 +628,11 @@
           <el-form :model="form.jackett" label-width="120px">
             <el-form-item label="服务器地址">
               <el-input v-model="form.jackett.host" placeholder="http://localhost:9117" />
+              <div class="form-hint">后端连接用（Docker 部署填容器名 http://jackett:9117）</div>
+            </el-form-item>
+            <el-form-item label="外部地址">
+              <el-input v-model="form.jackett.external_url" placeholder="http://192.168.1.100:9117（留空用上面地址）" />
+              <div class="form-hint">浏览器点「打开 Jackett」跳转用。Docker 部署必填宿主 IP——上面的容器名浏览器打不开</div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input v-model="form.jackett.api_key" type="password" show-password />
@@ -679,6 +684,11 @@
           <el-form :model="form.qbittorrent" label-width="120px">
             <el-form-item label="服务器地址">
               <el-input v-model="form.qbittorrent.host" placeholder="http://localhost:8080" />
+              <div class="form-hint">后端连接用（Docker 部署填容器名 http://qbittorrent:8080）</div>
+            </el-form-item>
+            <el-form-item label="外部地址">
+              <el-input v-model="form.qbittorrent.external_url" placeholder="http://192.168.1.100:8080（留空用上面地址）" />
+              <div class="form-hint">浏览器点「打开 qBittorrent」跳转用。Docker 部署必填宿主 IP</div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input
@@ -1632,8 +1642,8 @@ const blank = () => ({
       { name: 'ass' }, { name: 'srt' }, { name: 'sup' },
     ],
   },
-  jackett: { host: '', api_key: '', search_keywords: [], default_keywords: '' },
-  qbittorrent: { host: '', username: '', password: '', api_key: '' },
+  jackett: { host: '', external_url: '', api_key: '', search_keywords: [], default_keywords: '' },
+  qbittorrent: { host: '', external_url: '', username: '', password: '', api_key: '' },
   // 外部命令行工具路径（启动时注入到 PATH 前缀）
   tools: {
     ffmpeg_dir: '',
@@ -1761,6 +1771,10 @@ const mergeIntoForm = (cfg) => {
   form.adult.sources = form.adult.sources.filter(s => allSourceKeys.includes(s.name))
   if (!Array.isArray(form.adult.library_ids)) form.adult.library_ids = []
   if (!Array.isArray(form.jackett.search_keywords)) form.jackett.search_keywords = []
+  // path_mappings.rules：config.yaml 里 `rules:` 留空会被 YAML 解析成 null，
+  // 模板 line `form.path_mappings.rules.length` / v-for 会对 null 抛错 →
+  // 整个「基础配置」的 Jellyfin card（嵌了路径映射）渲染中断消失。兜底成 []。
+  if (!Array.isArray(form.path_mappings.rules)) form.path_mappings.rules = []
   // 后端 preferred_formats 是 string[]，前端 SourcePool 要 [{name}]，做一次归一化
   const rawFormats = form.subtitle.preferred_formats
   if (Array.isArray(rawFormats) && rawFormats.length && typeof rawFormats[0] === 'string') {
@@ -1977,6 +1991,9 @@ const actressDelay = ref(5)
 let actressPollTimer = null
 
 const refreshActressStatus = async () => {
+  // adult 模块关闭时 /api/adult/* router 未挂载，轮询会 404 + 全局拦截器弹
+  // "not found"。关闭就直接跳过（config 未加载时 form.adult 为空也跳过）。
+  if (!form.adult?.enabled) return
   try {
     const r = await adultApi.actressBuildStatus()
     actressStatus.value = r.data || {}
