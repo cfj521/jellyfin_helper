@@ -1,171 +1,189 @@
 # Jellyfin Helper
 
----
-
-## 三大核心功能
-
-### 1. Jellyfin 媒体库辅助管理
-
-补 Jellyfin 自身缺位或弱势的环节：
-
-- **媒体库浏览**：多库列表 + 详情页 + 海报视图；可选本地 SQLite 直读加速
-  `path → item` 反查（同机部署时实测 4ms vs REST 1500ms）
-- **元数据修复**：演员照片（TMDB + Wikidata 兜底）、海报、NFO；
-  jellyfin 演员库归一化
-- **字幕全链路**：多源下载（OpenSubtitles / ASSRT / Shooter）→ 评分融合 +
-  分层语种排序 → 文件名按 BCP 47 落盘 → 缺字幕智能补齐 → 内嵌字幕轨 ffprobe 探测
-- **音轨管理**：MKV 默认音轨按语种偏好批量设置；汉语 / 未识别轨例外保护
-- **维护工具**：配置 Web 编辑（保存自动备份）、Sample 清理、强制重扫、日志查看、统计
-- **成人内容（可选）**：番号识别、JavBus / JavDB / AVBase / MissAV 多源刮削、
-  女优档案库（javdb + Minnano-AV chain）、健康度 + 冷却保护
-
-### 2. 资源（多种）发现与搜索
-
-聚合多个发现源做统一 UI，避免在十几个站点之间反复横跳：
-
-- **发现 / 推荐**：TMDB / Trakt / AniList / 豆瓣榜单聚合，无限滚动 + 预取
-- **评分聚合**：TMDB + MDBList（IMDB / RT / Metacritic / Trakt / Letterboxd）
-  + 豆瓣，统一存 `media_ratings`，每家独立 TTL；前端融合显示
-- **资源搜索**：Jackett 跨 indexer 聚合，结果分类 + 大小 / Seeders 排序，
-  一键推送到下载流水线
-
-### 3. 下载流水线
-
-从"加种"到"入库"全自动，不需要手动 mv / 重命名：
-
-- **加种**：Jackett 搜种 → qBittorrent 推送（**要求 qB 5.2+**，建议启用
-  API Key 认证）
-- **识别**：confidence-driven 链（regex → TMDB → LLM 兜底），低置信落
-  needs_review 等人工
-- **入库**：按可配置模板 + duplicate_policy 整理到媒体库，自动通知 jellyfin 刷新
-- **做种与清理**：state=stop + (ratio≥target OR 完成 N 天) 双条件软清，
-  磁盘配额阈值触发硬清；保护用户做种数据
-- **任务系统**：后台任务 + SSE 实时进度 + 取消 + shutdown 联动；
-  前端任务详情页可展开各步明细
+**English** | [简体中文](README.zh-CN.md)
 
 ---
 
-> ## ⚠️ 前置提醒：需要"魔法上网"
+## Three Core Features
+
+### 1. Jellyfin Media Library Assistance
+
+Fills the gaps where Jellyfin itself is missing or weak:
+
+- **Library browsing**: Multi-library list + detail pages + poster view; optional direct
+  local SQLite reads to accelerate `path → item` reverse lookups (measured 4ms vs REST
+  1500ms on same-host deployments)
+- **Metadata repair**: Actor photos (TMDB + Wikidata fallback), posters, NFO;
+  Jellyfin actor library normalization
+- **Full subtitle pipeline**: Multi-source download (OpenSubtitles / ASSRT / Shooter) →
+  score fusion + tiered language sorting → on-disk naming per BCP 47 → smart fill-in for
+  missing subtitles → embedded subtitle track detection via ffprobe
+- **Audio track management**: Batch-set MKV default audio tracks by language preference;
+  exception protection for Chinese / unrecognized tracks
+- **Maintenance tools**: Web config editing (auto-backup on save), Sample cleanup, forced
+  rescan, log viewing, statistics
+- **Adult content (optional)**: Code recognition, multi-source scraping
+  (JavBus / JavDB / AVBase / MissAV), actress profile library (javdb + Minnano-AV chain),
+  health score + cooldown protection
+
+### 2. Resource Discovery and Search (Multiple Sources)
+
+Aggregates multiple discovery sources into a unified UI, sparing you from jumping back and
+forth between a dozen sites:
+
+- **Discovery / recommendations**: TMDB / Trakt / AniList / Douban list aggregation,
+  infinite scroll + prefetch
+- **Rating aggregation**: TMDB + MDBList (IMDB / RT / Metacritic / Trakt / Letterboxd)
+  + Douban, stored uniformly in `media_ratings` with an independent TTL per provider;
+  fused display on the frontend
+- **Resource search**: Jackett cross-indexer aggregation, results categorized + sorted by
+  size / seeders, one-click push to the download pipeline
+
+### 3. Download Pipeline
+
+Fully automated from "add torrent" to "import into library", with no manual mv / rename
+required:
+
+- **Add torrent**: Jackett search → push to qBittorrent (**requires qB 5.2+**, API Key
+  authentication recommended)
+- **Identification**: confidence-driven chain (regex → TMDB → LLM fallback), low-confidence
+  results drop into needs_review for manual handling
+- **Import**: Organized into the media library per a configurable template +
+  duplicate_policy, automatically notifying Jellyfin to refresh
+- **Seeding and cleanup**: state=stop + (ratio≥target OR completed N days ago) dual-condition
+  soft cleanup, disk quota threshold triggers hard cleanup; protects user seeding data
+- **Task system**: Background tasks + SSE real-time progress + cancellation + shutdown
+  coordination; the frontend task detail page expands per-step details
+
+---
+
+> ## ⚠️ Prerequisite Reminder: A VPN / Proxy Is Required
 >
-> 项目深度依赖境外服务（TMDB / Trakt / AniList / OpenSubtitles / IMDB / MDBList /
-> Wikidata 等），**没有稳定的科学上网链路用户体验会很差**——多数源会超时或被
-> 地理屏蔽。强烈建议在路由器层做透明代理（OpenClash / mihomo 等），把整个
-> jellyfin-helper 主机的出站流量按域名分流。本项目代码层**不处理代理逻辑**，
-> 默认假定网络是通的，所以连不通的报错都按上游故障处理而非代理配置。
+> The project depends heavily on overseas services (TMDB / Trakt / AniList / OpenSubtitles /
+> IMDB / MDBList / Wikidata, etc.). **Without a stable proxy link the user experience will be
+> poor** — most sources will time out or be geo-blocked. We strongly recommend setting up
+> transparent proxying at the router layer (OpenClash / mihomo, etc.) to route the entire
+> jellyfin-helper host's outbound traffic by domain. This project's code layer **does not
+> handle proxy logic**; it assumes by default that the network is reachable, so any
+> connection failures are treated as upstream faults rather than proxy misconfiguration.
 
-> 项目仍在密集迭代。schema 变更时通常**直接清表重扫**而不是写迁移脚本，
-> 部署到生产请自行评估并做好数据备份。
+> The project is still under heavy iteration. When the schema changes, we usually **just drop
+> the tables and rescan** instead of writing migration scripts. For production deployment,
+> evaluate this yourself and make proper data backups.
 
 ---
 
-## 技术栈
+## Tech Stack
 
-| 层 | 选型 |
+| Layer | Choice |
 |---|---|
-| 后端 | Python 3.12 / FastAPI / SQLAlchemy / uvicorn |
-| 前端 | Vue 3 (Composition API) / Element Plus / Vite |
-| 数据库 | PostgreSQL 12+（业务库） |
-| 任务推送 | SSE（不用 WebSocket）|
-| 反爬 | curl-cffi（TLS impersonation 过 Cloudflare 弱反爬） |
-| LLM | 任何 OpenAI 兼容 endpoint（DeepSeek / 阿里通义 / OpenAI 本身） |
+| Backend | Python 3.12 / FastAPI / SQLAlchemy / uvicorn |
+| Frontend | Vue 3 (Composition API) / Element Plus / Vite |
+| Database | PostgreSQL 12+ (business database) |
+| Task push | SSE (not WebSocket) |
+| Anti-scraping | curl-cffi (TLS impersonation to get past Cloudflare's lighter defenses) |
+| LLM | Any OpenAI-compatible endpoint (DeepSeek / Alibaba Tongyi / OpenAI itself) |
 
 ---
 
-## 项目结构
+## Project Structure
 
 ```
 jellyfin-helper/
-├── config.yaml.example            # 配置模板（复制为 config.yaml 填真实值，后者 git 不提交）
-├── requirements.txt               # Python 依赖
-├── VERSION                        # 版本号（前后端共用的 single source）
+├── config.yaml.example            # Config template (copy to config.yaml and fill in real values; the latter is gitignored)
+├── requirements.txt               # Python dependencies
+├── VERSION                        # Version number (single source shared by frontend and backend)
 │
-├── backend/                       # FastAPI 后端
-│   ├── main.py                    #   应用入口 + lifespan + SPA 静态托管
-│   ├── run.py                     #   uvicorn 启动器
+├── backend/                       # FastAPI backend
+│   ├── main.py                    #   App entry + lifespan + SPA static hosting
+│   ├── run.py                     #   uvicorn launcher
 │   ├── config.py / config_models.py  #   pydantic settings
-│   ├── database.py                #   SQLAlchemy models + 一次性迁移
-│   ├── auth_middleware.py         #   JWT 认证中间件
-│   ├── diagnostics.py             #   性能 / DB 池监控 / access log 过滤
-│   ├── api/                       #   按功能切片的 router（见下表）
-│   └── services/                  #   后台服务（jellyfin 事件监听等）
+│   ├── database.py                #   SQLAlchemy models + one-off migrations
+│   ├── auth_middleware.py         #   JWT auth middleware
+│   ├── diagnostics.py             #   Performance / DB pool monitoring / access log filtering
+│   ├── api/                       #   Feature-sliced routers (see table below)
+│   └── services/                  #   Background services (jellyfin event listener, etc.)
 │
-├── common/                        # 第三方服务客户端
+├── common/                        # Third-party service clients
 │   ├── jellyfin_client.py         #   jellyfin REST
-│   ├── jellyfin_db.py             #   jellyfin SQLite 直读（path→item 反查加速，可选）
+│   ├── jellyfin_db.py             #   jellyfin SQLite direct read (path→item reverse-lookup acceleration, optional)
 │   ├── tmdb_client.py / trakt_client.py / anilist_client.py
 │   ├── mdblist_client.py / douban_client.py / wikidata_client.py
 │   ├── jackett_client.py / qbittorrent_client.py / llm_client.py
-│   ├── lang_utils.py              #   字幕语言代码归一化（zh / chs / cht / BCP 47）
+│   ├── lang_utils.py              #   Subtitle language code normalization (zh / chs / cht / BCP 47)
 │   └── label_cleaner.py / rate_limiter.py
 │
-├── tools/                         # 业务模块（被后端 import）
-│   ├── subtitle_manager/          #   扫描 / 重命名 / 内嵌探测
-│   ├── subtitle_downloader/       #   多源下载 + 评分融合
-│   ├── audio_manager/             #   MKV 音轨调整
-│   ├── actor_fix/                 #   演员照片
-│   ├── adult_manager/             #   番号刮削 + 女优档案
-│   └── dispatch/                  #   下载入库自动化流水线
-│       ├── pipeline_worker.py     #     状态机推进
+├── tools/                         # Business modules (imported by the backend)
+│   ├── subtitle_manager/          #   Scan / rename / embedded detection
+│   ├── subtitle_downloader/       #   Multi-source download + score fusion
+│   ├── audio_manager/             #   MKV audio track adjustment
+│   ├── actor_fix/                 #   Actor photos
+│   ├── adult_manager/             #   Code scraping + actress profiles
+│   └── dispatch/                  #   Download-to-library automation pipeline
+│       ├── pipeline_worker.py     #     State machine advancement
 │       ├── analyzer.py            #     identify confidence-driven
-│       ├── organizer.py           #     按模板复制 + duplicate_policy
+│       ├── organizer.py           #     Template-based copy + duplicate_policy
 │       └── ...
 │
 └── frontend/                      # Vue 3 SPA
     ├── package.json / vite.config.js
     └── src/
-        ├── views/                 #   页面（medialibraries / downloadpipeline / settings 等）
-        ├── components/            #   通用组件
-        ├── composables/ stores/   #   组合式函数 / Pinia store
+        ├── views/                 #   Pages (medialibraries / downloadpipeline / settings, etc.)
+        ├── components/            #   Common components
+        ├── composables/ stores/   #   Composables / Pinia store
         └── api/ router/ utils/ styles/
 ```
 
-> `docs/`（开发文档）和 `data/` `logs/`（运行时数据）默认 `.gitignore`，不入库。
+> `docs/` (development docs) and `data/` `logs/` (runtime data) are `.gitignore`d by default
+> and not committed.
 
-### Backend API 路由
+### Backend API Routes
 
-| 前缀 | 文件 | 主要职责 |
+| Prefix | File | Main Responsibility |
 |---|---|---|
-| `/api/auth` | `auth.py` | 登录 / JWT 签发 / 用户列表 |
-| `/api/medialibraries` | `medialibraries.py` | 库列表 / 详情 / item 反查（DB 直读 + REST 兜底）|
-| `/api/media` | `media.py` | 文件浏览、重复检测、存储分析 |
-| `/api/subtitle` | `subtitle.py` | 扫描 / 重命名 / 自动下载 / 字幕语言探测 |
-| `/api/metadata` | `metadata.py` | 演员照片、海报、NFO 修复 |
-| `/api/audio` | `audio.py` | MKV 默认音轨 |
-| `/api/adult` | `adult.py` | 番号刮削、女优档案 |
-| `/api/ratings` | `ratings.py` | MDBList + 豆瓣评分聚合 |
-| `/api/discover` | `discover.py` | TMDB / Trakt / AniList / 豆瓣榜单 |
-| `/api/resourcesearch` | `resourcesearch.py` | Jackett 聚合搜索 |
-| `/api/downloadpipeline` | `downloadpipeline.py` | qB 状态监控 + 推种入口 |
-| `/api/dispatch` | `dispatch.py` | 流水线 needs_review / quota / dispatch_map |
-| `/api/maintenance` | `maintenance.py` | Sample 清理、强制重扫、自动修复编排 |
-| `/api/tasks` | `tasks.py` | 任务列表 / 详情 / 取消 / SSE 推送 |
-| `/api/stats` | `stats.py` | 总览统计 |
-| `/api/config` | `config_api.py` | 读写 config.yaml + 自动备份 |
-| `/api/logs` | `logs.py` | 后端日志查看 |
-| `/api/img_proxy` | `img_proxy.py` | 第三方图片代理（绕跨域 + CDN） |
-| `/api/diagnostics` | `diagnostics.py` | 可用性检测（本地工具 + 各网络服务）/ 性能监控 |
+| `/api/auth` | `auth.py` | Login / JWT issuance / user list |
+| `/api/medialibraries` | `medialibraries.py` | Library list / details / item reverse lookup (direct DB read + REST fallback) |
+| `/api/media` | `media.py` | File browsing, duplicate detection, storage analysis |
+| `/api/subtitle` | `subtitle.py` | Scan / rename / auto-download / subtitle language detection |
+| `/api/metadata` | `metadata.py` | Actor photos, posters, NFO repair |
+| `/api/audio` | `audio.py` | MKV default audio track |
+| `/api/adult` | `adult.py` | Code scraping, actress profiles |
+| `/api/ratings` | `ratings.py` | MDBList + Douban rating aggregation |
+| `/api/discover` | `discover.py` | TMDB / Trakt / AniList / Douban lists |
+| `/api/resourcesearch` | `resourcesearch.py` | Jackett aggregated search |
+| `/api/downloadpipeline` | `downloadpipeline.py` | qB status monitoring + torrent push entry |
+| `/api/dispatch` | `dispatch.py` | Pipeline needs_review / quota / dispatch_map |
+| `/api/maintenance` | `maintenance.py` | Sample cleanup, forced rescan, auto-repair orchestration |
+| `/api/tasks` | `tasks.py` | Task list / details / cancellation / SSE push |
+| `/api/stats` | `stats.py` | Overview statistics |
+| `/api/config` | `config_api.py` | Read/write config.yaml + auto-backup |
+| `/api/logs` | `logs.py` | Backend log viewing |
+| `/api/img_proxy` | `img_proxy.py` | Third-party image proxy (bypass CORS + CDN) |
+| `/api/diagnostics` | `diagnostics.py` | Availability checks (local tools + network services) / performance monitoring |
 
 ---
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Requirements
 
-- Python 3.12（推荐用 conda 隔离环境）
+- Python 3.12 (recommended to use an isolated conda environment)
 - Node.js 20+
-- PostgreSQL 12+（先建库和用户）
-- 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
-- qBittorrent **5.2+ 必需**（用 API Key 认证替代 admin/admin 弱密；老版本无 API Key 支持，存在被植入挖矿木马的真实风险，详见下方「外部服务 → qBittorrent」）
-- 系统级工具（见下方「系统级依赖」章节）
-- **稳定的代理 / 透明科学上网链路**（顶部前置提醒已说明）
+- PostgreSQL 12+ (create the database and user first)
+- A running Jellyfin (10.9+ recommended) + admin API Key
+- qBittorrent **5.2+ required** (use API Key authentication instead of the weak admin/admin
+  password; older versions have no API Key support and carry a real risk of being injected
+  with mining malware — see "External Services → qBittorrent" below)
+- System-level tools (see the "System-Level Dependencies" section below)
+- **A stable proxy / transparent VPN link** (explained in the prerequisite reminder at the top)
 
-### 1. 配置
+### 1. Configuration
 
 ```bash
 cp config.yaml.example config.yaml
 ```
 
-至少填这几项（其它都可选）：
+At minimum, fill in these fields (everything else is optional):
 
 ```yaml
 database:
@@ -177,25 +195,27 @@ database:
 jellyfin:
   host: "http://your-jellyfin:8096"
   api_key: "your_jellyfin_admin_api_key"
-  # 可选：jellyfin DB 直读加速 path→item 反查（同机或 SMB 挂载时填）
+  # Optional: direct Jellyfin DB read to accelerate path→item reverse lookups (fill in when on the same host or SMB-mounted)
   # db_path: "/var/lib/jellyfin/data/jellyfin.db"
 
 tmdb:
   api_key: "your_tmdb_api_key"
 ```
 
-完整字段见 [config.yaml.example](config.yaml.example)；也可先空跑，再到前端 `/settings` 编辑（保存自动备份）。
+See [config.yaml.example](config.yaml.example) for the full set of fields; you can also run
+it empty first and then edit in the frontend at `/settings` (auto-backup on save).
 
-### 2. 后端
+### 2. Backend
 
 ```bash
 pip install -r requirements.txt
 python -m backend.run
 ```
 
-端口优先级：环境变量 `BACKEND_PORT` > `config.yaml: server.backend_port` > 默认 8000。
+Port priority: environment variable `BACKEND_PORT` > `config.yaml: server.backend_port` >
+default 8000.
 
-开发热重载：
+Development hot reload:
 
 ```bash
 # bash
@@ -205,9 +225,9 @@ BACKEND_RELOAD=1 python -m backend.run
 $env:BACKEND_RELOAD='1'; python -m backend.run
 ```
 
-### 3. 前端
+### 3. Frontend
 
-新开终端：
+Open a new terminal:
 
 ```bash
 cd frontend
@@ -215,69 +235,84 @@ npm install
 npm run dev
 ```
 
-vite 自动读 `config.yaml` 的 `server.frontend_port`。
+vite automatically reads `server.frontend_port` from `config.yaml`.
 
-### 4. 访问
+### 4. Access
 
-- 前端：http://localhost:5173
-- API 文档（Swagger）：http://localhost:8000/docs
+- Frontend: http://localhost:5173
+- API docs (Swagger): http://localhost:8000/docs
 
-### 5. 首次启动验证 ★
+### 5. First-Launch Verification ★
 
-打开 **前端 → 配置 → 可用性检测**（左侧导航第一项，进页面就在）。一屏看清楚：
+Open **Frontend → Settings → Availability Check** (the first item in the left navigation,
+right there when you enter the page). See everything at a glance on one screen:
 
-- **本地环境**（进入即跑，零网络成本）：FFmpeg · FFprobe · MKVPropEdit · bsdtar
-- **网络服务**（手动按钮）：Jellyfin · qBittorrent · Jackett · TMDB · 豆瓣 · MDBList · Trakt · AniList · Wikidata · LLM · 字幕源 · 成人刮削站
+- **Local environment** (runs on entry, zero network cost): FFmpeg · FFprobe · MKVPropEdit · bsdtar
+- **Network services** (manual button): Jellyfin · qBittorrent · Jackett · TMDB · Douban ·
+  MDBList · Trakt · AniList · Wikidata · LLM · subtitle sources · adult scraping sites
 
-每项显示 `状态 / 信息 / 耗时`。未启用的源灰显，按钮禁用。**遇到问题先来这里看一眼，能省一半排查时间**。
+Each item shows `status / info / elapsed time`. Disabled sources are greyed out with their
+buttons disabled. **When you hit a problem, check here first — it can save you half the
+troubleshooting time.**
 
 ---
 
-## 系统级依赖
+## System-Level Dependencies
 
-除 Python 包（`requirements.txt`）外，部分功能依赖以下系统工具。**非必需**——缺失时对应功能自动退化（仅扫描/建议，不写入），不会崩溃。
+Beyond Python packages (`requirements.txt`), some features depend on the following system
+tools. **They are not required** — when missing, the corresponding feature automatically
+degrades (scan/suggest only, no writes) without crashing.
 
-| 工具 | 用途 | 缺失时影响 |
+| Tool | Purpose | Impact When Missing |
 |---|---|---|
-| **ffmpeg / ffprobe** | 音轨扫描、字幕内嵌轨探测 | 无法检测内嵌字幕和音轨信息 |
-| **mkvtoolnix (mkvpropedit)** | 修改 MKV 文件默认音轨 flag | 音轨管理仅返回建议，不实际写入 |
-| **bsdtar (libarchive ≥ 3.6)** | 解压 rar / 7z 字幕包 | rar 字幕包无法解压，zip 不受影响 |
+| **ffmpeg / ffprobe** | Audio track scanning, embedded subtitle track detection | Cannot detect embedded subtitles or audio track info |
+| **mkvtoolnix (mkvpropedit)** | Modify the default audio track flag of MKV files | Audio management only returns suggestions, does not actually write |
+| **bsdtar (libarchive ≥ 3.6)** | Extract rar / 7z subtitle packs | rar subtitle packs cannot be extracted; zip is unaffected |
 
-> **bsdtar 的 libarchive 版本要 ≥ 3.6 才支持 RAR5**（现代字幕包基本都是 RAR5）。对照表：Ubuntu 22.04+ / Debian 12+ / macOS Homebrew / conda-forge 都满足。Ubuntu 20.04 / Debian 11 自带 libarchive 3.4，解 RAR5 会失败 —— 建议升级发行版，或者从 conda-forge 装。
+> **bsdtar's libarchive version must be ≥ 3.6 to support RAR5** (modern subtitle packs are
+> basically all RAR5). Reference: Ubuntu 22.04+ / Debian 12+ / macOS Homebrew / conda-forge
+> all satisfy this. Ubuntu 20.04 / Debian 11 ship libarchive 3.4, which fails to extract
+> RAR5 — upgrade your distribution, or install from conda-forge.
 
-安装：
+Installation:
 
 ```bash
 # Debian / Ubuntu 22.04+ / Debian 12+
 sudo apt install ffmpeg mkvtoolnix libarchive-tools
 
-# macOS（自带 bsdtar，无需额外装）
+# macOS (bsdtar is built in, no extra install needed)
 brew install ffmpeg mkvtoolnix
 
 # Windows (Chocolatey)
 choco install ffmpeg mkvtoolnix
-# bsdtar 通过 conda 装：见下
+# Install bsdtar via conda: see below
 
-# Conda（跨平台一键，libarchive 3.7+ 自带 bsdtar，支持 RAR5）
+# Conda (cross-platform one-liner, libarchive 3.7+ ships bsdtar with RAR5 support)
 conda install -c conda-forge ffmpeg mkvtoolnix libarchive
 ```
 
-验证：命令行 `ffprobe -version` / `mkvpropedit --version` / `bsdtar --version` 输出版本号即可。
-也可以直接打开 **前端 → 配置 → 可用性检测**，本地环境列里一目了然哪个工具在 PATH 上。
+Verification: running `ffprobe -version` / `mkvpropedit --version` / `bsdtar --version` on
+the command line and seeing a version number printed is enough. You can also open
+**Frontend → Settings → Availability Check**, where the local environment column shows at a
+glance which tools are on PATH.
 
 ---
 
-## 文件系统权限
+## Filesystem Permissions
 
-后端进程运行的用户（systemd `User=` / Docker `user:` / 裸跑时的 shell 用户）必须有以下访问权限。**这是最常见的"看起来跑起来了但功能没动作"根因**：
+The user the backend process runs as (systemd `User=` / Docker `user:` / the shell user when
+running bare) must have the following access. **This is the most common root cause of "it
+looks like it's running but nothing happens"**:
 
-| 路径 | 需要权限 | 用途 | 配错时的症状 |
+| Path | Permission Needed | Purpose | Symptom When Misconfigured |
 |---|---|---|---|
-| Jellyfin SQLite（如 `/var/lib/jellyfin/data/jellyfin.db`） | **读** | `path → item` 反查直读加速（可选，4ms vs REST 1500ms） | 启动日志 `PermissionError`；运行时 fallback 到 REST，慢 100× |
-| qB 下载目录（如 `/download`） | **读 + 写** | 入库时 mv/cp 源文件；软清/硬清 `rm` 完成种子；磁盘配额监视 | 流水线搬不动文件；日志 `配额: 后端 stat 不到 '/download'，禁用配额监视/清理` |
-| Jellyfin 媒体库目录（如 `/library/videos`） | **读 + 写** | dispatch 入库写文件 + 落 NFO/poster；adult_scanner 探测本地附件 | 入库失败；NFO / poster 不落地；扫描结果"看见文件但识别不到" |
+| Jellyfin SQLite (e.g. `/var/lib/jellyfin/data/jellyfin.db`) | **read** | `path → item` reverse lookup direct-read acceleration (optional, 4ms vs REST 1500ms) | `PermissionError` in startup log; runtime falls back to REST, 100× slower |
+| qB download directory (e.g. `/download`) | **read + write** | mv/cp source files on import; soft/hard cleanup `rm` of completed torrents; disk quota monitoring | Pipeline cannot move files; log shows `配额: 后端 stat 不到 '/download'，禁用配额监视/清理` |
+| Jellyfin media library directory (e.g. `/library/videos`) | **read + write** | dispatch writes files on import + lays down NFO/poster; adult_scanner detects local attachments | Import fails; NFO / poster not written; scan result "sees the file but can't identify it" |
 
-**典型 systemd 部署**（推荐）：让后端用户加入 `jellyfin` 组，继承 jellyfin DB 默认 640 权限即可读；库目录用 group ownership + 775：
+**Typical systemd deployment** (recommended): add the backend user to the `jellyfin` group to
+inherit read access via Jellyfin DB's default 640 permissions; use group ownership + 775 for
+library directories:
 
 ```ini
 # /etc/systemd/system/jellyfin-helper.service.d/user.conf
@@ -288,132 +323,155 @@ UMask=0002
 ```
 
 ```bash
-# 把后端用户加入 jellyfin 组（如果库目录归 jellyfin 用户）
+# Add the backend user to the jellyfin group (if library directories are owned by the jellyfin user)
 sudo usermod -aG jellyfin jellyfin_helper
 
-# 验证：以后端用户身份读 jellyfin DB / 写库目录
+# Verify: read the jellyfin DB / write to the library directory as the backend user
 sudo -u jellyfin_helper sqlite3 /var/lib/jellyfin/data/jellyfin.db ".tables" | head
 sudo -u jellyfin_helper touch /library/videos/_perm_test && rm /library/videos/_perm_test
 ```
 
-**Docker 部署**：`docker-compose.yml` 里 `user: "1000:1000"` 跟挂载的宿主机目录 owner/group 对齐；或者在 entrypoint 里 `chown` 让数据卷 ownership 跟进。
+**Docker deployment**: align `user: "1000:1000"` in `docker-compose.yml` with the owner/group
+of the mounted host directories; or `chown` in the entrypoint so the data volume ownership
+follows along.
 
-**裸跑（开发期）**：图省事可以 `sudo -u jellyfin python -m backend.run`，免去权限协调；生产不推荐共享 shell 用户。
+**Bare run (during development)**: for convenience you can use
+`sudo -u jellyfin python -m backend.run` to skip permission coordination; sharing a shell
+user is not recommended in production.
 
 ---
 
-## 数据库
+## Database
 
-表会在首次启动时自动创建，无需手动建表。
+Tables are created automatically on first launch; no manual table creation needed.
 
-| 表名 | 说明 |
+| Table | Description |
 |---|---|
-| `users` | 用户账号（JWT 认证） |
-| `tasks` | 后台任务记录 |
-| `scan_reports` | 扫描报告存档 |
-| `actors` | 演员信息缓存 |
-| `media_items` | 媒体文件元数据 |
-| `media_metadata` | 媒体扩展元数据（海报、简介等） |
-| `media_ratings` | 评分聚合（TMDB / IMDB / RT / Metacritic / Trakt / Letterboxd / 豆瓣），按 `(tmdb_id, media_type)` 唯一；每家独立 `*_fetched_at` |
-| `video_annotations` | 视频标注（硬字幕标记等） |
-| `adult_items` | 成人内容元数据（可选） |
-| `adult_actresses` | 演员资料库（成人内容，可选） |
-| `download_dispatch_map` | 下载入库映射（torrent → 目标路径） |
-| `kv_cache` | 通用 KV 缓存 |
-| `llm_classify_cache` | LLM 分类结果缓存 |
+| `users` | User accounts (JWT authentication) |
+| `tasks` | Background task records |
+| `scan_reports` | Scan report archive |
+| `actors` | Actor info cache |
+| `media_items` | Media file metadata |
+| `media_metadata` | Media extended metadata (posters, synopses, etc.) |
+| `media_ratings` | Rating aggregation (TMDB / IMDB / RT / Metacritic / Trakt / Letterboxd / Douban), unique by `(tmdb_id, media_type)`; independent `*_fetched_at` per provider |
+| `video_annotations` | Video annotations (hard-subtitle markers, etc.) |
+| `adult_items` | Adult content metadata (optional) |
+| `adult_actresses` | Actress profile library (adult content, optional) |
+| `download_dispatch_map` | Download-to-library mapping (torrent → target path) |
+| `kv_cache` | General KV cache |
+| `llm_classify_cache` | LLM classification result cache |
 
 ---
 
-## 外部服务
+## External Services
 
-摘要：
+Summary:
 
-- **必需**：Jellyfin、TMDB、PostgreSQL
-- **强烈推荐**：Jackett + qBittorrent（启用下载入库流水线）
-- **字幕**：OpenSubtitles + ASSRT 任选其一即可，配齐两个最佳
-- **评分**：MDBList（可选）+ 豆瓣（无需 key）
-- **LLM**：任意 OpenAI 兼容服务（识别兜底，可选）
-- **成人内容**：JavBus / JavDB / AVBase / MissAV（带地理屏蔽与代理建议）
+- **Required**: Jellyfin, TMDB, PostgreSQL
+- **Strongly recommended**: Jackett + qBittorrent (enables the download-to-library pipeline)
+- **Subtitles**: OpenSubtitles + ASSRT — either one will do, both is best
+- **Ratings**: MDBList (optional) + Douban (no key needed)
+- **LLM**: Any OpenAI-compatible service (identification fallback, optional)
+- **Adult content**: JavBus / JavDB / AVBase / MissAV (with geo-blocking and proxy advice)
 
-### qBittorrent 版本要求：**5.2+ 必需**
+### qBittorrent Version Requirement: **5.2+ Required**
 
-老版本（< 5.0）兼容已在 2026-06 移除，**原因是安全**：
+Compatibility with older versions (< 5.0) was removed in 2026-06, **for security reasons**:
 
-- 4.x / 5.0 / 5.1 都没有 API Key 认证，只能 username/password
-- qB 默认 admin/adminadmin 弱密被自动化脚本扫满公网，**直接 RCE 装挖矿**
-- 真实事件：通过 `Preferences → Downloads → Run external program on torrent added / completed`
-  被植入 `wget ... | sh` 后门，XMR 挖矿木马常见手法
+- 4.x / 5.0 / 5.1 have no API Key authentication, only username/password
+- qB's default weak admin/adminadmin password gets scanned across the public internet by
+  automated scripts, leading **directly to RCE and miner installation**
+- A real incident: a `wget ... | sh` backdoor was injected via
+  `Preferences → Downloads → Run external program on torrent added / completed`, a common
+  technique for XMR mining malware
 
-5.2.0+ 才引入 `Authorization: Bearer qbt_xxx` 这种 stateless API Key 机制，
-本项目要求最低版本，让认证强度有保证。
+It wasn't until 5.2.0+ that the stateless API Key mechanism
+(`Authorization: Bearer qbt_xxx`) was introduced; this project requires that minimum version
+to guarantee authentication strength.
 
-### 配置 API Key
+### Configuring the API Key
 
-去 qB **Preferences → WebUI → API Key 段** 点 Generate，复制 `qbt_xxx...` 到 `config.yaml`：
+Go to qB **Preferences → WebUI → API Key section**, click Generate, and copy the `qbt_xxx...`
+into `config.yaml`:
 
 ```yaml
 qbittorrent:
   host: "http://127.0.0.1:8080"
-  api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # 强烈推荐：stateless，不发明文密码
-  # 退而求其次（仍要求 qB 5.2+ 才能跑通其它 API 兼容）：
+  api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # Strongly recommended: stateless, no plaintext password sent
+  # Fallback (still requires qB 5.2+ for the rest of the API compatibility):
   username: ""
   password: ""
 ```
 
-或者前端 **设置 → qBittorrent 下载管理** 里粘贴。配了 api_key 就**不必再填 username/password**。
+Or paste it in the frontend at **Settings → qBittorrent Download Management**. Once api_key is
+set, you **don't need to fill in username/password**.
 
-### ⚠️ qB 安全 checklist
+### ⚠️ qB Security Checklist
 
-无论是否启用 API Key，都建议：
+Whether or not you enable the API Key, we recommend:
 
-1. **监听地址改 `127.0.0.1`**（仅本机）或反代后加 IP 白名单
-2. **首次接管现有 qB 前**检查 `Preferences → Downloads → Run external program on torrent added / completed`
-   是否被植入可疑命令——这是历史弱密被打的常见痕迹
-3. 不要把 qB WebUI 直接暴露公网
+1. **Change the listen address to `127.0.0.1`** (local only), or add an IP allowlist behind a
+   reverse proxy
+2. **Before taking over an existing qB for the first time**, check whether
+   `Preferences → Downloads → Run external program on torrent added / completed` has been
+   injected with suspicious commands — this is a common trace left behind when a weak password
+   has historically been compromised
+3. Do not expose the qB WebUI directly to the public internet
 
 ---
 
-## 常见问题
+## FAQ
 
-> **先去配置页 → 可用性检测**（左侧导航第一项）。本地环境会自动跑、网络服务可一键测，多数问题在那里就能看到根因。
+> **Go to Settings → Availability Check first** (the first item in the left navigation). The
+> local environment runs automatically and network services can be tested with one click; for
+> most issues you'll see the root cause right there.
 
-### 后端启动失败
+### Backend Fails to Start
 
-1. 检查 PostgreSQL 是否可达，库和用户是否已创建（DB 连不上后端进程根本起不来，**到不了配置页**——直接看启动日志）
-2. 确认 `config.yaml` 的 `database` 段填写正确
-3. 确认 `requirements.txt` 全部装好
-4. 确认系统级依赖已安装（可用性检测「本地环境」会逐项显示）
+1. Check whether PostgreSQL is reachable and whether the database and user have been created
+   (if the DB is unreachable the backend process won't even start, and you **can't reach the
+   settings page** — look directly at the startup log)
+2. Confirm the `database` section in `config.yaml` is filled in correctly
+3. Confirm everything in `requirements.txt` is installed
+4. Confirm system-level dependencies are installed (the Availability Check "local
+   environment" lists each one)
 
-### 前端无法连接后端
+### Frontend Can't Connect to Backend
 
-1. 确认后端已启动在 `config.yaml` 中配置的端口
-2. 检查 `vite.config.js` 中的代理配置
-3. 检查 `cors_origins`（默认 `["*"]`）
+1. Confirm the backend is started on the port configured in `config.yaml`
+2. Check the proxy configuration in `vite.config.js`
+3. Check `cors_origins` (default `["*"]`)
 
-### 第三方源拉不到数据
+### Third-Party Sources Return No Data
 
-打开 **可用性检测** → 找到对应源（TMDB / 豆瓣 / Jellyfin / qB / Jackett ...）点「测试」。结果里会显示具体 HTTP 状态码或异常类型：
+Open the **Availability Check** → find the corresponding source
+(TMDB / Douban / Jellyfin / qB / Jackett ...) and click "Test". The result shows the specific
+HTTP status code or exception type:
 
-- `HTTP 401 / 403`：api_key / 凭据错
-- `HTTP 429`：被限流；rate_limiter 会自动暂停（任务详情页 QuotaStatusPanel 看具体剩余配额）
-- `Connection*` 异常：网络 / 代理问题
-- `not_configured`：还没填 key 或 enabled=false
+- `HTTP 401 / 403`: wrong api_key / credentials
+- `HTTP 429`: rate-limited; rate_limiter will automatically pause (see the remaining quota in
+  the QuotaStatusPanel on the task detail page)
+- `Connection*` exception: network / proxy issue
+- `not_configured`: key not yet filled in, or enabled=false
 
-### 数据库连接错误
+### Database Connection Error
 
 ```bash
 psql -h <host> -p 5432 -U jellyfin_helper -d jellyfin_helper
 ```
 
-连不上时依次排查：网络、防火墙、`pg_hba.conf` 是否允许该 IP、用户密码、数据库是否存在。
+If you can't connect, check in order: network, firewall, whether `pg_hba.conf` allows the IP,
+the user password, and whether the database exists.
 
-### 种子添加失败
+### Torrent Addition Fails
 
-前端 ElMessage 现在能给出具体原因，按状态码区分：
+The frontend ElMessage now gives a specific reason, distinguished by status code:
 
-- **HTTP 409**：种子已在 qB 队列里（pre-check 会先拦下并显示种子名 / 状态）
-- **HTTP 415**：种子文件无效（非 bencode 格式）
-- **HTTP 502 + "qBittorrent 拒绝加种"**：qB 默认下载目录不存在/无权限，或 category 未在 qB 创建
+- **HTTP 409**: the torrent is already in the qB queue (the pre-check intercepts it first and
+  shows the torrent name / status)
+- **HTTP 415**: the torrent file is invalid (not bencode format)
+- **HTTP 502 + "qBittorrent rejected the torrent"**: qB's default download directory does not
+  exist / has no permissions, or the category has not been created in qB
 
 ---
 
