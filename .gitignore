@@ -7,6 +7,9 @@ data/
 *.db
 *.sqlite
 
+# 文档目录（本地保留，不入库）
+docs/
+
 # Python
 __pycache__/
 *.py[cod]
