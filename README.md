@@ -211,8 +211,6 @@ bootstrap 用「预填 conf 文件」方式把 qb / Jackett 的密码和 API Key
 > 「API 密钥」→ 生成，把 `qbt_` 开头的 key 写进 `config.yaml.qbittorrent.api_key`，
 > 再 `docker compose restart helper`。没填前 qb 相关功能不可用但 helper 正常启动。
 
-完整流程（含升级、备份、常见问题）：[docs/docker-deploy.md](docs/docker-deploy.md)
-
 ### 首次验证
 
 打开 **前端 → 配置 → 可用性检测**（左侧导航第一项）。一屏看清楚：
@@ -245,8 +243,6 @@ python -m backend.run            # 后端 (默认 8000，BACKEND_PORT 覆盖)
 
 cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 ```
-
-更详细的模块划分、调试技巧、添加新 router 见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
 ---
 
@@ -302,12 +298,9 @@ cd frontend && npm install && npm run dev   # 前端 (默认 5173)
 - 豆瓣（网页爬取，带 5 次失败熔断）
 - Wikidata（演员图兜底，但要在 `wikidata.user_agent` 填你的联系方式，Wikimedia 要求）
 
-**成人内容**（按需启用）：JavBus / JavDB / AVBase / MissAV，无 API Key 但有地理屏蔽和反爬，
-详见 [docs/external-services.md](docs/external-services.md) 的代理建议。
+**成人内容**（按需启用）：JavBus / JavDB / AVBase / MissAV，无 API Key 但有地理屏蔽和反爬。
 
 `config.yaml.example` 里每个字段旁也都贴了对应申请 URL，按节填即可。
-完整字段说明、调用频率、地理屏蔽情况、OpenClash 分流示例见
-[docs/external-services.md](docs/external-services.md)。
 
 ### 为什么强制 qBittorrent 5.2+
 
