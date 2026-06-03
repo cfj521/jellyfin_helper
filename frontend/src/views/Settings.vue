@@ -632,7 +632,7 @@
             </el-form-item>
             <el-form-item label="外部地址">
               <el-input v-model="form.jackett.external_url" placeholder="http://192.168.1.100:9117（留空用上面地址）" />
-              <div class="form-hint">浏览器点「打开 Jackett」跳转用。Docker 部署必填宿主 IP——上面的容器名浏览器打不开</div>
+              <div class="form-hint">非 docker 容器名，外网或局域网地址，用于链接跳转</div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input v-model="form.jackett.api_key" type="password" show-password />
@@ -688,7 +688,7 @@
             </el-form-item>
             <el-form-item label="外部地址">
               <el-input v-model="form.qbittorrent.external_url" placeholder="http://192.168.1.100:8080（留空用上面地址）" />
-              <div class="form-hint">浏览器点「打开 qBittorrent」跳转用。Docker 部署必填宿主 IP</div>
+              <div class="form-hint">非 docker 容器名，外网或局域网地址，用于链接跳转</div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input
