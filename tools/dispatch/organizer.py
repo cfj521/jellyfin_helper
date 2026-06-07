@@ -213,7 +213,20 @@ class TorrentOrganizer:
         else:
             # 单文件场景（电影 / 单集 / 番号）
             for v in videos:
-                dst = self._compose_movie_path(target_dir, v, rule_with_tpl, metadata)
+                # tv/anime 单集（videos==1，不走上面的整季 pack 分支）同样要从文件名
+                # 提取 SxxExx——否则 file_template 里的 {season}/{episode} 因 metadata
+                # 不含这两个字段被 render_template 当空占位符删掉，得到 'The Boys SE.mkv'
+                # （回归见 tests/test_organizer.py）。提不到集号（电影 / anime 绝对集号）
+                # 才退回 _compose_movie_path，保持原命名。
+                ep = _extract_episode(v.name) if media_type in ('tv', 'anime') else None
+                if ep:
+                    s, e = ep
+                    dst = self._compose_episode_path(
+                        target_dir, v, rule_with_tpl, metadata, season=s, episode=e,
+                    )
+                    logger.info(f"episode {v.name} → S{s:02d}E{e:02d} → {dst}")
+                else:
+                    dst = self._compose_movie_path(target_dir, v, rule_with_tpl, metadata)
 
                 if duplicate_resolver is not None:
                     action = duplicate_resolver(v, dst)
