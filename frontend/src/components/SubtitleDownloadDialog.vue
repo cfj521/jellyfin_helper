@@ -55,7 +55,7 @@
           :icon="Search"
           :loading="triggerSource === 'search'"
           :disabled="searching && triggerSource !== 'search'"
-          title="把搜索框填回 release 名（视频文件 stem），再多源搜索"
+          title="搜索框为空时填入 release 名（视频文件 stem），再多源搜索"
           @click="useReleaseName"
         >
           搜索
@@ -249,10 +249,8 @@ watch(() => props.modelValue, (v) => {
   if (stem) {
     form.value.query = stem
   } else {
-    // 没 path 时（罕见）退回 jellyfin name+year
-    const name = (props.item.name || '').trim()
-    const year = props.item.year
-    form.value.query = name ? (year ? `${name} ${year}` : name) : ''
+    // 没 path 时（罕见）退回短名解析（剧集会带 SxxExx，不会落成单集标题）
+    form.value.query = _resolveShortName()
   }
   results.value = []
   selectedIdx.value = null
@@ -268,12 +266,26 @@ const _resolveReleaseName = () => {
     .replace(/\.[a-z0-9]{2,5}$/i, '')
 }
 
-// 解析短名（jellyfin 元数据：item.name + item.year，干净的标题）
-//   { name: "12.12: The Day", year: 2023 } → "12.12: The Day 2023"
+// 解析短名（jellyfin 元数据，干净的标题）
+//   电影 { name: "12.12: The Day", year: 2023 } → "12.12: The Day 2023"
+//   剧集 { type:"Episode", series_name:"The Boys", season_number:5, episode_number:5 }
+//        → "The Boys S05E05"（item.name 对 Episode 是单集标题如 "One-Shots"，拿它搜必然搜不到，
+//          季集号才是关键；字段同后端 medialibraries 透传的 series_name/season_number/episode_number）
 // 没 jellyfin 元数据时（罕见）退回 release 名 stem
 const _resolveShortName = () => {
-  const name = (props.item?.name || '').trim()
-  const year = props.item?.year
+  const it = props.item || {}
+  if (it.type === 'Episode') {
+    const series = (it.series_name || '').trim()
+    if (series && it.season_number != null && it.episode_number != null) {
+      const s = String(it.season_number).padStart(2, '0')
+      const e = String(it.episode_number).padStart(2, '0')
+      return `${series} S${s}E${e}`
+    }
+    if (series) return series          // 缺季集号兜底：至少用剧名
+    return _resolveReleaseName()
+  }
+  const name = (it.name || '').trim()
+  const year = it.year
   if (name) return year ? `${name} ${year}` : name
   return _resolveReleaseName()
 }
@@ -283,8 +295,11 @@ const _resolveShortName = () => {
 // 两个按钮对称：各自把搜索框换成自己的预设词，再触发搜索。
 // 用户在框里手动改词后按回车走 search() 默认分支，会用框内当前内容（不覆盖）。
 const useReleaseName = () => {
-  const stem = _resolveReleaseName()
-  if (stem) form.value.query = stem
+  // 仅在搜索框为空时才填 release 名；用户已输入内容则尊重当前内容，不覆盖
+  if (!form.value.query.trim()) {
+    const stem = _resolveReleaseName()
+    if (stem) form.value.query = stem
+  }
   if (form.value.query.trim().length >= 3) {
     search('search')
   } else {
