@@ -347,6 +347,79 @@ def _extract_hash(magnet: str) -> Optional[str]:
     return m.group(1).lower() if m else None
 
 
+def _match_existing_library_dir(identified: Dict, media_type: str, library_root: str):
+    """tv/anime/movie：用 ID/name 匹配 jellyfin 库里已存在的同一作品目录。
+
+    命中返回 jellyfin 视角的 target_path（剧目录 + 季子目录 / 电影目录），否则 None。
+    匹配优先级 tmdb → imdb → name 归一化（见 library_matcher）。只复用目标库根下的目录。
+    任何异常都吞掉返回 None（退回模板渲染），绝不阻断 dispatch。
+    """
+    if media_type not in ('tv', 'anime', 'movie'):
+        return None
+    try:
+        from common.jellyfin_client import JellyfinClient
+        from tools.dispatch.library_matcher import match_library_dir, choose_season_dirname
+
+        jf = JellyfinClient()
+        items = jf.get_all_movies() if media_type == 'movie' else jf.get_all_series()
+
+        root = (library_root or '').rstrip('/')
+        candidates = []
+        for it in items or []:
+            path = (it.get('Path') or '').rstrip('/')
+            if media_type == 'movie':
+                # movie item 的 Path 是电影文件本身，取父目录作为电影目录
+                path = path.rsplit('/', 1)[0] if '/' in path else ''
+            if not path:
+                continue
+            # 只复用目标库根下的目录，避免落到别的库
+            if root and not (path == root or path.startswith(root + '/')):
+                continue
+            pid = it.get('ProviderIds') or {}
+            candidates.append({
+                'name': it.get('Name'),
+                'path': path,
+                'tmdb': pid.get('Tmdb'),
+                'imdb': pid.get('Imdb'),
+                'id': it.get('Id'),
+            })
+
+        hit = match_library_dir(
+            candidates,
+            tmdb_id=identified.get('series_tmdb_id') or identified.get('tmdb_id'),
+            imdb_id=identified.get('imdb_id'),
+            name=identified.get('series_name') or identified.get('title'),
+        )
+        if not hit:
+            return None
+
+        series_dir = hit['path']
+        if media_type == 'movie':
+            logger.info(f"resolve_target: 复用已有电影目录 {series_dir}")
+            return series_dir
+
+        season = identified.get('season')
+        if not season:
+            logger.info(f"resolve_target: 复用已有剧目录 {series_dir}（无季号，落剧目录）")
+            return series_dir
+
+        # 季子目录风格跟随该剧已有季（用 jellyfin 已扫到的季 Path 末段推断）
+        existing = []
+        try:
+            seasons = jf.get_seasons_of_series(hit['id']) if hit.get('id') else []
+            existing = [(s.get('Path') or '').rstrip('/').rsplit('/', 1)[-1]
+                        for s in seasons if s.get('Path')]
+        except Exception:
+            existing = []
+        season_dir = choose_season_dirname(existing, int(season))
+        full = f"{series_dir}/{season_dir}"
+        logger.info(f"resolve_target: 复用已有剧目录 {series_dir} + 季目录 {season_dir} → {full}")
+        return full
+    except Exception as e:
+        logger.warning(f"resolve_target: 匹配已有库目录失败，退回模板: {e}")
+        return None
+
+
 def _resolve_target(identified: Dict) -> Dict:
     """
     根据 identified 推断 target_library_id + target_path。
@@ -413,23 +486,29 @@ def _resolve_target(identified: Dict) -> Dict:
                 f"series_name={series_name!r}, code={code!r})"
             )
         else:
+            # 先尝试复用 jellyfin 库里已存在的同一作品目录（ID 匹配优先，name 归一化兜底）；
+            # 命中则用其真实目录，避免因命名差异（点/空格/年份）新建重复目录。未命中退回模板。
+            matched = _match_existing_library_dir(identified, media_type, library_root)
             try:
                 from tools.dispatch.template_render import render_template, sanitize_path
-                # render_template 处理空值智能去括号 + 多空格折叠；空值不再传 '' 兜底，
-                # 直接传 None 让 render_template 决定要不要保留周围的字面字符
-                target_path = render_template(rule['location_template'], {
-                    'library_root': library_root,
-                    'title': title,
-                    'year': year,
-                    'series_name': series_name,
-                    'anime_name': anime_name,
-                    'season': identified.get('season'),
-                    'episode': identified.get('episode'),
-                    'code': code or title,
-                })
-                # sanitize 每个路径段（去 <>:"|?* + 控制字符 + Windows 保留名 + 截长度）；
-                # 保留 / 盘符
-                target_path = sanitize_path(target_path)
+                if matched:
+                    target_path = sanitize_path(matched)
+                else:
+                    # render_template 处理空值智能去括号 + 多空格折叠；空值不再传 '' 兜底，
+                    # 直接传 None 让 render_template 决定要不要保留周围的字面字符
+                    target_path = render_template(rule['location_template'], {
+                        'library_root': library_root,
+                        'title': title,
+                        'year': year,
+                        'series_name': series_name,
+                        'anime_name': anime_name,
+                        'season': identified.get('season'),
+                        'episode': identified.get('episode'),
+                        'code': code or title,
+                    })
+                    # sanitize 每个路径段（去 <>:"|?* + 控制字符 + Windows 保留名 + 截长度）；
+                    # 保留 / 盘符
+                    target_path = sanitize_path(target_path)
             except Exception as e:
                 logger.warning(f"location_template 渲染失败: {e}")
 
