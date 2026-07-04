@@ -14,7 +14,9 @@ sys.path.insert(0, str(ROOT))
 
 def _patch_jf(monkeypatch, *, series=None, movies=None, seasons=None):
     from common.jellyfin_client import JellyfinClient
-    monkeypatch.setattr(JellyfinClient, '__init__', lambda self: None)
+    # 关键：mock 的 __init__ 必须跟真实签名一样要求 host/api_key，
+    # 否则会把「构造时漏传参数」的 bug 藏掉（曾导致每次匹配都异常退回模板）。
+    monkeypatch.setattr(JellyfinClient, '__init__', lambda self, host, api_key: None)
     monkeypatch.setattr(JellyfinClient, 'get_all_series', lambda self: series or [])
     monkeypatch.setattr(JellyfinClient, 'get_all_movies', lambda self: movies or [])
     monkeypatch.setattr(JellyfinClient, 'get_seasons_of_series', lambda self, sid: seasons or [])
