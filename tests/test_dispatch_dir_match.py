@@ -73,6 +73,29 @@ def test_tv_match_by_name_when_no_id(monkeypatch):
     assert out == '/library/videos/tv/House.of.the.Dragon/Season 03'
 
 
+def test_season_ignores_seasons_outside_matched_dir(monkeypatch):
+    """get_seasons 混入别的目录(重复剧)的季 → 只认落在匹配剧目录下的季来推断风格。"""
+    from backend.api.dispatch import _match_existing_library_dir
+    _patch_jf(
+        monkeypatch,
+        series=[{
+            'Id': 'abc', 'Name': 'House of the Dragon',
+            'Path': '/library/videos/tv/House.of.the.Dragon',
+            'ProviderIds': {'Tmdb': '94997'},
+        }],
+        seasons=[
+            {'Path': '/library/videos/tv/House.of.the.Dragon/S01'},
+            {'Path': '/library/videos/tv/House.of.the.Dragon/S02'},
+            {'Path': '/library/videos/tv/House of the Dragon/Season 03'},  # 别的目录，须忽略
+        ],
+    )
+    out = _match_existing_library_dir(
+        {'series_tmdb_id': '94997', 'season': 3, 'series_name': 'House of the Dragon'},
+        'tv', '/library/videos/tv',
+    )
+    assert out == '/library/videos/tv/House.of.the.Dragon/S03'
+
+
 def test_candidate_outside_library_root_filtered(monkeypatch):
     """匹配项不在目标库根下 → 不复用（避免落到别的库）。"""
     from backend.api.dispatch import _match_existing_library_dir
