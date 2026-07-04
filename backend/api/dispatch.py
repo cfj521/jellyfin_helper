@@ -403,12 +403,16 @@ def _match_existing_library_dir(identified: Dict, media_type: str, library_root:
             logger.info(f"resolve_target: 复用已有剧目录 {series_dir}（无季号，落剧目录）")
             return series_dir
 
-        # 季子目录风格跟随该剧已有季（用 jellyfin 已扫到的季 Path 末段推断）
+        # 季子目录风格跟随该剧已有季（用 jellyfin 已扫到的季 Path 末段推断）。
+        # 只认「直接落在匹配到的剧目录下」的季——jellyfin 可能因为存在重复剧目录
+        # 而把别的目录的季也挂在同一 series item 上，混进来会带偏风格判断。
         existing = []
         try:
             seasons = jf.get_seasons_of_series(hit['id']) if hit.get('id') else []
-            existing = [(s.get('Path') or '').rstrip('/').rsplit('/', 1)[-1]
-                        for s in seasons if s.get('Path')]
+            for s in seasons:
+                p = (s.get('Path') or '').rstrip('/')
+                if p and p.rsplit('/', 1)[0] == series_dir:
+                    existing.append(p.rsplit('/', 1)[-1])
         except Exception:
             existing = []
         season_dir = choose_season_dirname(existing, int(season))
