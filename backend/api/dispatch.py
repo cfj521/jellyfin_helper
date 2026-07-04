@@ -360,7 +360,7 @@ def _match_existing_library_dir(identified: Dict, media_type: str, library_root:
         from common.jellyfin_client import JellyfinClient
         from tools.dispatch.library_matcher import match_library_dir, choose_season_dirname
 
-        jf = JellyfinClient()
+        jf = JellyfinClient(settings.jellyfin_host, settings.jellyfin_api_key)
         items = jf.get_all_movies() if media_type == 'movie' else jf.get_all_series()
 
         root = (library_root or '').rstrip('/')
