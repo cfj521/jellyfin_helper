@@ -510,9 +510,9 @@
       </div>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="copyConflictVisible = false">取消</el-button>
-          <el-button :loading="copyConflictBusy" @click="resolveCopyConflict('skip')">跳过（保留旧）</el-button>
-          <el-button type="primary" :loading="copyConflictBusy" @click="resolveCopyConflict('replace')">覆盖（用新的）</el-button>
+          <el-button :disabled="copyConflictBusy" @click="copyConflictVisible = false">取消</el-button>
+          <el-button :disabled="copyConflictBusy" :loading="copyConflictBusy" @click="resolveCopyConflict('skip')">保留旧版本</el-button>
+          <el-button type="primary" :disabled="copyConflictBusy" :loading="copyConflictBusy" @click="resolveCopyConflict('replace')">覆盖（用新的）</el-button>
         </div>
       </template>
     </el-dialog>
@@ -1353,7 +1353,7 @@ const openReview = async (row) => {
 
 // copy-phase 冲突决策：'replace'（覆盖）/ 'skip'（跳过）
 const resolveCopyConflict = async (action) => {
-  if (!copyConflictHash.value) return
+  if (!copyConflictHash.value || copyConflictBusy.value) return
   copyConflictBusy.value = true
   try {
     if (action === 'replace') {
@@ -1366,6 +1366,14 @@ const resolveCopyConflict = async (action) => {
     copyConflictVisible.value = false
     load(true)
   } catch (e) {
+    if (e.response?.status === 409) {
+      // 另一个请求（例如旧的“覆盖”仍在执行）已经处理过这条冲突，
+      // 不应再把 409 显示成失败；刷新即可看到最终状态。
+      ElMessage.warning(e.response?.data?.detail || '该冲突已处理，请刷新列表')
+      copyConflictVisible.value = false
+      load(true)
+      return
+    }
     ElMessage.error('决策失败：' + (e.response?.data?.detail || e.message))
   } finally {
     copyConflictBusy.value = false
