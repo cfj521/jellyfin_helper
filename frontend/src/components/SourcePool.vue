@@ -26,7 +26,7 @@
     <!-- 已配置（按优先级）。可拖动 / 上下移动 / 删除 -->
     <div v-else class="priority-list">
       <div class="list-header">
-        <span class="header-text">已启用（拖动行调整优先级，从上到下尝试）</span>
+        <span class="header-text">{{ listLabel }}</span>
       </div>
 
       <div
@@ -110,6 +110,8 @@ const props = defineProps({
   defaultBaseUrls: { type: Object, default: () => ({}) },
   /** 至少保留 N 项（< minItems 时删除按钮禁用，避免空集合）。默认 0 = 无约束 */
   minItems: { type: Number, default: 0 },
+  /** 已启用列表的表头文案（不同场景语义不同：优先级 / tab 顺序） */
+  listLabel: { type: String, default: '已启用（拖动行调整优先级，从上到下尝试）' },
 })
 const emit = defineEmits(['update:modelValue'])
 

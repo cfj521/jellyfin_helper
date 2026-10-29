@@ -53,6 +53,12 @@ _DEFAULT_FILE_TEMPLATES = {
     'adult':       '{code}({title})',
 }
 
+# Adult 多视频包通常包含正片分段 + 广告/预告。小于正片 10% 且没有 PART/CD
+# 标记的文件几乎都是广告；如果一起复制进库，会被 adult scanner 当成同番号的
+# 额外视频入库。这里只过滤 adult，电影/剧集不做体积过滤。
+_ADULT_SIDECAR_RATIO = 0.10
+_PART_RE = re.compile(r'(?:^|[ ._-])(?:part|cd|disc|disk)[ ._-]*\d+', re.I)
+
 
 def _is_junk(path: Path) -> bool:
     """sample/nfo/RARBG/proof/截图等丢 trash。"""
@@ -152,9 +158,26 @@ class TorrentOrganizer:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         videos, subs, junk = _classify_files(src_root)
+        # 保留过滤前的全部体积：adult 包过滤掉广告后可能只剩 1 个正片，
+        # 但仍需要用广告的体积识别上次失败留下的错误目标文件。
+        all_video_sizes = set()
+        for v in videos:
+            try:
+                all_video_sizes.add(v.stat().st_size)
+            except OSError:
+                pass
+        dropped_videos: List[Path] = []
+        if media_type == 'adult' and len(videos) > 1:
+            videos, dropped_videos = self._select_adult_videos(videos)
+            if dropped_videos:
+                logger.warning(
+                    "adult 多视频包跳过疑似广告/花絮: "
+                    + ", ".join(f"{v.name} ({v.stat().st_size/1e6:.1f}MB)" for v in dropped_videos)
+                )
         logger.info(
             f"organize {src_root.name} → {target_dir} "
-            f"(videos={len(videos)}, subs={len(subs)}, junk={len(junk)} 已识别但不动 src)"
+            f"(videos={len(videos)}, subs={len(subs)}, junk={len(junk)}"
+            f"{f', dropped={len(dropped_videos)}' if dropped_videos else ''} 已识别但不动 src)"
         )
         # junk（sample / RARBG.txt 等）不参与 copy，但也**不从 src 移走** ——
         # src 是 qB 的做种目录，物理移走会让种子文件清单缺失 → 校验报丢失文件 → 红种。
@@ -210,6 +233,57 @@ class TorrentOrganizer:
                 dispatched.append(str(dst))
                 # 字幕跟随
                 self._dispatch_subs_for_video(v, dst, subs, dispatched)
+        elif media_type in ('movie', 'adult') and len(videos) > 1:
+            # 多视频电影/成人包：不能每个视频都套同一个 {title}/{code} 模板，
+            # 否则所有文件落到同一个 dst，后复制的会覆盖/触发跨种子冲突。
+            # 规则：主视频（adult 取最大文件，电影取第一个）用模板名；
+            # 其余文件保留原文件名，重名时追加 ' - 2' 等后缀。
+            size_map: Dict[Path, int] = {}
+            for v in videos:
+                try:
+                    s = v.stat().st_size
+                except OSError:
+                    s = 0
+                size_map[v] = s
+            source_sizes = all_video_sizes
+
+            primary = (
+                max(videos, key=lambda p: size_map.get(p, 0))
+                if media_type == 'adult'
+                else videos[0]
+            )
+            ordered = [primary] + [v for v in videos if v != primary]
+            used_dsts = set()
+
+            for idx, v in enumerate(ordered):
+                if idx == 0:
+                    dst = self._compose_movie_path(target_dir, v, rule_with_tpl, metadata)
+                    used_dsts.add(str(dst))
+                else:
+                    dst = self._unique_pack_dst(target_dir / v.name, used_dsts)
+
+                if duplicate_resolver is not None:
+                    action = duplicate_resolver(v, dst)
+                    if action == 'skip':
+                        skipped_files.append((str(v), str(dst), 'duplicate_policy'))
+                        logger.info(f"organize: skip {v.name} (duplicate_policy)")
+                        continue
+
+                if idx == 0:
+                    # 清理本包上一次失败时误写到模板名的广告/副文件。
+                    self._displace_stale_pack_file(
+                        dst, source_sizes, size_map.get(v, 0),
+                    )
+
+                bytes_copied += copy_file_with_progress(
+                    v, dst,
+                    progress_cb=lambda d, t, base=bytes_copied, name=v.name: (
+                        progress_cb(base + d, bytes_total, name) if progress_cb else None
+                    ),
+                    on_displace=self._displace_to_trash,
+                )
+                dispatched.append(str(dst))
+                self._dispatch_subs_for_video(v, dst, subs, dispatched)
         else:
             # 单文件场景（电影 / 单集 / 番号）
             for v in videos:
@@ -234,6 +308,13 @@ class TorrentOrganizer:
                         skipped_files.append((str(v), str(dst), 'duplicate_policy'))
                         logger.info(f"organize: skip {v.name} (duplicate_policy)")
                         continue
+
+                if media_type == 'adult':
+                    try:
+                        primary_size = v.stat().st_size
+                    except OSError:
+                        primary_size = 0
+                    self._displace_stale_pack_file(dst, all_video_sizes, primary_size)
 
                 bytes_copied += copy_file_with_progress(
                     v, dst,
@@ -279,6 +360,78 @@ class TorrentOrganizer:
                 dst.unlink()
             except Exception as e2:
                 logger.warning(f"unlink 兜底也失败 {dst}: {e2}")
+
+    def _select_adult_videos(self, videos: List[Path]) -> Tuple[List[Path], List[Path]]:
+        """把 adult 多视频包拆成 正片/分段（保留）和 广告/花絮（丢弃）。
+
+        正片 = 体积最大的文件；其余文件满足以下任一条件就保留：
+          - 体积 >= 正片的 10%
+          - 文件名带 PART/CD/DISC 等分段标记
+        这样 HRSM-016（9.9GB 正片 + 15MB 广告）只复制正片，
+        URVRSP-604（4 个 4-6GB PART）仍全部分段保留。
+        """
+        if len(videos) <= 1:
+            return videos, []
+
+        def size_of(p: Path) -> int:
+            try:
+                return p.stat().st_size
+            except OSError:
+                return 0
+
+        primary = max(videos, key=size_of)
+        primary_size = size_of(primary) or 1
+        kept: List[Path] = []
+        dropped: List[Path] = []
+        for v in videos:
+            size = size_of(v)
+            keep = (
+                v == primary
+                or size >= primary_size * _ADULT_SIDECAR_RATIO
+                or bool(_PART_RE.search(v.name))
+            )
+            (kept if keep else dropped).append(v)
+        # 主文件先处理，保证它拿到模板名；其余按文件名排序，日志和结果稳定。
+        kept.sort(key=lambda p: (p != primary, p.name.lower()))
+        return kept, dropped
+
+    def _unique_pack_dst(self, dst: Path, used: set) -> Path:
+        """多视频包内避免目标重名：同名时追加 ' - 2'、' - 3'…"""
+        if str(dst) not in used:
+            used.add(str(dst))
+            return dst
+        stem, ext = dst.stem, dst.suffix
+        n = 2
+        while True:
+            candidate = dst.with_name(f"{stem} - {n}{ext}")
+            if str(candidate) not in used:
+                used.add(str(candidate))
+                return candidate
+            n += 1
+
+    def _displace_stale_pack_file(
+        self, dst: Path, source_sizes: set, primary_size: int,
+    ):
+        """清理同一 multi-video 包上一次失败留下的错误目标文件。
+
+        典型场景：上次把 15MB 广告复制成了模板名，本次正片（9.9GB）要写同一路径。
+        copier 会把「旧文件 size 小于新文件」当成跨种子冲突而拒绝续传，所以这里
+        先识别：目标文件大小恰好等于本包内某个源视频（不是主文件）时，说明它是
+        上一次误复制的本包文件，移入 trash 后重新复制正片。
+        """
+        if not dst.exists():
+            return
+        try:
+            dst_size = dst.stat().st_size
+        except OSError:
+            return
+        if dst_size == primary_size or dst_size not in source_sizes:
+            return
+        logger.warning(
+            f"multi-video: 目标 {dst} 是上次误复制的同包文件 "
+            f"({dst_size/1e6:.1f}MB) → 移入 trash 后写入主文件"
+        )
+        self._displace_to_trash(dst)
 
     def _move_to_trash(self, src_root: Path, junk_file: Path):
         """把 junk_file 移到 trash_dir，保持相对结构便于事后人工恢复。"""

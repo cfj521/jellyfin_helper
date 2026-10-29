@@ -26,6 +26,54 @@ from common.rate_limiter import DOUBAN_DELAY
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# 热门推荐页可配置的提供方。顺序和开关来自 config.yaml 的 discover.sources。
+_DISCOVER_SOURCE_META = {
+    'trakt': {'label': 'Trakt', 'description': '实时观看信号'},
+    'tmdb': {'label': 'TMDB', 'description': 'TMDB 趋势与分类榜单'},
+    'anilist': {'label': 'AniList', 'description': '番剧趋势与分类榜单'},
+    'douban': {'label': '豆瓣片单', 'description': '豆瓣片单'},
+}
+_DISCOVER_DEFAULT_ORDER = ['trakt', 'tmdb', 'anilist', 'douban']
+
+
+@router.get("/sources")
+def get_discover_sources():
+    """热门推荐页的提供方顺序与启用状态（供前端动态渲染 tab + 设置页排序）。"""
+    raw = getattr(settings, 'discover_sources', None)
+    if not isinstance(raw, list):
+        raw = _DISCOVER_DEFAULT_ORDER
+
+    sources = []
+    seen = set()
+    for item in raw:
+        if isinstance(item, str):
+            name, enabled = item, True
+        elif isinstance(item, dict):
+            name = item.get('name')
+            enabled = item.get('enabled', True)
+        else:
+            continue
+        if name not in _DISCOVER_SOURCE_META or name in seen:
+            continue
+        seen.add(name)
+        sources.append({
+            'name': name,
+            'enabled': bool(enabled),
+            **_DISCOVER_SOURCE_META[name],
+        })
+
+    # 老配置没有 discover.sources（或全是未知项）时补全默认项；
+    # 有配置但只列了部分合法项时，未列出的项视为用户主动关闭，不再自动追加。
+    if not sources:
+        for name in _DISCOVER_DEFAULT_ORDER:
+            sources.append({
+                'name': name,
+                'enabled': True,
+                **_DISCOVER_SOURCE_META[name],
+            })
+
+    return {'sources': sources}
+
 
 def _tmdb_scrape_lang() -> str:
     """

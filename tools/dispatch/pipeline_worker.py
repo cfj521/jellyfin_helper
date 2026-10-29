@@ -42,6 +42,9 @@ from tools.dispatch.phases import (
 
 logger = logging.getLogger(__name__)
 
+# 领取任务遇到 DB 异常后的重试间隔；避免 DB 短暂不可用时线程直接退出
+CLAIM_RETRY_SECONDS = 10
+
 
 # 触发 event：上游 worker 把行推到 phase=download_done 后调 trigger.set()
 # 主 loop 在 trigger.wait() 上阻塞，被 set 或 poll_interval 超时后查 DB
@@ -189,7 +192,15 @@ class DispatchPipeline:
         HEARTBEAT_SECONDS = 600
 
         while not self.stop_event.is_set():
-            row_dict = self._claim_next_pending()
+            try:
+                row_dict = self._claim_next_pending()
+            except Exception:
+                # 数据库短暂不可用（重启/网络抖动）不能让整个 worker 线程退出，
+                # 否则后续 download_done 的行永远不会被接管。
+                logger.exception(f"DispatchPipeline 领取任务失败，{CLAIM_RETRY_SECONDS}s 后重试")
+                if self.stop_event.wait(CLAIM_RETRY_SECONDS):
+                    break
+                continue
             if not row_dict:
                 trigger.wait(timeout=WAIT_TIMEOUT)
                 trigger.clear()
@@ -426,10 +437,7 @@ class DispatchPipeline:
                 _set_phase(
                     h, PHASE_COPYING, 'needs_review',
                     message='目标位置已存在另一种子的旧文件 — 请决策是否覆盖',
-                    error=_json.dumps({
-                        'kind': 'cross_torrent_collision',
-                        'detail': str(e),
-                    }, ensure_ascii=False),
+                    error=_json.dumps(e.to_dict(), ensure_ascii=False),
                 )
             else:
                 _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=str(e))
@@ -468,10 +476,23 @@ class DispatchPipeline:
                 'dispatched_files': dispatched_files,
                 'copy_bytes_done': bytes_copied,
                 'copy_bytes_total': bytes_copied,
+                # 复制完成即落 source_name，不依赖 Jellyfin 扫描时序
+                'source_name': row.get('source_name') or None,
             },
         )
         # 关键：把刚写库的 dispatched_files 同步回内存 row dict，
         # 不然 _step_jellyfin_send(row) 拿到的还是 claim 时的空数组 → 只发整库 scan
+        try:
+            from backend.services.source_names import record_source_names_for_paths
+            with SessionLocal() as sn_db:
+                n = record_source_names_for_paths(
+                    sn_db, row.get('source_name'), dispatched_files,
+                )
+            if n:
+                logger.info(f"source_name backfill {h[:16]}.. rows={n}")
+        except Exception as e:
+            logger.warning(f"source_name backfill failed (non-fatal): {e}")
+
         row['dispatched_files'] = list(dispatched_files)
         row['copy_bytes_done'] = bytes_copied
         row['copy_bytes_total'] = bytes_copied
@@ -594,6 +615,7 @@ def _row_to_dict(row: DownloadDispatchMap) -> Dict:
         'series_tmdb_id': row.series_tmdb_id,
         'series_name': row.series_name,
         'title': row.title,
+        'source_name': row.source_name,
         'year': row.year,
         'target_library_id': row.target_library_id,
         'target_root': row.target_root,

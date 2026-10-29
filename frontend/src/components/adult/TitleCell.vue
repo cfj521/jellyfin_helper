@@ -17,6 +17,11 @@
       <span v-if="item.title">{{ item.title }}</span>
       <span v-else class="muted">{{ item.file_name || '—' }}</span>
     </div>
+    <div
+      v-if="item.source_name"
+      class="source-line"
+      :title="item.source_name"
+    >{{ item.source_name }}</div>
   </component>
 </template>
 
@@ -75,6 +80,16 @@ defineProps({
     -webkit-box-orient: vertical;
 
     .muted { color: var(--jt-text-muted); }
+  }
+
+  .source-line {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--jt-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 }
 </style>

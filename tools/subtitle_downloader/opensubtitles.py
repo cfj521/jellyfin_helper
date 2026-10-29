@@ -164,7 +164,14 @@ class OpenSubtitlesClient:
         """
         if languages is None:
             languages = ['chs', 'eng']
-        api_langs = [self.LANG_MAP.get(lang, lang) for lang in languages]
+        # 支持复合语言（chs.eng / cht.eng）：OpenSubtitles 只认单语言代码，
+        # 拆开后逐个映射，例如 chs.eng -> zh-cn,en。
+        api_langs: List[str] = []
+        for lang in languages:
+            for part in str(lang).split('.'):
+                mapped = self.LANG_MAP.get(part, part)
+                if mapped and mapped not in api_langs:
+                    api_langs.append(mapped)
         params: Dict = {'languages': ','.join(api_langs)}
 
         if imdb_id:

@@ -490,10 +490,14 @@
             <span class="meta-label">目标位置</span>
             <span class="path-text">{{ copyConflictInfo.dst }}</span>
           </div>
-          <div class="meta-line">
+          <div class="meta-line" v-if="copyConflictInfo.existing_hash">
             <span class="meta-label">已被</span>
             <span class="meta-name">{{ copyConflictInfo.existing_release_name }}</span>
             <span class="muted"> · 种子 {{ (copyConflictInfo.existing_hash || '').slice(0, 16) }}.. · 当前 {{ copyConflictInfo.existing_phase }}</span>
+          </div>
+          <div class="meta-line" v-if="!copyConflictInfo.existing_hash && copyConflictInfo.detail">
+            <span class="meta-label">冲突</span>
+            <span class="muted">{{ copyConflictInfo.detail }}</span>
           </div>
           <div class="meta-line" v-if="copyConflictInfo.reason">
             <span class="meta-label">原因</span>

@@ -291,6 +291,7 @@ def _try_adopt_one(qb, t: Dict) -> str:
         torrent_hash=h,
         identified=identified,
         target_info=target_info,
+        source_name=name,
         phase=phase,
         phase_status=phase_status,
         status_message=status_msg,
@@ -371,6 +372,7 @@ def _write_dispatch_row(
     status_message: str,
     move_mode: str = 'copy',
     qb_added_on=None,
+    source_name: Optional[str] = None,
 ):
     """写 dispatch_map 行：phase / phase_status 由 adopt 决策决定。
     qb_added_on：qB 视角的加种时间，构成 (torrent_hash, qb_added_on) 任务身份。
@@ -393,6 +395,7 @@ def _write_dispatch_row(
             series_tmdb_id=str(identified.get('series_tmdb_id') or '') or None,
             series_name=identified.get('series_name'),
             title=identified.get('title'),
+            source_name=source_name,
             year=identified.get('year'),
             target_library_id=target_info.get('library_id') or None,
             target_root=target_info.get('library_root') or None,

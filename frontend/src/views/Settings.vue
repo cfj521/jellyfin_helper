@@ -769,6 +769,29 @@
           </el-form>
         </el-card>
 
+        <!-- 热门推荐提供方：开关 + 顺序 -->
+        <el-card shadow="never" class="cfg-card">
+          <template #header>
+            <div class="cfg-card-head">
+              <span class="badge trakt">热</span>
+              <span>热门推荐提供方</span>
+              <el-tag size="small" :type="form.discover.sources.length ? 'success' : 'info'" effect="plain">
+                {{ form.discover.sources.length }} 个已开启
+              </el-tag>
+            </div>
+          </template>
+          <p class="form-hint" style="margin: 0 0 10px">
+            「热门推荐」页的 tab 顺序即下方顺序。点击上方 chip 添加，垃圾桶移除；拖动行或用箭头调整顺序。
+          </p>
+          <SourcePool
+            v-model="form.discover.sources"
+            :all-keys="allDiscoverSourceKeys"
+            :labels="discoverSourceLabels"
+            :min-items="1"
+            list-label="已开启（拖动行调整顺序，从上到下显示）"
+          />
+        </el-card>
+
       </el-tab-pane>
 
       <!-- ============ 字幕下载 ============ -->
@@ -1558,6 +1581,15 @@ const subtitleSourceLabels = {
 }
 const allSubtitleSourceKeys = Object.keys(subtitleSourceLabels)
 
+// 热门推荐页提供方（顺序即 tab 顺序）
+const discoverSourceLabels = {
+  trakt: 'Trakt（实时观看信号）',
+  tmdb: 'TMDB（趋势 / 分类榜单）',
+  anilist: 'AniList（番剧榜单）',
+  douban: '豆瓣片单',
+}
+const allDiscoverSourceKeys = Object.keys(discoverSourceLabels)
+
 // 字幕格式偏好（用 SourcePool 渲染，行为同下载源排序）
 const subtitleFormatLabels = {
   ass: 'ASS / SSA（带样式，首选）',
@@ -1723,6 +1755,12 @@ const blank = () => ({
       { name: '高分韩剧',     doulist_id: '1648104', media_type: 'tv' },
     ],
   },
+  // 热门推荐页提供方：数组顺序 = tab 顺序，缺少的项视为关闭
+  discover: {
+    sources: [
+      { name: 'trakt' }, { name: 'tmdb' }, { name: 'anilist' }, { name: 'douban' },
+    ],
+  },
   wikidata: {
     enabled: true,
     user_agent: 'JellyfinHelper/1.0',
@@ -1806,6 +1844,17 @@ const mergeIntoForm = (cfg) => {
       { name: 'assrt', enabled: true },
       { name: 'opensubtitles', enabled: true },
     ]
+  }
+  // 热门推荐提供方：后端可能存 string[] 或 [{name, enabled}]，
+  // SourcePool 只接受 [{name}]，关闭的项直接不进入列表。
+  const rawDiscover = form.discover?.sources
+  if (Array.isArray(rawDiscover) && rawDiscover.length) {
+    form.discover.sources = rawDiscover
+      .map(s => (typeof s === 'string' ? { name: s, enabled: true } : s))
+      .filter(s => s && allDiscoverSourceKeys.includes(s.name) && s.enabled !== false)
+      .map(s => ({ name: s.name }))
+  } else {
+    form.discover.sources = allDiscoverSourceKeys.map(name => ({ name }))
   }
   // dispatch.rules 兜底：用户 yaml 里若只配了部分 media_type，要保证全部 key 都在，
   // 否则 mergeIntoForm 整体替换 rules dict 会让缺失的 media_type 在 UI 上消失
@@ -1917,6 +1966,10 @@ const confirmSave = async () => {
     ElMessage.warning('成人内容源至少保留 1 个')
     return
   }
+  if (_len(form.discover.sources) === 0) {
+    ElMessage.warning('热门推荐提供方至少保留 1 个')
+    return
+  }
 
   // 仅当改了关键连接（Jellyfin / 数据库）时才需要二次确认
   const dbChanged = sectionChanged('database')
@@ -1974,7 +2027,20 @@ const confirmSave = async () => {
         .filter(Boolean),
       // required_langs 在 UI 上已经是 string[]（checkbox-group 直接绑），无需转换
     }
-    const payload = { ...form, adult: cleanedAdult, jackett: cleanedJackett, subtitle: cleanedSubtitle }
+    // 热门推荐提供方：SourcePool 只保留已开启项，落盘时补 enabled:true
+    const cleanedDiscover = {
+      ...form.discover,
+      sources: (form.discover.sources || [])
+        .filter(s => s.name)
+        .map(s => ({ name: s.name, enabled: true })),
+    }
+    const payload = {
+      ...form,
+      adult: cleanedAdult,
+      jackett: cleanedJackett,
+      subtitle: cleanedSubtitle,
+      discover: cleanedDiscover,
+    }
     await configApi.saveFull(payload)
     ElMessage.success('配置已保存')
     await loadConfig()

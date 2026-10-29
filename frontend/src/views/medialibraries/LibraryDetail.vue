@@ -287,8 +287,13 @@
               />
             </div>
             <div class="grid-meta">
-              <div class="grid-title" :title="row.name">{{ row.name }}</div>
+              <div class="grid-title" :title="row.source_name || row.name">{{ row.name }}</div>
               <div v-if="row.year" class="grid-year">{{ row.year }}</div>
+              <div
+                v-if="row.source_name"
+                class="grid-source"
+                :title="row.source_name"
+              >{{ row.source_name }}</div>
             </div>
           </template>
         </div>
@@ -377,15 +382,22 @@
                 </div>
               </div>
               <!-- 标题 -->
-              <a
-                v-if="row.detail_url"
-                :href="row.detail_url"
-                target="_blank"
-                rel="noopener noreferrer"
-                :class="['item-link', `title--${(row.type || '').toLowerCase()}`]"
-                @click.stop
-              >{{ rowDisplayTitle(row) }}</a>
-              <span v-else :class="`title--${(row.type || '').toLowerCase()}`">{{ rowDisplayTitle(row) }}</span>
+              <div class="title-block">
+                <a
+                  v-if="row.detail_url"
+                  :href="row.detail_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :class="['item-link', `title--${(row.type || '').toLowerCase()}`]"
+                  @click.stop
+                >{{ rowDisplayTitle(row) }}</a>
+                <span v-else :class="`title--${(row.type || '').toLowerCase()}`">{{ rowDisplayTitle(row) }}</span>
+                <div
+                  v-if="row.source_name"
+                  class="source-name"
+                  :title="row.source_name"
+                >{{ row.source_name }}</div>
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -2741,10 +2753,17 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 // 切视图（list ↔ grid）时回顶部 —— 列表和网格的行高 / 卡片高完全不一样，
 // 停留在 list 第 80 行的位置切到 grid 会落到完全不相关的卡片中间，体验割裂
-watch(viewMode, () => {
+watch(viewMode, async () => {
   // 整页改回外层滚动后，回顶 target = .app-main
   const scroller = document.querySelector('.app-main')
   if (scroller) scroller.scrollTop = 0
+  // 两种视图的行高 / 每行卡片数不同，切换后重新按新布局补足首屏。
+  // 若切换后内容不足一屏，页面不会产生 scroll 事件，哨兵永远不会触发 loadMore。
+  await nextTick()
+  const minVisible = initialLimit()
+  if (wanted.value < minVisible) wanted.value = minVisible
+  await nextTick()
+  _maybeLoadMoreOnScroll()
 })
 
 onUnmounted(() => {
@@ -3121,6 +3140,23 @@ body:has(.lib-detail-root) .app-main {
     border-radius: 4px;
     object-fit: cover;
     flex-shrink: 0;
+  }
+
+  .title-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .source-name {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--jt-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    max-width: 520px;
   }
 
   .item-link {
@@ -3525,6 +3561,15 @@ body:has(.lib-detail-root) .app-main {
   .grid-year {
     font-size: 12px;
     color: var(--jt-text-muted);
+  }
+  .grid-source {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--jt-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   // 健康单元格：双行布局（第一行圆点+错误码，第二行刮削按钮）

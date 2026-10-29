@@ -132,6 +132,15 @@ class TestSanitizePathSegment:
         assert out.endswith('.mkv')
         assert len(out) <= 200
 
+    def test_length_truncation_counts_utf8_bytes(self):
+        # 中文按 UTF-8 是 3 字节/字；按字符截断会生成 600+ 字节的文件名，
+        # 加上 -poster.jpg 后超过 ext4 的 255 字节限制。
+        long_name = '中' * 200 + '.mkv'
+        out = sanitize_path_segment(long_name, max_len=200)
+        assert out.endswith('.mkv')
+        assert len(out.encode('utf-8')) <= 200
+        assert '\ufffd' not in out
+
     def test_empty(self):
         assert sanitize_path_segment('') == ''
         assert sanitize_path_segment('   ') == ''

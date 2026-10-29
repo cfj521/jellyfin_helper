@@ -131,6 +131,16 @@ _WIN_RESERVED = {
 }
 
 
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """按 UTF-8 字节数截断，且不切坏多字节字符。"""
+    raw = text.encode('utf-8')
+    if len(raw) <= max_bytes:
+        return text
+    if max_bytes <= 0:
+        return ''
+    return raw[:max_bytes].decode('utf-8', 'ignore')
+
+
 def sanitize_path_segment(name: str, max_len: int = 200) -> str:
     """清理**单个**路径段（文件名 或 单个目录名）。
 
@@ -138,7 +148,7 @@ def sanitize_path_segment(name: str, max_len: int = 200) -> str:
     - 去首尾空白 / '.'（Windows 静默吃尾点；前点是 *nix 隐藏文件）
     - 折叠连续空格
     - Windows 保留名后加 '_' 防冲突（CON / PRN / NUL 等，跟用户感知的非法字符无关，保留）
-    - 长度截断：保留尾部扩展名
+    - 长度截断：按 UTF-8 **字节数**（ext4 等文件系统限制 255 字节），保留尾部扩展名
     """
     if not name:
         return ''
@@ -156,14 +166,18 @@ def sanitize_path_segment(name: str, max_len: int = 200) -> str:
     core = s.rsplit('.', 1)[0].upper()
     if core in _WIN_RESERVED:
         s = f'{s}_'
-    # 长度截断（保留扩展名）
-    if len(s) > max_len:
+    # 长度截断（按 UTF-8 字节数，保留扩展名）
+    if len(s.encode('utf-8')) > max_len:
         idx = s.rfind('.')
+        ext = ''
         if 0 < idx and (len(s) - idx) <= 6:           # 扩展名 5 字符内
             ext = s[idx:]
-            s = s[: max_len - len(ext)].rstrip() + ext
+        ext_bytes = len(ext.encode('utf-8'))
+        if ext and ext_bytes < max_len:
+            body = _truncate_utf8(s[:idx], max_len - ext_bytes).rstrip()
+            s = body + ext
         else:
-            s = s[:max_len].rstrip()
+            s = _truncate_utf8(s, max_len).rstrip()
     return s
 
 
