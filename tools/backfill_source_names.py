@@ -104,7 +104,20 @@ def main() -> int:
                 f'[dry-run] 可回填 {recovered} / 无种子 {missing} / 未写库'
             )
         else:
-            # qB 已删种、但 media_items 里可能已经有 source_name 的条目不需要动
+            # 已经能从 qB 拿到 name 的行（包括本次刚回填的）再统一向媒体表
+            # 传播一次：历史上可能出现 dispatch.source_name 有值、但 media/adult
+            # 行仍为空的情况（例如功能上线前已复制完）。
+            all_rows = (
+                db.query(DownloadDispatchMap)
+                .filter(DownloadDispatchMap.source_name.isnot(None))
+                .filter(DownloadDispatchMap.dispatched_files.isnot(None))
+                .all()
+            )
+            for row in all_rows:
+                propagated += record_source_names_for_paths(
+                    db, row.source_name, row.dispatched_files or [],
+                )
+
             media_with = (
                 db.query(MediaItem).filter(MediaItem.source_name.isnot(None)).count()
             )
