@@ -961,6 +961,15 @@ def run_poster_scan(task_id: int):
             if not poster:
                 without_poster += 1
 
+            # 从我们自己的 dispatch_map 反查完整 release 名；Jellyfin 只有 Path
+            source_name = None
+            if file_path:
+                try:
+                    from backend.services.source_names import lookup_source_name
+                    source_name = lookup_source_name(db, file_path)
+                except Exception:
+                    source_name = None
+
             existing = db.query(MediaItem).filter(MediaItem.jellyfin_id == jellyfin_id).first()
             if existing:
                 existing.title = name
@@ -970,6 +979,8 @@ def run_poster_scan(task_id: int):
                 existing.has_poster = poster
                 existing.has_backdrop = backdrop
                 existing.file_path = file_path
+                if source_name:
+                    existing.source_name = source_name
                 updated_count += 1
             else:
                 db.add(MediaItem(
@@ -981,6 +992,7 @@ def run_poster_scan(task_id: int):
                     has_poster=poster,
                     has_backdrop=backdrop,
                     file_path=file_path,
+                    source_name=source_name,
                 ))
                 new_count += 1
 

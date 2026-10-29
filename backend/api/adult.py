@@ -391,6 +391,7 @@ def _list_items_from_jellyfin(
                     'source': r.source,
                     'nfo_path': r.nfo_path,
                     'poster_path': r.poster_path,
+                    'source_name': r.source_name,
                     'actors_json': r.actors,
                     'tags_json': r.tags,
                 }
@@ -456,6 +457,7 @@ def _list_items_from_jellyfin(
             "has_metadata": bool(ai and ai.get('title')),
             "recognized": bool(ai and ai.get('code')),
             "file_name": Path(jf_path).name if jf_path else None,
+            "source_name": ai.get('source_name') if ai else None,
             "file_path": local or jf_path,        # 本机视角给前端展示
             "nfo_path": ai_nfo_local,
             "poster_path": ai_poster_local,
@@ -1530,6 +1532,7 @@ def _to_dict(item: AdultItem, full: bool = False) -> dict:
         "has_metadata": bool(item.title),
         "recognized": item.code is not None,
         "file_name": file_name,
+        "source_name": item.source_name,
         "file_path": file_path_local,
         "nfo_path": nfo_path_local,
         "poster_path": poster_path_local,

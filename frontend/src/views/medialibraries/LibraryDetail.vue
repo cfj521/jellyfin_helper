@@ -287,8 +287,13 @@
               />
             </div>
             <div class="grid-meta">
-              <div class="grid-title" :title="row.name">{{ row.name }}</div>
+              <div class="grid-title" :title="row.source_name || row.name">{{ row.name }}</div>
               <div v-if="row.year" class="grid-year">{{ row.year }}</div>
+              <div
+                v-if="row.source_name"
+                class="grid-source"
+                :title="row.source_name"
+              >{{ row.source_name }}</div>
             </div>
           </template>
         </div>
@@ -377,15 +382,22 @@
                 </div>
               </div>
               <!-- 标题 -->
-              <a
-                v-if="row.detail_url"
-                :href="row.detail_url"
-                target="_blank"
-                rel="noopener noreferrer"
-                :class="['item-link', `title--${(row.type || '').toLowerCase()}`]"
-                @click.stop
-              >{{ rowDisplayTitle(row) }}</a>
-              <span v-else :class="`title--${(row.type || '').toLowerCase()}`">{{ rowDisplayTitle(row) }}</span>
+              <div class="title-block">
+                <a
+                  v-if="row.detail_url"
+                  :href="row.detail_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :class="['item-link', `title--${(row.type || '').toLowerCase()}`]"
+                  @click.stop
+                >{{ rowDisplayTitle(row) }}</a>
+                <span v-else :class="`title--${(row.type || '').toLowerCase()}`">{{ rowDisplayTitle(row) }}</span>
+                <div
+                  v-if="row.source_name"
+                  class="source-name"
+                  :title="row.source_name"
+                >{{ row.source_name }}</div>
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -3130,6 +3142,23 @@ body:has(.lib-detail-root) .app-main {
     flex-shrink: 0;
   }
 
+  .title-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .source-name {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--jt-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    max-width: 520px;
+  }
+
   .item-link {
     color: inherit;       // 跟随表格默认文字色
     text-decoration: none;
@@ -3532,6 +3561,15 @@ body:has(.lib-detail-root) .app-main {
   .grid-year {
     font-size: 12px;
     color: var(--jt-text-muted);
+  }
+  .grid-source {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--jt-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   // 健康单元格：双行布局（第一行圆点+错误码，第二行刮削按钮）

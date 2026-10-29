@@ -252,6 +252,11 @@
               <div class="grid-title" :title="row.title || row.file_name">
                 {{ row.title || row.file_name || '—' }}
               </div>
+              <div
+                v-if="row.source_name"
+                class="grid-source"
+                :title="row.source_name"
+              >{{ row.source_name }}</div>
             </div>
           </template>
         </div>
@@ -1888,6 +1893,15 @@ onUnmounted(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .grid-source {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--jt-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   // 网格卡片健康度状态行（并入 code-row 右侧）

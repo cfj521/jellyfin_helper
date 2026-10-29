@@ -108,6 +108,8 @@ class MediaItem(Base):
     media_type = Column(String(20))  # movie, series, episode
     production_year = Column(Integer)
     file_path = Column(String(1000))
+    # qB 原始种子名（完整 release 名），由下载流水线在复制/扫描时回填
+    source_name = Column(String(1000))
     file_size = Column(BigInteger)
     resolution = Column(String(20))
     codec = Column(String(50))
@@ -264,6 +266,8 @@ class AdultItem(Base):
     poster_path = Column(String(500))
     nfo_path = Column(String(500))
     file_path = Column(String(1000))
+    # qB 原始种子名（完整 release 名），由下载流水线在复制/扫描时回填
+    source_name = Column(String(1000))
     file_mtime = Column(Float)  # 文件 mtime；用于增量扫描跳过已扫文件
     # 手动覆盖"有/无码"判定：NULL = 走自动判定（_UNCENSORED_KEYWORDS）；True/False = 用户手动指定
     is_uncensored_override = Column(Boolean, nullable=True)
@@ -367,6 +371,9 @@ class DownloadDispatchMap(Base):
     series_tmdb_id = Column(String(32))        # 剧集才有，跨季归属
     series_name = Column(String(500))
     title = Column(String(500))
+    # qB 原始种子名（完整 release 名），与解析后的 title 分开保存：
+    # 例 title="Disclosure Day"，source_name="Disclosure.Day.2026.2160p.UHD.BluRay.REMUX..."
+    source_name = Column(String(1000))
     year = Column(Integer)
 
     # ---- 目标 ----
@@ -452,6 +459,9 @@ _SCHEMA_PATCHES = [
     ("media_items", "has_poster", "BOOLEAN DEFAULT FALSE"),
     ("media_items", "has_backdrop", "BOOLEAN DEFAULT FALSE"),
     ("media_items", "poster_url", "VARCHAR(500)"),
+    ("media_items", "source_name", "VARCHAR(1000)"),
+    ("download_dispatch_map", "source_name", "VARCHAR(1000)"),
+    ("adult_items", "source_name", "VARCHAR(1000)"),
     ("adult_items", "file_mtime", "DOUBLE PRECISION"),
     ("adult_items", "excluded", "BOOLEAN DEFAULT FALSE NOT NULL"),
     ("adult_items", "scrape_attempts", "INTEGER DEFAULT 0 NOT NULL"),
