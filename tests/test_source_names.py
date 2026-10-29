@@ -23,9 +23,9 @@ class SourceNameHelpersTest(unittest.TestCase):
     def test_media_item_has_source_name_column(self):
         from backend.database import AdultItem, DownloadDispatchMap, MediaItem
 
-        self.assertIn('source_name', MediaItem.__table__.columns)
-        self.assertIn('source_name', AdultItem.__table__.columns)
-        self.assertIn('source_name', DownloadDispatchMap.__table__.columns)
+        self.assertIn('source_name', MediaItem.__table__.columns.keys())
+        self.assertIn('source_name', AdultItem.__table__.columns.keys())
+        self.assertIn('source_name', DownloadDispatchMap.__table__.columns.keys())
 
 
 if __name__ == '__main__':
