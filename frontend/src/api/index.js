@@ -408,6 +408,8 @@ export const adultApi = {
 
 // 内容推荐与下载 API
 export const discoverApi = {
+  // 热门推荐页提供方顺序 / 开关（来自 config.yaml discover.sources）
+  sources: () => api.get('/api/discover/sources'),
   trending: (params = {}) => api.get('/api/discover/trending', { params }),
   popular: (params = {}) => api.get('/api/discover/popular', { params }),
   // Trakt 实时观看活动信号（互补 TMDB 元数据流行度）
