@@ -2741,10 +2741,17 @@ watch([() => items.value.length, wanted, viewMode], () => writeDebug())
 
 // 切视图（list ↔ grid）时回顶部 —— 列表和网格的行高 / 卡片高完全不一样，
 // 停留在 list 第 80 行的位置切到 grid 会落到完全不相关的卡片中间，体验割裂
-watch(viewMode, () => {
+watch(viewMode, async () => {
   // 整页改回外层滚动后，回顶 target = .app-main
   const scroller = document.querySelector('.app-main')
   if (scroller) scroller.scrollTop = 0
+  // 两种视图的行高 / 每行卡片数不同，切换后重新按新布局补足首屏。
+  // 若切换后内容不足一屏，页面不会产生 scroll 事件，哨兵永远不会触发 loadMore。
+  await nextTick()
+  const minVisible = initialLimit()
+  if (wanted.value < minVisible) wanted.value = minVisible
+  await nextTick()
+  _maybeLoadMoreOnScroll()
 })
 
 onUnmounted(() => {
