@@ -944,7 +944,7 @@ def run_poster_scan(task_id: int):
         updated_count = 0
         without_poster = 0
 
-        def upsert(db, item: dict, mtype: str):
+        def upsert(db, item: dict, mtype: str, source_name_by_path: dict):
             nonlocal new_count, updated_count, without_poster
             jellyfin_id = item.get('Id')
             name = item.get('Name')
@@ -962,13 +962,7 @@ def run_poster_scan(task_id: int):
                 without_poster += 1
 
             # 从我们自己的 dispatch_map 反查完整 release 名；Jellyfin 只有 Path
-            source_name = None
-            if file_path:
-                try:
-                    from backend.services.source_names import lookup_source_name
-                    source_name = lookup_source_name(db, file_path)
-                except Exception:
-                    source_name = None
+            source_name = source_name_by_path.get(file_path) if file_path else None
 
             existing = db.query(MediaItem).filter(MediaItem.jellyfin_id == jellyfin_id).first()
             if existing:
@@ -1000,11 +994,22 @@ def run_poster_scan(task_id: int):
         BATCH = 100
 
         def _flush_batch(items, mtype):
+            if not items:
+                return
+            # 批量反查 release 名：避免每条一次 DB 查询
+            try:
+                from backend.services.source_names import source_names_for_paths
+                with SessionLocal() as name_db:
+                    names = source_names_for_paths(
+                        name_db, [i.get('Path') for i in items if i.get('Path')]
+                    )
+            except Exception:
+                names = {}
             for chunk_start in range(0, len(items), BATCH):
                 chunk = items[chunk_start:chunk_start + BATCH]
                 with SessionLocal() as db:
                     for item in chunk:
-                        upsert(db, item, mtype)
+                        upsert(db, item, mtype, names)
                     db.commit()
 
         _flush_batch(movies, 'movie')
