@@ -42,6 +42,9 @@ from tools.dispatch.phases import (
 
 logger = logging.getLogger(__name__)
 
+# 领取任务遇到 DB 异常后的重试间隔；避免 DB 短暂不可用时线程直接退出
+CLAIM_RETRY_SECONDS = 10
+
 
 # 触发 event：上游 worker 把行推到 phase=download_done 后调 trigger.set()
 # 主 loop 在 trigger.wait() 上阻塞，被 set 或 poll_interval 超时后查 DB
@@ -189,7 +192,15 @@ class DispatchPipeline:
         HEARTBEAT_SECONDS = 600
 
         while not self.stop_event.is_set():
-            row_dict = self._claim_next_pending()
+            try:
+                row_dict = self._claim_next_pending()
+            except Exception:
+                # 数据库短暂不可用（重启/网络抖动）不能让整个 worker 线程退出，
+                # 否则后续 download_done 的行永远不会被接管。
+                logger.exception(f"DispatchPipeline 领取任务失败，{CLAIM_RETRY_SECONDS}s 后重试")
+                if self.stop_event.wait(CLAIM_RETRY_SECONDS):
+                    break
+                continue
             if not row_dict:
                 trigger.wait(timeout=WAIT_TIMEOUT)
                 trigger.clear()
