@@ -1817,6 +1817,10 @@ def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_d
     row.phase_status = STATUS_RUNNING
     row.status_message = f'用户决策"覆盖" → 重新复制（旧文件已入 trash）'
     row.error_log = None
+    row.dispatched_files = []
+    row.copy_bytes_done = 0
+    row.copy_bytes_total = 0
+    row.dispatched_at = None
     db.commit()
 
     try:
