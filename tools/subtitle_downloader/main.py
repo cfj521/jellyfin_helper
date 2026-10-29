@@ -19,7 +19,7 @@ from common.lang_utils import internal_to_filename_token
 from .opensubtitles import OpenSubtitlesClient
 from . import assrt as _assrt
 from . import shooter as _shooter
-from .scoring import SubtitleCandidate, VideoInfo, pick_best
+from .scoring import SubtitleCandidate, VideoInfo, LANG_RANK_NONE, pick_best
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class _Provider:
         video_path: Path,
         languages: List[str],
         dry_run: bool,
+        rank_langs: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         尝试下载字幕。返回字典：
@@ -70,6 +71,10 @@ class _Provider:
           - language: 字幕语言代码
           - source: provider 名（成功时）
           - error: 错误信息（failed 时）
+
+        `languages` 用于向源站请求/过滤语言；`rank_langs` 只用于候选排序，
+        不传时与 `languages` 相同。auto-fix 需要"只缺 chs"但"优先 chs.eng"时，
+        两者必须分开，否则排序会退化成只按单语 chs 比较。
         """
         raise NotImplementedError
 
@@ -102,7 +107,8 @@ class _OpenSubtitlesProvider(_Provider):
     def _map_lang_code(self, lang: str) -> str:
         return self.LANG_REVERSE.get(lang.lower(), lang)
 
-    def try_download(self, video_path, languages, dry_run):
+    def try_download(self, video_path, languages, dry_run, rank_langs=None):
+        rank_langs = rank_langs or languages
         # 优先用 IMDB / TMDB ID 搜（精度远高于 query）；ID 拿不到再退回文件名
         meta = _lookup_video_metadata(video_path)
         try:
@@ -125,10 +131,25 @@ class _OpenSubtitlesProvider(_Provider):
         if not results:
             return {"status": "not_found"}
 
-        # 选下载量最高的
+        # 先按语言偏好分层，再按下载量。OpenSubtitles 一次会返回多个语言，
+        # 只按 download_count 排会让单语条目压过用户更想要的语言包。
+        from common.lang_utils import lang_match_rank as _lang_rank
+        from common.lang_utils import lang_match_score as _lang_score
+
+        def _result_rank(item):
+            code = self._map_lang_code(
+                (item.get('attributes') or {}).get('language', '') or ''
+            )
+            if not code or not rank_langs:
+                return LANG_RANK_NONE
+            neg_cov, _ = _lang_score(code, rank_langs)
+            return _lang_rank(code, rank_langs) if neg_cov < 0 else LANG_RANK_NONE
+
         results.sort(
-            key=lambda x: x.get('attributes', {}).get('download_count', 0),
-            reverse=True,
+            key=lambda x: (
+                _result_rank(x),
+                -int((x.get('attributes') or {}).get('download_count', 0) or 0),
+            ),
         )
         best = results[0]
         attrs = best.get('attributes', {})
@@ -212,7 +233,8 @@ class _AssrtProvider(_Provider):
         # 字幕格式偏好：默认 ass>srt>sup
         self.preferred_formats = sub_cfg.get('preferred_formats', ['ass', 'srt', 'sup'])
 
-    def try_download(self, video_path, languages, dry_run):
+    def try_download(self, video_path, languages, dry_run, rank_langs=None):
+        rank_langs = rank_langs or languages
         # ---- 1. 第一次用 release 名（视频文件 stem）按文件名匹配 ----
         try:
             subs = self.client.search(video_path.stem, is_file=True, cnt=15)
@@ -245,6 +267,7 @@ class _AssrtProvider(_Provider):
 
         # ---- 2. 选最匹配的：分层排序 —— 语言 tier 严格分层，同 tier 内按 vote 兜底 ----
         from common.lang_utils import lang_match_score as _lang_score
+        from common.lang_utils import lang_match_rank as _lang_rank
 
         def lang_codes_of(s: Dict) -> List[str]:
             lang_block = s.get('lang') or {}
@@ -258,9 +281,14 @@ class _AssrtProvider(_Provider):
         def sort_key(s: Dict):
             codes = lang_codes_of(s)
             cand_lang = '.'.join(codes) if codes else ''
-            neg_cov, first_hit = _lang_score(cand_lang, languages or [])
-            # 没命中任何 preferred 项 → 沉底 (lang_rank=999)
-            lang_rank = first_hit if neg_cov < 0 else 999
+            neg_cov, first_hit = _lang_score(cand_lang, rank_langs or [])
+            # 没命中任何 preferred 项 → 沉底；命中时优先覆盖数量更多的语言包，
+            # 避免 preferred=['chs','eng'] 时 chs.eng 与 chs 同为 first_hit=0，
+            # 单语字幕靠 vote 反超双语。
+            lang_rank = (
+                _lang_rank(cand_lang, rank_langs or [])
+                if neg_cov < 0 else LANG_RANK_NONE
+            )
             return (lang_rank, -float(s.get('vote_score') or 0))
 
         subs.sort(key=sort_key)
@@ -274,13 +302,13 @@ class _AssrtProvider(_Provider):
         best_combo = '.'.join(best_codes) if best_codes else ''
         if best_combo and any(
             set(want.split('.')).issubset(set(best_codes))
-            for want in (languages or [])
+            for want in (rank_langs or [])
         ):
             chosen_lang = best_combo
         else:
             chosen_lang = next(
-                (c for c in (languages or []) if c in best_codes),
-                (languages or ['chs'])[0],
+                (c for c in (rank_langs or []) if c in best_codes),
+                (languages or rank_langs or ['chs'])[0],
             )
 
         if dry_run:
@@ -331,7 +359,7 @@ class _AssrtProvider(_Provider):
         # picker 闭包：拿到压缩包内字幕文件名列表 → 按 preferred_langs/formats + 集数 挑 best name
         def _picker(names: list) -> Optional[str]:
             return _assrt.pick_best_subtitle_name(
-                names, languages, self.preferred_formats,
+                names, rank_langs, self.preferred_formats,
                 fallback_lang=pkg_fallback,
                 video_filename=video_path.name,
             )
@@ -366,10 +394,12 @@ class _ShooterProvider(_Provider):
             batch=bool(sub_cfg.get('_batch_mode')),
         )
 
-    def try_download(self, video_path, languages, dry_run):
-        # Shooter 仅支持 Chn / Eng；按目标语言挑一个发起请求
-        want_chn = any(l in ('chs', 'cht', 'zh', 'zh-cn', 'zh-tw') for l in languages)
-        want_eng = any(l in ('eng', 'en') for l in languages)
+    def try_download(self, video_path, languages, dry_run, rank_langs=None):
+        rank_langs = rank_langs or languages
+        # Shooter 仅支持 Chn / Eng；复合代码（chs.eng）也要拆开识别
+        parts = {p for lang in (languages or []) for p in str(lang).split('.')}
+        want_chn = bool(parts & {'chs', 'cht', 'zh', 'zh-cn', 'zh-tw'})
+        want_eng = bool(parts & {'eng', 'en'})
         if not (want_chn or want_eng):
             # 目标语言不在 shooter 支持范围 — 放弃
             return {"status": "not_found"}
@@ -413,7 +443,7 @@ class _ShooterProvider(_Provider):
                 vote=5.0,  # shooter 不返回投票数；给个中等值兜底
             ))
 
-        best = pick_best(candidates, video_info, languages)
+        best = pick_best(candidates, video_info, rank_langs)
         if not best:
             return {"status": "not_found"}
 
@@ -524,9 +554,13 @@ class SubtitleDownloader:
         video_path: Path,
         languages: list = None,
         dry_run: bool = True,
+        preferred_langs: list = None,
     ) -> Dict:
         if languages is None:
             languages = self.downloading_langs
+        # 源站过滤用 languages（例如只缺 chs），候选排序用 preferred_langs
+        # （例如 chs.eng > chs）。两者分开，避免 auto-fix 把双语偏好弄丢。
+        rank_langs = preferred_langs or languages
 
         last_failure: Optional[Dict] = None
 
@@ -559,7 +593,9 @@ class SubtitleDownloader:
 
             logger.info(f"[{provider.name}] 搜索字幕: {video_path.name}")
             try:
-                result = provider.try_download(video_path, languages, dry_run)
+                result = provider.try_download(
+                    video_path, languages, dry_run, rank_langs=rank_langs
+                )
             except Exception as e:
                 logger.exception(f"[{provider.name}] 异常: {video_path.name}")
                 last_failure = {"status": "failed", "error": f"{provider.name}: {e}", "source": provider.name}
@@ -675,7 +711,12 @@ class SubtitleDownloader:
                 if not video_path.exists():
                     item.update({'status': 'failed', 'error': '视频文件不存在'})
                 else:
-                    item.update(self.download_for_video(video_path, languages=langs, dry_run=dry_run))
+                    item.update(self.download_for_video(
+                        video_path,
+                        languages=langs,
+                        dry_run=dry_run,
+                        preferred_langs=self.downloading_langs,
+                    ))
             except Exception as e:
                 logger.error(f"处理失败: {video_path} - {e}")
                 item.update({'status': 'failed', 'error': str(e)})
