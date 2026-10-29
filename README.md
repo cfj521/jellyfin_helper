@@ -234,7 +234,7 @@ Each item shows `status / info / elapsed time`. **When you hit a problem, check 
 
 If you don't want to use Docker and want to run directly on the host (development or customization scenarios), you'll need to provide:
 
-- Python 3.12 (a conda isolated environment is recommended) + Node 20+
+- Python 3.12 (a uv virtual environment is recommended) + Node 20+
 - PostgreSQL 12+ (create the database and user first)
 - A Jellyfin instance (10.9+ recommended, requires an admin API Key)
 - qBittorrent **5.2+** (using API Key authentication, see "External Services" below)

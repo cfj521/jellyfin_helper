@@ -229,7 +229,7 @@ bootstrap 用「预填 conf 文件」方式把 qb / Jackett 的密码和 API Key
 
 不想用 Docker、要直接在宿主跑（开发或定制场景）需要自备：
 
-- Python 3.12（推荐 conda 隔离环境）+ Node 20+
+- Python 3.12（推荐 uv 虚拟环境）+ Node 20+
 - PostgreSQL 12+（先建库和用户）
 - 一台 Jellyfin（10.9+ 推荐，需管理员 API Key）
 - qBittorrent **5.2+**（用 API Key 认证，详见下方「外部服务」）
