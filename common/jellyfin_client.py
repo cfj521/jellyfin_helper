@@ -731,6 +731,26 @@ class JellyfinClient:
     def get_tmdb_id(item: Dict) -> Optional[str]:
         return (item.get('ProviderIds') or {}).get('Tmdb')
 
+    def find_item_by_path(self, path: str, search_term: Optional[str] = None,
+                          limit: int = 200) -> Optional[Dict]:
+        """按 Jellyfin 中的完整 Path 精确查找 item。
+
+        直接给 /Items 传 Path 参数不会过滤（Jellyfin 会返回整个库），
+        所以先用 SearchTerm 缩小范围，再逐条比对 Path。
+        """
+        params = {
+            'Recursive': 'true',
+            'Fields': 'Path',
+            'Limit': limit,
+        }
+        if search_term:
+            params['SearchTerm'] = search_term
+        result = self._request('GET', '/Items', params=params) or {}
+        for item in result.get('Items') or []:
+            if item.get('Path') == path:
+                return item
+        return None
+
     def upload_item_image(self, item_id: str, image_data: bytes, image_type: str = 'Primary') -> bool:
         """
         上传 item 的图片（电影海报、剧集 Primary、背景图等）。
