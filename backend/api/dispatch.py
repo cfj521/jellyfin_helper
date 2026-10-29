@@ -1683,17 +1683,49 @@ def reidentify_dispatch_row(
 # ============================================================================
 
 def _load_copy_conflict(row: DownloadDispatchMap) -> Dict:
-    """从 row.error_log JSON 反序列化冲突上下文（duplicate.py 写入的格式）。"""
+    """从 row.error_log 反序列化冲突上下文（duplicate.py / copier.py 写入的 JSON）。
+
+    ``_set_phase`` 会把错误追加成 ``[copying] {...}\\n``（为了保留其它阶段的错误历史），
+    所以这里不能直接 ``json.loads`` 整段文本；否则点"人工审核"时 GET
+    /api/dispatch/copy-conflict/{hash} 会 400。
+    """
     import json as _json
     if not row.error_log:
         raise HTTPException(status_code=400, detail='缺少冲突上下文（error_log 为空）')
-    try:
-        info = _json.loads(row.error_log)
-        if not isinstance(info, dict):
-            raise ValueError('error_log 不是 dict')
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f'error_log 解析失败: {e}')
-    return info
+
+    raw = row.error_log.strip()
+    candidates = [raw]
+    for line in reversed(raw.splitlines()):
+        text = line.strip()
+        if not text:
+            continue
+        # 去掉 _set_phase 追加的 "[copying] " 前缀
+        if text.startswith('['):
+            end = text.find(']')
+            if end >= 0:
+                text = text[end + 1:].strip()
+        candidates.append(text)
+
+    for text in candidates:
+        try:
+            info = _json.loads(text)
+        except Exception:
+            continue
+        if isinstance(info, dict):
+            return info
+
+    # 兼容 JSON 跨行/带额外前后缀的历史脏数据
+    decoder = _json.JSONDecoder()
+    for idx, ch in enumerate(raw):
+        if ch != '{':
+            continue
+        try:
+            info, _ = decoder.raw_decode(raw[idx:])
+        except Exception:
+            continue
+        if isinstance(info, dict):
+            return info
+    raise HTTPException(status_code=400, detail='error_log 解析失败: 未找到 JSON 冲突上下文')
 
 
 def _assert_copy_conflict(row: DownloadDispatchMap) -> Dict:
@@ -1747,11 +1779,14 @@ def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_d
 
     dst_str = info.get('dst')
     existing_hash = (info.get('existing_hash') or '').lower()
-    if not dst_str or not existing_hash:
-        raise HTTPException(status_code=400, detail='冲突上下文不完整（缺 dst / existing_hash）')
+    if not dst_str:
+        raise HTTPException(status_code=400, detail='冲突上下文不完整（缺 dst）')
 
-    # 1. 把对家 dispatched_files 里这条路径移除
-    other = db.query(DownloadDispatchMap).filter_by(torrent_hash=existing_hash).first()
+    # 1. 把对家 dispatched_files 里这条路径移除（跨种子冲突可能不知道对家 hash，
+    #    例如目标文件是同一包上次失败留下的；此时只处理物理文件即可）
+    other = None
+    if existing_hash and existing_hash != h:
+        other = db.query(DownloadDispatchMap).filter_by(torrent_hash=existing_hash).first()
     if other and other.dispatched_files:
         new_list = [p for p in other.dispatched_files if p != dst_str]
         if len(new_list) != len(other.dispatched_files):
@@ -1767,7 +1802,7 @@ def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_d
     moved_to = None
     if dst_path.exists() and trash_dir:
         ts = _time.strftime('%Y%m%d-%H%M%S')
-        sub = trash_dir / '_replaced' / f"{ts}_{existing_hash[:8]}"
+        sub = trash_dir / '_replaced' / f"{ts}_{(existing_hash or h)[:8]}"
         sub.mkdir(parents=True, exist_ok=True)
         target = sub / dst_path.name
         try:
