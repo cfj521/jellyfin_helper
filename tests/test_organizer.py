@@ -100,3 +100,86 @@ def test_organize_single_movie_unaffected(tmp_path):
 
     name = Path(result['dispatched_files'][0]).name
     assert name == 'The Martian (2015).mkv', f"电影命名被改动，实得 {name!r}"
+
+
+def test_adult_multi_video_uses_largest_as_primary_and_drops_ads(tmp_path):
+    """Adult 多分段包：最大文件拿模板名，其余分段保留原名，广告不复制。"""
+    from tools.dispatch.organizer import TorrentOrganizer
+
+    src = tmp_path / 'URVRSP-604.8K'
+    _make_video(src, '489155.com@URVRSP-604.PART1_8K.mp4', 1000)
+    _make_video(src, '489155.com@URVRSP-604.PART2_8K.mp4', 900)
+    _make_video(src, '489155.com@URVRSP-604.PART3_8K.mp4', 1200)
+    _make_video(src, '社 區 最 新 情 報.mp4', 10)
+    target = tmp_path / 'lib' / 'adult' / 'URVRSP-604'
+    target.mkdir(parents=True)
+    stale = target / 'URVRSP-604(URVRSP-604).mp4'
+    stale.write_bytes(b'x' * 10)  # 上次误把 10 字节广告写成模板名
+
+    org = TorrentOrganizer(trash_dir=tmp_path / 'trash')
+    result = org.organize(
+        src_root=src,
+        target_dir=target,
+        media_type='adult',
+        metadata={'code': 'URVRSP-604', 'title': 'URVRSP-604'},
+        rule={'file_template': '{code}({title})'},
+    )
+
+    names = [Path(p).name for p in result['dispatched_files']]
+    assert len(names) == 3, f"应复制 3 个正片分段，实得 {names!r}"
+    assert 'URVRSP-604(URVRSP-604).mp4' in names, names
+    assert '489155.com@URVRSP-604.PART1_8K.mp4' in names, names
+    assert '489155.com@URVRSP-604.PART2_8K.mp4' in names, names
+    assert not any('社區' in n for n in names), f"广告被复制了: {names!r}"
+    assert stale.stat().st_size == 1200, "模板名旧文件应被主文件替换"
+
+
+def test_adult_single_main_after_ad_filter_replaces_stale_target(tmp_path):
+    """HRSM-016 场景：过滤广告后只剩正片，也要清理上次误写的模板名广告。"""
+    from tools.dispatch.organizer import TorrentOrganizer
+
+    src = tmp_path / 'HRSM-016-U'
+    _make_video(src, '489155.com@HRSM-016-U.mp4', 1000)
+    _make_video(src, '社 區 最 新 情 報.mp4', 10)
+    target = tmp_path / 'lib' / 'adult' / 'HRSM-016'
+    target.mkdir(parents=True)
+    stale = target / 'HRSM-016(HRSM-016).mp4'
+    stale.write_bytes(b'x' * 10)
+
+    org = TorrentOrganizer(trash_dir=tmp_path / 'trash')
+    result = org.organize(
+        src_root=src,
+        target_dir=target,
+        media_type='adult',
+        metadata={'code': 'HRSM-016', 'title': 'HRSM-016'},
+        rule={'file_template': '{code}({title})'},
+    )
+
+    names = [Path(p).name for p in result['dispatched_files']]
+    assert names == ['HRSM-016(HRSM-016).mp4'], names
+    assert stale.stat().st_size == 1000, "模板名旧文件应被正片替换"
+
+
+def test_movie_multi_video_uses_unique_paths(tmp_path):
+    """电影多文件包也不能把两个文件写到同一个模板路径。"""
+    from tools.dispatch.organizer import TorrentOrganizer
+
+    src = tmp_path / 'The.Martian.2015.MULTi'
+    _make_video(src, 'CD1.mp4', 100)
+    _make_video(src, 'CD2.mp4', 200)
+    target = tmp_path / 'lib' / 'movies'
+
+    org = TorrentOrganizer(trash_dir=tmp_path / 'trash')
+    result = org.organize(
+        src_root=src,
+        target_dir=target,
+        media_type='movie',
+        metadata={'title': 'The Martian', 'year': 2015},
+        rule={'file_template': '{title} ({year})'},
+    )
+
+    names = [Path(p).name for p in result['dispatched_files']]
+    assert len(names) == 2, f"两个 CD 都应复制，实得 {names!r}"
+    assert len(set(names)) == 2, f"目标重名: {names!r}"
+    assert 'The Martian (2015).mp4' in names, names
+    assert ('CD1.mp4' in names) != ('CD2.mp4' in names), names
