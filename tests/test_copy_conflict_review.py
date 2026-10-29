@@ -1,9 +1,17 @@
 """copy-phase 冲突上下文解析 / 人工审核决策回归测试。"""
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
-from backend.api.dispatch import _load_copy_conflict
+from fastapi import HTTPException
+
+from backend.api.dispatch import (
+    _assert_copy_conflict,
+    _load_copy_conflict,
+    _stage_displaced_file,
+)
 from tools.dispatch.copier import CrossTorrentCollisionError
 
 
@@ -36,6 +44,38 @@ class CopyConflictReviewTests(unittest.TestCase):
         self.assertEqual(info['dst'], '/library/HRSM-016.mp4')
         self.assertEqual(info['dst_size'], 15089802)
         self.assertEqual(info['src_size'], 9947308571)
+
+
+class CopyConflictStateTests(unittest.TestCase):
+    def test_running_state_is_reported_as_already_replaced(self):
+        row = SimpleNamespace(
+            phase='copying', phase_status='running',
+            error_log=json.dumps({'kind': 'cross_torrent_collision', 'dst': '/library/a.mp4'}),
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            _assert_copy_conflict(row)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn('覆盖', ctx.exception.detail)
+
+    def test_skipped_state_is_reported_as_already_skipped(self):
+        row = SimpleNamespace(
+            phase='copying', phase_status='skipped',
+            error_log=json.dumps({'kind': 'cross_torrent_collision', 'dst': '/library/a.mp4'}),
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            _assert_copy_conflict(row)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn('保留', ctx.exception.detail)
+
+    def test_stage_displaced_file_renames_within_same_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            original = Path(d) / 'movie.mkv'
+            original.write_bytes(b'old data')
+            staged = _stage_displaced_file(original, 'abcdef123456')
+            self.assertFalse(original.exists())
+            self.assertEqual(staged.parent, original.parent)
+            self.assertTrue(staged.name.startswith('.jf-replaced-'))
+            self.assertEqual(staged.read_bytes(), b'old data')
 
 
 if __name__ == '__main__':
