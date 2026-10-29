@@ -22,11 +22,31 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# worker 线程未捕获异常退出后的重启间隔
+WORKER_RESTART_SECONDS = 10
 
-def _spawn_thread(target, name: str, args=()):
-    """启 daemon 线程，import 失败的话仅 warning 不抛。"""
+
+def _spawn_thread(target, name: str, args=(), stop_event=None):
+    """启 daemon 线程，import 失败的话仅 warning 不抛。
+
+    worker 是长驻线程，任何未捕获异常都不应该让它永久消失；退出后自动重启，
+    stop_event 置位时不再重启。
+    """
+    def runner():
+        while True:
+            try:
+                target(*args)
+                return
+            except Exception:
+                logger.exception(f"线程 {name} 异常退出，{WORKER_RESTART_SECONDS}s 后重启")
+                if stop_event is not None:
+                    if stop_event.wait(WORKER_RESTART_SECONDS):
+                        return
+                else:
+                    time.sleep(WORKER_RESTART_SECONDS)
+
     try:
-        threading.Thread(target=target, args=args, daemon=True, name=name).start()
+        threading.Thread(target=runner, daemon=True, name=name).start()
         logger.info(f"启动线程: {name}")
     except Exception as e:
         logger.warning(f"启动 {name} 失败: {e}")
@@ -64,35 +84,35 @@ def run_scheduler_loop(stop_event=None):
     # ========== Spawn 6 个 worker 线程 ==========
     try:
         from tools.dispatch.analyzer import run_analyzer_loop
-        _spawn_thread(run_analyzer_loop, 'analyzer', args=(stop_event,))
+        _spawn_thread(run_analyzer_loop, 'analyzer', args=(stop_event,), stop_event=stop_event)
     except ImportError as e:
         logger.warning(f"analyzer 未启动: {e}")
 
     try:
         from tools.dispatch.downloader_watcher import run_downloader_watcher_loop
-        _spawn_thread(run_downloader_watcher_loop, 'downloader-watcher', args=(stop_event,))
+        _spawn_thread(run_downloader_watcher_loop, 'downloader-watcher', args=(stop_event,), stop_event=stop_event)
     except ImportError as e:
         logger.warning(f"downloader-watcher 未启动: {e}")
 
     try:
-        _spawn_thread(_start_pipeline_worker, 'dispatch-pipeline', args=(stop_event,))
+        _spawn_thread(_start_pipeline_worker, 'dispatch-pipeline', args=(stop_event,), stop_event=stop_event)
     except ImportError as e:
         logger.warning(f"dispatch-pipeline 未启动: {e}")
 
     try:
         from tools.dispatch.jellyfin_watcher import run_jellyfin_watcher_loop
-        _spawn_thread(run_jellyfin_watcher_loop, 'jellyfin-watcher', args=(stop_event,))
+        _spawn_thread(run_jellyfin_watcher_loop, 'jellyfin-watcher', args=(stop_event,), stop_event=stop_event)
     except ImportError as e:
         logger.warning(f"jellyfin-watcher 未启动: {e}")
 
     try:
-        _spawn_thread(_start_post_process_worker, 'post-process-worker', args=(stop_event,))
+        _spawn_thread(_start_post_process_worker, 'post-process-worker', args=(stop_event,), stop_event=stop_event)
     except ImportError as e:
         logger.warning(f"post-process-worker 未启动: {e}")
 
     try:
         from tools.dispatch.sweeper import run_sweeper_loop
-        _spawn_thread(run_sweeper_loop, 'sweeper', args=(stop_event,))
+        _spawn_thread(run_sweeper_loop, 'sweeper', args=(stop_event,), stop_event=stop_event)
     except ImportError as e:
         logger.warning(f"sweeper 未启动: {e}")
 
