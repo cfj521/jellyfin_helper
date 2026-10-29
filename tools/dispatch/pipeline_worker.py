@@ -437,10 +437,7 @@ class DispatchPipeline:
                 _set_phase(
                     h, PHASE_COPYING, 'needs_review',
                     message='目标位置已存在另一种子的旧文件 — 请决策是否覆盖',
-                    error=_json.dumps({
-                        'kind': 'cross_torrent_collision',
-                        'detail': str(e),
-                    }, ensure_ascii=False),
+                    error=_json.dumps(e.to_dict(), ensure_ascii=False),
                 )
             else:
                 _set_phase(h, PHASE_COPYING, STATUS_FAILED, error=str(e))

@@ -27,6 +27,25 @@ class CrossTorrentCollisionError(Exception):
     """目标文件存在但不像是当前种子的续传产物 —— 多半是另一个种子（D7 PROPER/REPACK 类）已经写过同一路径。
     上层应该把这条 dispatch 标 needs_review，让用户决策（覆盖 / 跳过 / 改名）。"""
 
+    def __init__(self, message: str, *, dst=None, dst_size: int = 0,
+                 src_size: int = 0, age_seconds: float = 0.0):
+        super().__init__(message)
+        self.dst = str(dst) if dst is not None else None
+        self.dst_size = int(dst_size)
+        self.src_size = int(src_size)
+        self.age_seconds = float(age_seconds)
+
+    def to_dict(self) -> dict:
+        """写入 error_log / 前端冲突弹窗所需的结构化上下文。"""
+        return {
+            'kind': 'cross_torrent_collision',
+            'detail': str(self),
+            'dst': self.dst,
+            'dst_size': self.dst_size,
+            'src_size': self.src_size,
+            'age_seconds': int(self.age_seconds),
+        }
+
 
 def copy_file_with_progress(
     src: Path,
@@ -92,7 +111,8 @@ def copy_file_with_progress(
                 raise CrossTorrentCollisionError(
                     f"目标 {dst} 已存在 ({dst_size}/{total} bytes) 但 mtime 老于 "
                     f"{int(age/60)} 分钟前 —— 多半是另一个种子的旧文件。"
-                    f"为防 append 损坏文件，已拒绝续传。请人工决策（覆盖/改名/跳过）。"
+                    f"为防 append 损坏文件，已拒绝续传。请人工决策（覆盖/改名/跳过）。",
+                    dst=dst, dst_size=dst_size, src_size=total, age_seconds=age,
                 )
             logger.info(
                 f"copy: resume {dst.name} 续传，已有 {dst_size}/{total} bytes (age={int(age)}s)"
