@@ -476,10 +476,23 @@ class DispatchPipeline:
                 'dispatched_files': dispatched_files,
                 'copy_bytes_done': bytes_copied,
                 'copy_bytes_total': bytes_copied,
+                # 复制完成即落 source_name，不依赖 Jellyfin 扫描时序
+                'source_name': row.get('source_name') or None,
             },
         )
         # 关键：把刚写库的 dispatched_files 同步回内存 row dict，
         # 不然 _step_jellyfin_send(row) 拿到的还是 claim 时的空数组 → 只发整库 scan
+        try:
+            from backend.services.source_names import record_source_names_for_paths
+            with SessionLocal() as sn_db:
+                n = record_source_names_for_paths(
+                    sn_db, row.get('source_name'), dispatched_files,
+                )
+            if n:
+                logger.info(f"source_name backfill {h[:16]}.. rows={n}")
+        except Exception as e:
+            logger.warning(f"source_name backfill failed (non-fatal): {e}")
+
         row['dispatched_files'] = list(dispatched_files)
         row['copy_bytes_done'] = bytes_copied
         row['copy_bytes_total'] = bytes_copied
@@ -602,6 +615,7 @@ def _row_to_dict(row: DownloadDispatchMap) -> Dict:
         'series_tmdb_id': row.series_tmdb_id,
         'series_name': row.series_name,
         'title': row.title,
+        'source_name': row.source_name,
         'year': row.year,
         'target_library_id': row.target_library_id,
         'target_root': row.target_root,

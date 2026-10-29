@@ -263,6 +263,7 @@ def get_library_items(
                     break
 
             built = [_build_item_dict(i, host) for i in all_raw]
+            _attach_source_names(db, built)
             # in-memory filter
             def _keep(it: Dict) -> bool:
                 if has_health_issue and (it.get('health') or {}).get('level') == 'ok':
@@ -309,13 +310,15 @@ def get_library_items(
     )
     items = page['items']
     total = page['total']
+    built = [_build_item_dict(i, host) for i in items]
+    _attach_source_names(db, built)
 
     return {
         "count": len(items),
         "total": total,
         "start_index": start_index,
         "limit": limit,
-        "items": [_build_item_dict(i, host) for i in items],
+        "items": built,
     }
 
 
@@ -650,6 +653,8 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
         "level": level,
         "year": i.get('ProductionYear'),
         "path": translate_path_with_settings(i.get('Path')) if i.get('Path') else None,
+        # qB 原始 release 名（我们自己的 DB 按路径补；Jellyfin 不知道）
+        "source_name": None,
         "tmdb_id": (i.get('ProviderIds') or {}).get('Tmdb'),
         "imdb_id": (i.get('ProviderIds') or {}).get('Imdb'),
         "has_image": bool(image_tag),
@@ -685,6 +690,28 @@ def _build_item_dict(i: Dict, host: str) -> Dict:
     }
 
 
+def _attach_source_names(db, items: List[Dict]) -> None:
+    """给已经构建好的 item dict 补 source_name（qB 原始 release 名）。
+
+    批量查询，避免每行一次 DB 往返。失败时静默降级为 None。
+    """
+    if not items:
+        return
+    try:
+        from backend.services.source_names import source_names_for_paths
+        names = source_names_for_paths(
+            db, [it.get('path') for it in items if it.get('path')]
+        )
+        for it in items:
+            path = it.get('path')
+            if path:
+                it['source_name'] = names.get(path) or names.get(
+                    str(path).replace('\\', '/').rstrip('/')
+                )
+    except Exception as e:
+        logger.debug(f"补 source_name 失败: {e}")
+
+
 def _fetch_episodes_cached(season_id: str, force: bool = False) -> List[Dict]:
     """单 Season 的 episodes 取数 + 缓存共享逻辑。
 
@@ -701,6 +728,12 @@ def _fetch_episodes_cached(season_id: str, force: bool = False) -> List[Dict]:
     raw_items = client.get_episodes_of_season(season_id)
     host = (settings.jellyfin_host or "").rstrip('/')
     items = [_build_item_dict(i, host) for i in raw_items]
+    try:
+        from backend.database import SessionLocal
+        with SessionLocal() as db:
+            _attach_source_names(db, items)
+    except Exception as e:
+        logger.debug(f"episodes 补 source_name 失败: {e}")
     _episodes_cache.set(cache_key, {"count": len(items), "items": items})
     return items
 
@@ -766,6 +799,12 @@ def get_series_seasons(series_id: str, force: bool = False):
 
     host = (settings.jellyfin_host or "").rstrip('/')
     items = [_build_item_dict(i, host) for i in raw_items]
+    try:
+        from backend.database import SessionLocal
+        with SessionLocal() as db:
+            _attach_source_names(db, items)
+    except Exception as e:
+        logger.debug(f"seasons 补 source_name 失败: {e}")
 
     # 并行给每个 Season 补聚合数据（episodes 取数走自己 7d 缓存，命中即秒返）
     # max_workers=8：长剧（>20 季）少见，8 路并行已经够 + 不至于把 Jellyfin 打爆

@@ -104,6 +104,7 @@ class AdultPipeline:
         file_mtime: Optional[float] = None,
         idx: int = 0,
         total: int = 0,
+        source_name: Optional[str] = None,
     ) -> dict:
         """单文件全流程。异常吞掉返回 status='failed'。
 
@@ -111,12 +112,15 @@ class AdultPipeline:
             file_path: 本机视角的视频文件路径
             file_mtime: 已知就传，None 时本函数自己 stat
             idx, total: 用于 on_progress 算百分比
+            source_name: 下载流水线带来的 qB 原始种子名；扫描场景为 None
 
         Returns:
             {status, code, item_id, name, error?}
         """
         try:
-            return self._process_one_inner(file_path, file_mtime, idx, total)
+            return self._process_one_inner(
+                file_path, file_mtime, idx, total, source_name=source_name,
+            )
         except Exception as e:
             logger.exception(f"pipeline: 处理异常 {file_path}")
             result = {
@@ -165,6 +169,7 @@ class AdultPipeline:
 
     def _process_one_inner(
         self, file_path: Path, file_mtime: Optional[float], idx: int, total: int,
+        *, source_name: Optional[str] = None,
     ) -> dict:
         from backend.database import SessionLocal, AdultItem
         from tools.adult_manager.code_extractor import extract_code
@@ -179,6 +184,12 @@ class AdultPipeline:
         jf_path = _jf_path(file_path)
         name = file_path.name
 
+        # 下载流水线场景没有显式传 source_name：按目标路径反查 dispatch_map
+        if not source_name:
+            from backend.services.source_names import lookup_source_name
+            with SessionLocal() as lookup_db:
+                source_name = lookup_source_name(lookup_db, jf_path)
+
         # 跳过判定 + 入库决策都在一个事务里
         with SessionLocal() as db:
             existing = (
@@ -189,6 +200,9 @@ class AdultPipeline:
 
             # ① excluded：用户主动排除，永远跳过
             if existing and existing.excluded:
+                if source_name and not existing.source_name:
+                    existing.source_name = source_name
+                    db.commit()
                 result = {
                     'status': STATUS_EXCLUDED, 'code': existing.code,
                     'item_id': existing.id, 'name': name,
@@ -201,6 +215,9 @@ class AdultPipeline:
                 existing and existing.file_mtime is not None
                 and abs(existing.file_mtime - file_mtime) < 1.0
             ):
+                if source_name and not existing.source_name:
+                    existing.source_name = source_name
+                    db.commit()
                 if existing.code:
                     status = STATUS_SKIPPED
                 else:
@@ -223,12 +240,15 @@ class AdultPipeline:
             if not code:
                 if existing:
                     existing.file_mtime = file_mtime
+                    if source_name and not existing.source_name:
+                        existing.source_name = source_name
                     db.commit()
                     item_id = existing.id
                 else:
                     new_item = AdultItem(
                         code=None, title=file_path.stem, file_path=jf_path,
                         file_mtime=file_mtime, excluded=True,
+                        source_name=source_name,
                     )
                     db.add(new_item)
                     db.commit()
@@ -244,6 +264,7 @@ class AdultPipeline:
             # ⑥ 识别成功：入库决策（new / updated / moved 三个分支）
             item_id, status = self._upsert_recognized(
                 db, jf_path, file_mtime, code, existing, local_poster, local_nfo,
+                source_name=source_name,
             )
 
         # ⑦ 攒待通知的 jellyfin path
@@ -268,7 +289,7 @@ class AdultPipeline:
 
     def _upsert_recognized(
         self, db, jf_path: str, mtime: float, code: str,
-        existing, local_poster, local_nfo,
+        existing, local_poster, local_nfo, *, source_name: Optional[str] = None,
     ):
         """识别成功后的入库决策。返回 (item_id, status)。
 
@@ -287,6 +308,8 @@ class AdultPipeline:
         if existing:
             was_unrecognized = not existing.code
             existing.file_mtime = mtime
+            if source_name and not existing.source_name:
+                existing.source_name = source_name
             if local_poster:
                 existing.poster_path = local_poster
             if local_nfo:
@@ -306,6 +329,7 @@ class AdultPipeline:
         new_item = AdultItem(
             code=code, file_path=jf_path, file_mtime=mtime,
             poster_path=local_poster, nfo_path=local_nfo,
+            source_name=source_name,
         )
         db.add(new_item)
         db.commit()

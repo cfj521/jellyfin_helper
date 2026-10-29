@@ -260,6 +260,12 @@ def confirm_dispatch(request: ConfirmRequest):
             new_row = True
         row.media_type = request.media_type
         row.title = request.title
+        # qB 的完整种子名才是 release 名；用户确认时 title 可能已被识别逻辑清洗
+        try:
+            meta = qb.get_torrent_meta(h) or {}
+            row.source_name = (meta.get('name') or '').strip() or row.source_name
+        except Exception:
+            pass
         row.year = request.year
         row.series_name = request.series_name
         row.series_tmdb_id = request.series_tmdb_id

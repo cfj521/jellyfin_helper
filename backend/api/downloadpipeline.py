@@ -247,12 +247,21 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
         from tools.dispatch.phases import PHASE_ANALYZING, PHASE_DISMISSED, STATUS_RUNNING
         existing = db.query(DownloadDispatchMap).filter_by(torrent_hash=info_hash).first()
 
+        # qB 里的 name 才是完整 release 名（request.title 可能只是用户输入/清洗后的标题）
+        source_name = None
+        try:
+            source_name = ((client.get_torrent_meta(info_hash) or {}).get('name') or '').strip() or None
+        except Exception:
+            pass
+        source_name = source_name or (request.title or '').strip() or None
+
         if existing and existing.phase == PHASE_DISMISSED:
             logger.info(f"push: 重置已拒绝的 dispatch_map 行 hash={info_hash[:16]}..")
             existing.phase = PHASE_ANALYZING
             existing.phase_status = STATUS_RUNNING
             existing.media_type = effective_hint or 'unknown'
             existing.title = request.title
+            existing.source_name = source_name or existing.source_name
             existing.status_message = '从已拒绝重新提交，等待分析...'
             existing.cleaned_at = None
             db.commit()
@@ -268,6 +277,7 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
                 phase_status=STATUS_RUNNING,
                 media_type=effective_hint or 'unknown',
                 title=request.title,
+                source_name=source_name,
                 status_message='等待分析中...',
                 created_at=datetime.utcnow(),
             ))
@@ -339,6 +349,7 @@ def list_downloads(
         return {
             "media_type": dm.media_type,
             "title": dm.title,
+            "source_name": dm.source_name,
             "year": dm.year,
             "series_name": dm.series_name,
             "target_library_id": dm.target_library_id,
