@@ -1737,6 +1737,18 @@ def _load_copy_conflict(row: DownloadDispatchMap) -> Dict:
 def _assert_copy_conflict(row: DownloadDispatchMap) -> Dict:
     from tools.dispatch.phases import PHASE_COPYING, STATUS_NEEDS_REVIEW
     if row.phase != PHASE_COPYING or row.phase_status != STATUS_NEEDS_REVIEW:
+        # 另一个请求（尤其是“覆盖”）可能已经先处理完并离开 needs_review。
+        # 返回 409 让前端提示“已处理，请刷新”，而不是含糊的 400 失败。
+        if row.phase == PHASE_COPYING and row.phase_status == 'running':
+            raise HTTPException(
+                status_code=409,
+                detail='该冲突已按“覆盖”处理，正在重新复制，请刷新列表',
+            )
+        if row.phase_status == 'skipped':
+            raise HTTPException(
+                status_code=409,
+                detail='该冲突已按“保留”处理，请刷新列表',
+            )
         raise HTTPException(
             status_code=400,
             detail=f'当前不在 copy-phase needs_review（phase={row.phase}/{row.phase_status}）',
@@ -1762,23 +1774,72 @@ def get_copy_conflict(torrent_hash: str, db: Session = Depends(get_db)):
     }
 
 
+def _stage_displaced_file(dst_path, tag: str):
+    """Rename the conflicting file to a short hidden sibling.
+
+    The actual move to the trash directory may cross filesystems and take
+    minutes for a large movie.  Renaming inside the same directory is
+    instantaneous, so the API can return before the background cleanup starts.
+    """
+    import time as _time
+    from pathlib import Path as _Path
+
+    dst_path = _Path(dst_path)
+    ts = _time.strftime('%Y%m%d-%H%M%S')
+    for i in range(1000):
+        candidate = dst_path.parent / f'.jf-replaced-{ts}-{tag[:8]}-{i}'
+        if not candidate.exists():
+            dst_path.rename(candidate)
+            return candidate
+    raise RuntimeError(f'cannot allocate staged path for {dst_path}')
+
+
+def _move_staged_to_trash(staged_path, trash_dir, original_name: str, tag: str):
+    """Move a staged sibling into the configured trash directory.
+
+    Safe to run in a background thread: failures leave the hidden staged file
+    in place for manual cleanup instead of blocking or corrupting the copy.
+    """
+    import shutil as _shutil
+    import time as _time
+    from pathlib import Path as _Path
+
+    staged_path = _Path(staged_path)
+    try:
+        if trash_dir:
+            sub = _Path(trash_dir) / '_replaced' / f"{_time.strftime('%Y%m%d-%H%M%S')}_{tag[:8]}"
+            sub.mkdir(parents=True, exist_ok=True)
+            target = sub / original_name
+            _shutil.move(str(staged_path), str(target))
+            return target
+        staged_path.unlink(missing_ok=True)
+        return None
+    except Exception as e:
+        logger.warning(f'copy-conflict replace: 后台移入 trash 失败 {staged_path}: {e}')
+        return None
+
+
 @router.post('/copy-conflict/{torrent_hash}/replace')
 def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_db)):
     """
-    用户选择"用新种子覆盖"：
-      1. 把对家行（占用 dst 的那条）的 dispatched_files 里这条路径移除（仍保留行，
-         它的副本还在 NVMe，仍可做种 / 配额清理）
-      2. 如果对家 dst 文件还在，移到 trash（_replaced/<ts>_<old_hash[:8]>/）
-      3. 本行 phase 重置回 copying/running，pipeline_worker 下一轮重跑
+    User chose "replace with the new torrent".
+
+    1. Remove this path from the other torrent's dispatched_files.
+    2. Rename the old file to a hidden sibling immediately (same filesystem),
+       then move it to trash in a background thread.
+    3. Reset this row to copying/running so the worker copies again.
     """
-    import json as _json
-    import shutil as _shutil
-    import time as _time
+    import threading as _threading
     from pathlib import Path as _Path
     from tools.dispatch.phases import PHASE_COPYING, STATUS_RUNNING
 
     h = (torrent_hash or '').lower()
-    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    row = (
+        db.query(DownloadDispatchMap)
+        .filter_by(torrent_hash=h)
+        .with_for_update()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
     info = _assert_copy_conflict(row)
@@ -1788,8 +1849,6 @@ def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_d
     if not dst_str:
         raise HTTPException(status_code=400, detail='冲突上下文不完整（缺 dst）')
 
-    # 1. 把对家 dispatched_files 里这条路径移除（跨种子冲突可能不知道对家 hash，
-    #    例如目标文件是同一包上次失败留下的；此时只处理物理文件即可）
     other = None
     if existing_hash and existing_hash != h:
         other = db.query(DownloadDispatchMap).filter_by(torrent_hash=existing_hash).first()
@@ -1798,30 +1857,27 @@ def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_d
         if len(new_list) != len(other.dispatched_files):
             other.dispatched_files = new_list
             logger.info(
-                f"copy-conflict replace: 对家 {existing_hash[:16]}.. dispatched_files "
-                f"移除 {dst_str}（剩 {len(new_list)} 条）"
+                f'copy-conflict replace: 对家 {existing_hash[:16]}.. dispatched_files '
+                f'移除 {dst_str}（剩 {len(new_list)} 条）'
             )
 
-    # 2. 旧物理文件入 trash
-    trash_dir = _Path(settings.dispatch.trash_dir) if settings.dispatch.trash_dir else None
+    trash_dir = settings.dispatch.trash_dir if settings.dispatch.trash_dir else None
     dst_path = _Path(dst_str)
-    moved_to = None
-    if dst_path.exists() and trash_dir:
-        ts = _time.strftime('%Y%m%d-%H%M%S')
-        sub = trash_dir / '_replaced' / f"{ts}_{(existing_hash or h)[:8]}"
-        sub.mkdir(parents=True, exist_ok=True)
-        target = sub / dst_path.name
-        try:
-            _shutil.move(str(dst_path), str(target))
-            moved_to = str(target)
-            logger.info(f"copy-conflict replace: 旧文件入 trash {dst_path} → {target}")
-        except Exception as e:
-            logger.warning(f"copy-conflict replace: 入 trash 失败 {dst_path} → {target}: {e}")
+    staged_to = None
+    if dst_path.exists():
+        staged = _stage_displaced_file(dst_path, existing_hash or h)
+        staged_to = str(staged)
+        _threading.Thread(
+            target=_move_staged_to_trash,
+            args=(staged, trash_dir, dst_path.name, existing_hash or h),
+            name='copy-conflict-trash',
+            daemon=True,
+        ).start()
+        logger.info(f'copy-conflict replace: 旧文件暂存 {dst_path} -> {staged}')
 
-    # 3. 本行重置到 copying/running，让 worker 重新跑
     row.phase = PHASE_COPYING
     row.phase_status = STATUS_RUNNING
-    row.status_message = f'用户决策"覆盖" → 重新复制（旧文件已入 trash）'
+    row.status_message = '用户选择"覆盖" — 旧文件已暂存，重新复制中'
     row.error_log = None
     row.dispatched_files = []
     row.copy_bytes_done = 0
@@ -1834,7 +1890,7 @@ def resolve_copy_conflict_replace(torrent_hash: str, db: Session = Depends(get_d
         _pt.set()
     except Exception:
         pass
-    return {'ok': True, 'torrent_hash': h, 'displaced_to': moved_to}
+    return {'ok': True, 'torrent_hash': h, 'displaced_to': staged_to}
 
 
 @router.post('/copy-conflict/{torrent_hash}/skip')
@@ -1846,7 +1902,12 @@ def resolve_copy_conflict_skip(torrent_hash: str, db: Session = Depends(get_db))
     from tools.dispatch.phases import PHASE_COPYING, STATUS_SKIPPED
 
     h = (torrent_hash or '').lower()
-    row = db.query(DownloadDispatchMap).filter_by(torrent_hash=h).first()
+    row = (
+        db.query(DownloadDispatchMap)
+        .filter_by(torrent_hash=h)
+        .with_for_update()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail='dispatch_map 行不存在')
     _assert_copy_conflict(row)
