@@ -20,10 +20,12 @@
     <!-- 工具栏：source tab + 子分类筛选合并；sticky 磨砂背景 -->
     <div class="discover-toolbar">
       <el-tabs v-model="source" class="source-tabs" @tab-change="onSourceChange">
-        <el-tab-pane label="Trakt" name="trakt" />
-        <el-tab-pane label="TMDB" name="tmdb" />
-        <el-tab-pane label="AniList" name="anilist" />
-        <el-tab-pane label="豆瓣片单" name="douban" />
+        <el-tab-pane
+          v-for="p in discoverProviders"
+          :key="p.name"
+          :label="p.label"
+          :name="p.name"
+        />
       </el-tabs>
 
       <div class="filter-area">
@@ -307,6 +309,32 @@ const anilistCategory = ref('trending')
 
 const doubanLists = ref([])
 const doubanDoulistId = ref('')
+
+// 提供方顺序 / 开关由后端 config.yaml 的 discover.sources 决定。
+// 先放默认值，接口返回后再替换；接口失败时保持旧行为，不让页面空白。
+const DEFAULT_DISCOVER_PROVIDERS = [
+  { name: 'trakt', label: 'Trakt' },
+  { name: 'tmdb', label: 'TMDB' },
+  { name: 'anilist', label: 'AniList' },
+  { name: 'douban', label: '豆瓣片单' },
+]
+const discoverProviders = ref([...DEFAULT_DISCOVER_PROVIDERS])
+const discoverProviderSig = () => discoverProviders.value.map(p => p.name).join('|')
+
+const loadDiscoverProviders = async () => {
+  try {
+    const r = await discoverApi.sources()
+    const list = (r.data?.sources || [])
+      .filter(p => p && p.enabled && p.name)
+      .map(p => ({ name: p.name, label: p.label || p.name }))
+    if (list.length) discoverProviders.value = list
+  } catch (e) {
+    console.warn('加载热门推荐提供方配置失败，使用默认顺序', e)
+  }
+  if (!discoverProviders.value.some(p => p.name === source.value)) {
+    source.value = discoverProviders.value[0]?.name || 'trakt'
+  }
+}
 
 // ---- 数据 + 分页状态 ----
 const items = ref([])             // 后端拉来的原始数据池（已 append 多页）
@@ -1041,6 +1069,7 @@ const pollPosters = async () => {
 // 首次挂载只负责"拉数据"。监听 / observer / debug 切换全交给 onActivated/onDeactivated
 // —— 这样组件被 keep-alive 缓存（用户从详情页返回）时也能正确地装/卸滚动监听
 onMounted(async () => {
+  await loadDiscoverProviders()
   await reload()
 })
 
@@ -1050,6 +1079,12 @@ let _savedScrollTop = 0
 
 // 进入页面（首次挂载 + 后续 keep-alive 激活都会触发）：装监听 + 重观察 sentinel + 恢复滚动位置
 const _attachRuntime = async () => {
+  // 设置页可能刚改过提供方开关 / 顺序；keep-alive 返回时刷新 tab。
+  const prevProviderSig = discoverProviderSig()
+  await loadDiscoverProviders()
+  if (prevProviderSig !== discoverProviderSig()) {
+    await reload()
+  }
   await nextTick()
   setupObserver()
   window.addEventListener('resize', onWindowResize)

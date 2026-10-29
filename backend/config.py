@@ -194,6 +194,15 @@ class Settings(BaseSettings):
         {'name': 'opensubtitles', 'enabled': True},
     ]
 
+    # 热门推荐页的提供方顺序与开关。列表顺序 = 前端 tab 顺序；
+    # 没有 enabled 字段的旧配置按启用处理。
+    discover_sources: List[dict] = _yaml_config.get('discover', {}).get('sources') or [
+        {'name': 'trakt', 'enabled': True},
+        {'name': 'tmdb', 'enabled': True},
+        {'name': 'anilist', 'enabled': True},
+        {'name': 'douban', 'enabled': True},
+    ]
+
     # 期望的默认音轨语言（按优先级排序，命中第一个就会被选为默认音轨）
     # 归一化代码：chs / cht / eng / jpn / kor
     preferred_audio_langs: List[str] = _yaml_config.get('audio', {}).get(
@@ -389,6 +398,9 @@ class Settings(BaseSettings):
                 "username": self.qbittorrent_username,
                 "password": self.qbittorrent_password,
                 "api_key": self.qbittorrent_api_key,
+            },
+            "discover": {
+                "sources": self.discover_sources,
             },
             "adult": {
                 "enabled": self.adult_enabled,
