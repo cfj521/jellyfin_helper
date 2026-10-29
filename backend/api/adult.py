@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from backend.database import get_db, SessionLocal, AdultItem
 from backend.config import settings
+from backend.services.adult_assets import save_poster
 from common.rate_limiter import ADULT_SCRAPER_DELAY
 from backend.api.tasks import (
     create_task, update_task_progress, complete_task,
@@ -639,6 +640,7 @@ def update_item(item_id: int, payload: ManualUpdate, db: Session = Depends(get_d
 def upload_cover(item_id: int, file: UploadFile = File(...)):
     """
     用户上传本地图片作为封面：保存到 <video>-poster.<ext>，写入 DB。
+    标准名过长时自动改用短名并通过 Jellyfin API 直传。
     支持 jpg / jpeg / png / webp，10MB 上限。
     """
     ALLOWED = {'.jpg', '.jpeg', '.png', '.webp'}
@@ -666,10 +668,10 @@ def upload_cover(item_id: int, file: UploadFile = File(...)):
         if not content:
             raise HTTPException(status_code=400, detail="空文件")
 
-        # 落地：跟 _download_cover 同款命名约定
-        target = video_path.with_name(video_path.stem + '-poster' + ext)
+        # 落地：跟 _download_cover 同款命名约定；文件名过长时自动降级短名，
+        # 并通过 Jellyfin API 直传封面，避免超长视频名导致 500。
         try:
-            target.write_bytes(content)
+            target = save_poster(video_path, content, ext)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"写入失败: {e}")
 
@@ -1560,7 +1562,7 @@ def _to_dict(item: AdultItem, full: bool = False) -> dict:
 
 def _download_cover(url: str, video_path: Path) -> Optional[Path]:
     """
-    下载封面到 <video_stem>-poster.jpg。
+    下载封面到 <video_stem>-poster.jpg；文件名过长时写短名并直传 Jellyfin。
     优先用 curl_cffi 绕过 Cloudflare（fourhoi.com / missav 等图床有 CF 防护）；
     失败再退回 requests。Referer 策略：先用同源（多数图床校验防盗链），
     若 403 再用无 Referer 重试（fourhoi 等同源 Referer 反而被拒的特例）。
@@ -1606,9 +1608,9 @@ def _download_cover(url: str, video_path: Path) -> Optional[Path]:
     for fn, headers in attempts:
         content = fn(headers)
         if content:
-            cover_path = video_path.with_name(video_path.stem + '-poster.jpg')
-            cover_path.write_bytes(content)
-            return cover_path
+            # save_poster 在标准名超长时写短名并尝试直传 Jellyfin，
+            # 不会再让一条超长文件名打断整个刮削/扫描任务。
+            return save_poster(video_path, content, '.jpg')
 
     logger.warning(f"封面下载失败 {url}（所有 attempt 都不通）")
     return None

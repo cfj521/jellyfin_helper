@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional, List
 
+from backend.services.adult_assets import find_local_poster
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,8 @@ def _jf_path(p) -> str:
 def _detect_local_attachments(video_file: Path):
     """
     探测视频文件同目录下已存在的 poster / nfo，返回 (poster_path, nfo_path) 字符串或 None。
-    覆盖常见命名：<stem>-poster.{jpg,jpeg,png} / <stem>.nfo
+    覆盖常见命名：<stem>-poster.{jpg,jpeg,png,webp} / <stem>.nfo；
+    文件名超长时还会识别 adult_assets 生成的短名封面。
 
     返回的路径是 Jellyfin view（DB 约定）；同机部署 / 没配映射时与本机视角相同。
     """
@@ -42,15 +45,16 @@ def _detect_local_attachments(video_file: Path):
     parent = video_file.parent
     stem = video_file.stem
 
-    poster_path = None
-    for ext in ('.jpg', '.jpeg', '.png'):
-        cand = parent / f'{stem}-poster{ext}'
-        if cand.exists():
-            poster_path = _jf_path(cand)
-            break
+    # 文件名过长时标准封面路径会 OSError；find_local_poster 会继续找短名封面。
+    poster = find_local_poster(video_file)
+    poster_path = _jf_path(poster) if poster else None
 
     nfo = parent / f'{stem}.nfo'
-    nfo_path = _jf_path(nfo) if nfo.exists() else None
+    try:
+        nfo_path = _jf_path(nfo) if nfo.exists() else None
+    except OSError as e:
+        logger.warning(f"检查 NFO 失败 {nfo.name[:80]}: {e}")
+        nfo_path = None
 
     return poster_path, nfo_path
 
