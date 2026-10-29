@@ -167,7 +167,7 @@ jellyfin-helper/
 
 ### Requirements
 
-- Python 3.12 (recommended to use an isolated conda environment)
+- Python 3.12 (a uv virtual environment is recommended)
 - Node.js 20+
 - PostgreSQL 12+ (create the database and user first)
 - A running Jellyfin (10.9+ recommended) + admin API Key

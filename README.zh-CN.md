@@ -153,7 +153,7 @@ jellyfin-helper/
 
 ### 环境要求
 
-- Python 3.12（推荐用 conda 隔离环境）
+- Python 3.12（推荐 uv 虚拟环境）
 - Node.js 20+
 - PostgreSQL 12+（先建库和用户）
 - 一台运行中的 Jellyfin（10.9+ 推荐）+ 管理员 API Key
