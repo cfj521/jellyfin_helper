@@ -88,10 +88,14 @@ def preview_dispatch(request: PreviewRequest):
     if not qb.login():
         raise HTTPException(status_code=502, detail='qB 登录失败')
 
-    # 加种 paused-via-stop_condition 模式
+    # 加种 paused-via-stop_condition 模式。
+    # save_path 用设置页配置的下载目录（默认 = qB 自己的下载目录，两者一致时无副作用），
+    # 这样 preview → confirm → 下载完成后的 content_path 始终落在同一个下载根下。
+    from backend.qb_paths import resolve_qb_save_path
     ok = qb.add_torrent(
         magnet=request.magnet,
         torrent_url=request.torrent_url,
+        save_path=resolve_qb_save_path() or None,
         stop_condition='MetadataReceived',
         download_limit=1,
         paused=False,  # paused=True 会让 qB 不连 peer，永远拿不到 metadata
@@ -850,6 +854,11 @@ def rss_rule_set(rule_name: str, rule: RssRuleDef):
     # affectedFeeds 必须是 list（None 已过滤），qB 接收空 list 表示对所有 feed 生效
     if 'affectedFeeds' not in rule_dict:
         rule_dict['affectedFeeds'] = []
+    # 规则没指定保存路径 → 用设置页配置的下载目录（qB 视角），保证 RSS 自动下载
+    # 和手动加种落在同一个下载根下。配置为空时保持空字符串（qB 自己的默认目录）。
+    if not (rule_dict.get('savePath') or '').strip():
+        from backend.qb_paths import resolve_qb_save_path
+        rule_dict['savePath'] = resolve_qb_save_path()
     ok = client.rss_set_rule(rule_name.strip(), rule_dict)
     if not ok:
         raise HTTPException(status_code=502, detail='qB 写入规则失败')

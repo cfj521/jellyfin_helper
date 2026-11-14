@@ -9,7 +9,7 @@
           :href="qbitUrl"
           target="_blank"
           rel="noopener noreferrer"
-          title="在新窗口打开 qBittorrent Web UI"
+          :title="`在新窗口打开 qBittorrent Web UI（${qbitUrl}）`"
         >
           <el-icon><Link /></el-icon>
           打开 qBittorrent
@@ -856,7 +856,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="保存路径">
-          <el-input v-model="ruleForm.savePath" placeholder="留空 = qB 默认下载路径" />
+          <el-input v-model="ruleForm.savePath" placeholder="留空 = 用设置页「入库流水线 → 下载目录」" />
         </el-form-item>
         <el-form-item label="qB 分类">
           <el-input v-model="ruleForm.assignedCategory" placeholder="可选" />
@@ -897,6 +897,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Refresh, Link, ArrowDown, Brush, Setting, Moon, Plus, Warning, Close, Download, MagicStick, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { discoverApi, configApi, dispatchApi, jellyfinApi } from '@/api'
+import { qbWebUrl } from '@/utils/serviceLinks'
 import AddTorrentDialog from '@/components/AddTorrentDialog.vue'
 import dayjs from 'dayjs'
 
@@ -1947,10 +1948,9 @@ const loadQbitUrl = async () => {
   try {
     const r = await configApi.getFull()
     const qb = r.data?.config?.qbittorrent || {}
-    // 配了 external_url 才显示按钮，跳 external_url；没配则不显示
-    // （host 是后端内部/容器名地址，浏览器打不开，不做 fallback）
-    const url = qb.external_url
-    if (url) qbitUrl.value = String(url).replace(/\/$/, '') + '/'
+    // 内网优先：host 是 IP / 局域网域名时直接用它；是容器名（http://qbittorrent:8080）
+    // 才回落到 external_url。两者都取不到就不显示按钮，避免点了必然打不开
+    qbitUrl.value = qbWebUrl(qb)
   } catch {}
 }
 

@@ -47,12 +47,11 @@ def _save_path_under_downloads(save_path: Optional[str]) -> bool:
       - 完全不同的路径（用户在 Jackett RSS 规则里改 save_path 到 /library/...）
 
     比对前都规范化：去尾部斜杠 + 转小写（Windows 不区分大小写）+ 统一分隔符。
+    下载根同时接受两个视角：后端视角（配置原值，用于 stat）和 qB 视角
+    （path_mappings 反向翻译后的值，qB 回报的 save_path 用的是这套）。
     任一为空/无效 → 视为 False（保守，禁止删文件）。
     """
     if not save_path:
-        return False
-    root = (settings.qbittorrent_download_path or '').strip()
-    if not root:
         return False
 
     def _norm(p: str) -> str:
@@ -60,10 +59,24 @@ def _save_path_under_downloads(save_path: Optional[str]) -> bool:
         p = p.replace('\\', '/').rstrip('/')
         return p.lower()
 
+    roots = set()
+    backend_root = (settings.qbittorrent_download_path or '').strip()
+    if backend_root:
+        roots.add(_norm(backend_root))
+    # qB 视角的下载根（qB 加种子用的 savepath 是它，回来比对也必须用它）
+    try:
+        from backend.qb_paths import resolve_qb_save_path
+        qb_root = (resolve_qb_save_path() or '').strip()
+        if qb_root:
+            roots.add(_norm(qb_root))
+    except Exception as e:
+        logger.debug(f"解析 qB 视角下载根失败（只用后端视角比对）: {e}")
+    if not roots:
+        return False
+
     sp = _norm(save_path)
-    rt = _norm(root)
-    # 完全相等 OR sp 是 rt 的真子目录（防止 /downloads_other 被误判为 /downloads/...）
-    return sp == rt or sp.startswith(rt + '/')
+    # 完全相等 OR sp 是某个根的真子目录（防止 /downloads_other 被误判为 /downloads/...）
+    return any(sp == rt or sp.startswith(rt + '/') for rt in roots)
 
 
 def _safe_delete(client: QBittorrentClient, torrent_hash: str, save_path: Optional[str]) -> tuple[bool, bool]:

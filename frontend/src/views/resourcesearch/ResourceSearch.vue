@@ -14,6 +14,17 @@
           <el-icon><Link /></el-icon>
           打开 Jackett
         </a>
+        <a
+          v-if="qbitUrl"
+          class="ext-link"
+          :href="qbitUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="在新窗口打开 qBittorrent Web UI"
+        >
+          <el-icon><Link /></el-icon>
+          打开 qBittorrent
+        </a>
       </div>
     </div>
 
@@ -124,6 +135,7 @@ import { useRoute } from 'vue-router'
 import { Search, Link } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { discoverApi, configApi } from '@/api'
+import { qbWebUrl, jackettWebUrl } from '@/utils/serviceLinks'
 
 const route = useRoute()
 const form = ref({ query: '', category: 'all' })
@@ -132,19 +144,19 @@ const loading = ref(false)
 const keywords = ref([])
 const defaultKeywords = ref('')
 const jackettUrl = ref('')  // 用于"打开 Jackett 后台"链接
+const qbitUrl = ref('')     // 用于"打开 qBittorrent"链接
 
 const loadConfig = async () => {
   try {
     const r = await configApi.getFull()
-    const j = r.data?.config?.jackett || {}
+    const cfg = r.data?.config || {}
+    const j = cfg.jackett || {}
     keywords.value = j.search_keywords || []
     defaultKeywords.value = j.default_keywords || ''
-    // 配了 external_url 才显示「打开 Jackett」按钮，跳 external_url；
-    // 没配则不显示（host 是后端内部/容器名地址，浏览器打不开，不做 fallback）
-    const jUrl = j.external_url
-    if (jUrl) {
-      jackettUrl.value = String(jUrl).replace(/\/$/, '') + '/UI/Dashboard'
-    }
+    // 内网优先：host 是 IP / 局域网域名时直接用它；是容器名（http://jackett:9117）
+    // 才回落到 external_url。两者都取不到就不显示按钮，避免点了必然打不开
+    jackettUrl.value = jackettWebUrl(j)
+    qbitUrl.value = qbWebUrl(cfg.qbittorrent || {})
   } catch {
     keywords.value = []
     defaultKeywords.value = ''

@@ -143,13 +143,16 @@ def _do_push_download(request: DownloadRequest, db: Session, src_hint: str, effe
         settings.qbittorrent_password,
     )
 
-    # save_path 仅当 request 显式指定才传 —— 否则让 qB 用自己的默认下载路径。
-    # 前端送的是 backend view（如 Z:/downloads），qB 那边要的是它自己视角（如 /downloads），
-    # reverse-translate 一次。同机部署时 reverse 不命中规则会原样返回，无影响。
-    from backend.path_translator import reverse_translate_path_with_settings
-    save_path = (
-        reverse_translate_path_with_settings(request.save_path)
-        if request.save_path else request.save_path
+    # save_path：request 显式指定 > 设置页配置的下载目录（dispatch.download_path）。
+    # 设置页那个是"用户配了就必须生效"的默认下载目录，不能只拿去做配额监视，
+    # 否则改了配置实际还是落在 qB 自己的默认路径上（历史 bug）。
+    # 前端/配置写的是 backend view（如 Z:/downloads），qB 那边要的是它自己视角
+    # （如 /downloads），reverse-translate 一次。同机部署不命中规则会原样返回，无影响。
+    from backend.qb_paths import resolve_qb_save_path
+    save_path = resolve_qb_save_path(request.save_path)
+    logger.info(
+        f"push: save_path={save_path!r} "
+        f"(request={request.save_path!r} config={settings.qbittorrent_download_path!r})"
     )
 
     # 推送前的 list_torrents：两个用途

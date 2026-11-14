@@ -632,7 +632,10 @@
             </el-form-item>
             <el-form-item label="外部地址">
               <el-input v-model="form.jackett.external_url" placeholder="http://192.168.1.100:9117（留空用上面地址）" />
-              <div class="form-hint">非 docker 容器名，外网或局域网地址，用于链接跳转</div>
+              <div class="form-hint">
+                浏览器打开 Jackett 用的地址（种子搜索页右上角「打开 Jackett」优先用上面的服务器地址=内网；
+                服务器地址是容器名 http://jackett:9117 时浏览器打不开，才回落到这里）
+              </div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input v-model="form.jackett.api_key" type="password" show-password />
@@ -688,7 +691,10 @@
             </el-form-item>
             <el-form-item label="外部地址">
               <el-input v-model="form.qbittorrent.external_url" placeholder="http://192.168.1.100:8080（留空用上面地址）" />
-              <div class="form-hint">非 docker 容器名，外网或局域网地址，用于链接跳转</div>
+              <div class="form-hint">
+                浏览器打开 qB Web UI 用的地址（下载管理页右上角「打开 qBittorrent」优先用上面的服务器地址=内网；
+                服务器地址是容器名 http://qbittorrent:8080 时浏览器打不开，才回落到这里）
+              </div>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input
@@ -1171,10 +1177,10 @@
                 </el-form-item>
 
                 <el-form-item label="下载目录">
-                  <el-input v-model="form.dispatch.download_path" placeholder="X:/downloads 或 /downloads" />
+                  <el-input v-model="form.dispatch.download_path" placeholder="X:/downloads 或 /downloads（留空 = 用 qB 自己的默认目录）" />
                   <span class="form-hint">
-                    <strong>仅用于后端配额监视</strong>（shutil.disk_usage），写**后端能直接 stat 到的路径**。
-                    qB 加种子用它自己的默认下载路径，跟这里无关。
+                    <strong>加种子时作为 qB 的保存路径</strong>，同时用于后端配额监视（shutil.disk_usage）。
+                    写 <strong>后端能直接 stat 到的路径</strong>；跨机 / 容器部署时由「路径映射」反向翻译成 qB 视角。
                   </span>
                 </el-form-item>
 
@@ -1697,7 +1703,7 @@ const blank = () => ({
   // file_template 由 organizer 内置；move_mode 由全局 default_move_mode 统一）
   dispatch: {
     enabled: true,
-    download_path: '/download',
+    download_path: '',
     poll_interval_seconds: 30,
     adopt_interval_seconds: 300,
     trash_interval_seconds: 86400,

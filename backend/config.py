@@ -237,7 +237,17 @@ class Settings(BaseSettings):
     qbittorrent_username: str = _yaml_config.get('qbittorrent', {}).get('username', 'admin')
     qbittorrent_password: str = _yaml_config.get('qbittorrent', {}).get('password', '')
     qbittorrent_api_key: str = _yaml_config.get('qbittorrent', {}).get('api_key', '')
-    qbittorrent_download_path: str = _yaml_config.get('dispatch', {}).get('download_path', '/downloads')
+    # 下载根目录（dispatch.download_path，后端视角）。两个用途：
+    #   ① 加种子时作为 qB 的 savepath（backend/qb_paths.py 反向翻译成 qB 视角）
+    #   ② 后端配额监视（shutil.disk_usage）
+    # 兼容老配置：2026-05 之前该字段在 qbittorrent 段下，老 yaml 迁移过来时读一次兜底。
+    # 默认 '' = 不指定 → 加种子交给 qB 自己的默认下载目录，配额功能禁用。
+    # 之所以不给 '/downloads' 硬编码默认值：凭空塞一个不存在的路径会让加种直接失败。
+    qbittorrent_download_path: str = (
+        _yaml_config.get('dispatch', {}).get('download_path')
+        or _yaml_config.get('qbittorrent', {}).get('download_path')
+        or ''
+    ).strip()
 
     @property
     def qbittorrent_configured(self) -> bool:
