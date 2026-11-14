@@ -187,6 +187,10 @@ qbittorrent:
 #   needs_review         - 标记待人工决策
 dispatch:
   enabled: true
+  # 下载根目录：加种子时作为 qB 的保存路径，同时用于后端配额监视。
+  # 写后端能直接 stat 到的路径；跨机 / 容器部署时由 path_mappings 反向翻译成 qB 视角
+  # （如上例 /download → X:/ 的反向：后端写 X:/download，qB 收到 /download）。
+  # 留空 = 不指定，让 qB 用自己的默认下载目录（配额功能同时禁用）。
   download_path: "/downloads"
   poll_interval_seconds: 30
   adopt_interval_seconds: 300
